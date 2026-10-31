@@ -227,7 +227,7 @@ check_fleet_disarmed() {
     log_error "FAIL: a Ready checkout pod has no checkout_config_upstream_timeout_ms series"
     return 1
   fi
-  gauge="$(_gauge_pods)"
+  gauge="$(_gauge_pods)" || { log_error "FAIL: Prometheus stopped answering the gauge query"; return 1; }
   while read -r p; do
     v="$(awk -v p="$p" '$1 == p {print $2}' <<<"$gauge")"
     if [[ "$v" != "$CONFIG_HEALTHY" ]]; then

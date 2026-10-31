@@ -40,6 +40,15 @@ plant() { # FILE LINE : append an offence to a tracked file and commit it
   [[ "$output" == *"Makefile:4:"* ]]
 }
 
+@test "FROM scratch is not a literal base image" {
+  mkdir -p "$WORK/bridge"
+  printf 'ARG PYTHON_IMAGE\nFROM $PYTHON_IMAGE AS build\nFROM scratch\nCOPY --from=build /x /x\n' > "$WORK/bridge/Dockerfile"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m df
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "consistency: OK" ]
+}
+
 @test "flags an unknown namespace literal" {
   plant cluster.sh 'kubectl get pods -n observability'
   run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"

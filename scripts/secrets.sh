@@ -73,6 +73,9 @@ secret_litellm() {
   _apply_secret "$NS_AIOPS" litellm-masterkey
   _new_secret_dir; _put username litellm; _put password "$LITELLM_DB_PASSWORD"
   _apply_secret "$NS_AIOPS" litellm-db
+  if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${OPENAI_API_KEY:-}" ]]; then
+    log_warn "litellm-env has no provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY missing in .env); model calls will fail"
+  fi
   _new_secret_dir
   _put LITELLM_SALT_KEY "$LITELLM_SALT_KEY"
   [[ -z "${ANTHROPIC_API_KEY:-}" ]] || _put ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"

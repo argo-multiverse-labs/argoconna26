@@ -248,6 +248,20 @@ fleet_setup() {
   [ "$status" -ne 0 ]
 }
 
+@test "check_fleet_disarmed reports FAIL when Prometheus stops answering after the wait" {
+  fleet_setup
+  make_stub "$STUBS" curl 'for a in "$@"; do q="$q $a"; done
+    case "$q" in
+      *checkout_config_upstream_timeout_ms*)
+        n="'"$BATS_TEST_TMPDIR"'/gauge.calls"; c=$(cat "$n" 2>/dev/null || echo 0); echo $((c+1)) > "$n"
+        if [ "$c" -ge 1 ]; then exit 22; fi
+        cat "'"$BATS_TEST_TMPDIR"'/gauge.json" ;;
+    esac'
+  run in_fixture 'set -euo pipefail; load_env; check_fleet_disarmed'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"FAIL:"* ]]
+}
+
 @test "check_fleet_disarmed fails when any checkout pod reports 200" {
   fleet_setup
   echo '{"data":{"result":[{"metric":{"pod":"checkout-abc-1"},"value":[1,"200"]}]}}' > "$BATS_TEST_TMPDIR/gauge.json"

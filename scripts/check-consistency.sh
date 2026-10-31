@@ -76,7 +76,7 @@ while IFS= read -r file; do
     n=$((n + 1))
     if [[ "$text" =~ ^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?([^[:space:]]+) ]]; then
       img="${BASH_REMATCH[2]}"
-      [[ "$img" == \$* || "$stages" == *" ${img,,} "* ]] \
+      [[ "$img" == \$* || "${img,,}" == scratch || "$stages" == *" ${img,,} "* ]] \
         || report "$file:$n: literal base image '$img' (use a build arg from versions.env)"
     fi
     if [[ "$text" =~ --from=([^[:space:],]+) ]]; then

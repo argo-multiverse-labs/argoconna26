@@ -67,6 +67,14 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
   ! grep -q 'create secret' "$CALLS"
 }
 
+@test "litellm without a provider key warns" {
+  grep -v ANTHROPIC_API_KEY "$FIXTURE/.env" > "$FIXTURE/.env.new" && mv "$FIXTURE/.env.new" "$FIXTURE/.env"
+  chmod 600 "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no provider key"* ]]
+}
+
 @test "no secret value appears in output" {
   run run_secrets all
   [ "$status" -eq 0 ]
