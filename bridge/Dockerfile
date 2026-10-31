@@ -1,8 +1,11 @@
-# PYTHON_IMAGE comes from versions.env (the Makefile passes it as a build arg).
+# PYTHON_IMAGE and UV_IMAGE come from versions.env (the Makefile passes them as
+# build args). Neither has a default, so a build without them fails.
 ARG PYTHON_IMAGE
+ARG UV_IMAGE
+FROM ${UV_IMAGE} AS uv
 FROM ${PYTHON_IMAGE}
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 UV_LINK_MODE=copy
-COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
