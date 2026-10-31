@@ -30,29 +30,47 @@ main_root() {
 
 # ---------------------------------------------------------------- load_env
 # Order of precedence for TOOLS_BIN: caller's environment, then .env, then demo.env.
-# Everything else: .env over demo.env over versions.env.
+# An empty value counts as unset, so a blank `TOOLS_BIN=` never puts "" (the cwd) on PATH.
+# Everything else: .env over demo.env over versions.env, except the cluster guard
+# (CLUSTER_NAME, CLUSTER_CONTEXT, KUBECONFIG_REL): those come from demo.env only, and
+# load_env returns 3 when .env changes them.
 # Never echoes values.
 load_env() {
-  local caller_tools_bin="${TOOLS_BIN:-}" root envfile
+  local caller_tools_bin="${TOOLS_BIN:-}" root envfile demo_tools_bin guard_vars guard_var
+  local -A guard=()
+  guard_vars=(CLUSTER_NAME CLUSTER_CONTEXT KUBECONFIG_REL)
   set -a
   # shellcheck disable=SC1091
   . "$COMMON_ROOT/versions.env"
   # shellcheck disable=SC1091
   . "$COMMON_ROOT/demo.env"
+  set +a
+  demo_tools_bin="${TOOLS_BIN:-}"
+  for guard_var in "${guard_vars[@]}"; do guard["$guard_var"]="${!guard_var:-}"; done
   root="$(main_root 2>/dev/null || true)"
   envfile="${root:+$root/.env}"
   if [[ -n "$envfile" && -r "$envfile" ]]; then
+    set -a
     # shellcheck disable=SC1090
     . "$envfile"
+    set +a
   fi
-  set +a
-  [[ -n "$caller_tools_bin" ]] && TOOLS_BIN="$caller_tools_bin"
+  for guard_var in "${guard_vars[@]}"; do
+    if [[ "${!guard_var:-}" != "${guard[$guard_var]}" ]]; then
+      log_error "refusing: .env sets $guard_var; the cluster guard comes from demo.env only"
+      return 3
+    fi
+  done
+  TOOLS_BIN="${caller_tools_bin:-${TOOLS_BIN:-}}"
+  [[ -n "$TOOLS_BIN" ]] || TOOLS_BIN="$demo_tools_bin"
   export TOOLS_BIN
   # P25: the pinned tools win on PATH, unless TOOLS_BIN is already first.
-  case ":$PATH:" in
-    ":$TOOLS_BIN:"*) ;;
-    *) PATH="$TOOLS_BIN:$PATH" ;;
-  esac
+  if [[ -n "$TOOLS_BIN" ]]; then
+    case ":$PATH:" in
+      ":$TOOLS_BIN:"*) ;;
+      *) PATH="$TOOLS_BIN:$PATH" ;;
+    esac
+  fi
   export PATH
   if [[ -n "$root" ]]; then
     KUBECONFIG="$root/$KUBECONFIG_REL"
@@ -178,9 +196,13 @@ _ready_checkout_pods() {
         | .metadata.name' | sort
 }
 
+# One line per pod: "POD VALUES", where VALUES joins the distinct values of every series
+# that pod has. A pod scraped through two Services (canary and stable) has two series;
+# they collapse to "2000" when they agree, and "200,2000" (a FAIL) when they don't.
 _gauge_pods() {
   _prom_query "checkout_config_upstream_timeout_ms{namespace=\"$NS_DEMO\"}" \
-    | jq -r '.data.result[] | "\(.metric.pod) \(.value[1])"' | sort
+    | jq -r '.data.result | group_by(.metric.pod)[]
+        | "\(.[0].metric.pod) \([.[].value[1]] | unique | join(","))"' | sort
 }
 
 _fleet_gauge_complete() {
@@ -234,17 +256,27 @@ check_fleet_disarmed() {
 }
 
 # ----------------------------------------------------- idempotent helm install
-# helm_ensure RELEASE CHART VERSION NAMESPACE VALUES_FILE
+# helm_ensure RELEASE CHART VERSION NAMESPACE VALUES_FILE...
 # `helm upgrade --install` writes a new release Secret on every run even when nothing
 # changed, which breaks "the second build-all changes nothing". So skip when the release
-# is already deployed at this chart version with exactly these values.
+# is already deployed at this chart version with exactly these values. Several values
+# files are passed to helm in order (-f each) and compared as one deep merge, later
+# files winning, which is how helm combines them.
 helm_ensure() {
-  local rel="$1" chart="$2" ver="$3" ns="$4" values="$5" name have want_vals have_vals
+  local rel="$1" chart="$2" ver="$3" ns="$4" name have want_vals have_vals f
+  shift 4
+  (( $# >= 1 )) || die "helm_ensure: at least one values file is required"
+  local -a values=("$@") fargs=()
+  for f in "${values[@]}"; do
+    [[ -r "$f" ]] || die "helm_ensure: values file not readable: $f"
+    fargs+=(-f "$f")
+  done
   name="${chart##*/}"
   have="$(h list -n "$ns" --filter "^${rel}\$" -o json 2>/dev/null \
           | jq -r '.[0] | select(.status == "deployed") | .chart // empty' || true)"
   if [[ "$have" == "${name}-${ver#v}" ]]; then
-    want_vals="$(yq -o=json '. // {}' "$values" | jq -S -c '.')"
+    # shellcheck disable=SC2016 # yq variables, not shell ones
+    want_vals="$(yq eval-all -o=json '. as $i ireduce ({}; . * ($i // {}))' "${values[@]}" | jq -S -c '.')"
     have_vals="$(h get values "$rel" -n "$ns" -o json 2>/dev/null | jq -S -c '. // {}' || echo '{}')"
     if [[ "$want_vals" == "$have_vals" ]]; then
       log_info "skip: helm release $rel ($name-${ver#v}) unchanged"
@@ -253,5 +285,5 @@ helm_ensure() {
   fi
   log_info "helm: installing $rel ($chart $ver) into $ns"
   h upgrade --install "$rel" "$chart" --version "$ver" -n "$ns" --create-namespace \
-    -f "$values" --wait --timeout "${HELM_TIMEOUT:-10m}"
+    "${fargs[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}"
 }

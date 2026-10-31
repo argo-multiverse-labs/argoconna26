@@ -117,6 +117,32 @@ teardown() {
   [ "$output" = "$fake_tools/kubectl" ]
 }
 
+@test "load_env treats an empty TOOLS_BIN in .env as unset" {
+  echo 'TOOLS_BIN=' > "$FIXTURE/.env"
+  run bash -c "unset TOOLS_BIN; cd '$FIXTURE'; . '$REPO_ROOT/scripts/common.sh'; load_env; echo \"tb=[\$TOOLS_BIN] head=[\${PATH%%:*}]\""
+  [ "$status" -eq 0 ]
+  want="$(sed -n 's/^TOOLS_BIN=//p' "$REPO_ROOT/demo.env")"
+  [ -n "$want" ]
+  [ "$output" = "tb=[$want] head=[$want]" ]
+}
+
+@test "load_env never puts an empty entry on PATH" {
+  echo 'TOOLS_BIN=' > "$FIXTURE/.env"
+  run bash -c "unset TOOLS_BIN; cd '$FIXTURE'; . '$REPO_ROOT/scripts/common.sh'; load_env; [[ \":\$PATH:\" != *::* ]]"
+  [ "$status" -eq 0 ]
+}
+
+@test "load_env refuses a .env that overrides the cluster guard" {
+  local kv
+  for kv in CLUSTER_NAME=prod CLUSTER_CONTEXT=prod-us-east-1 KUBECONFIG_REL=../../../.kube/config; do
+    echo "$kv" > "$FIXTURE/.env"
+    run in_fixture 'load_env; echo reached'
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"${kv%%=*}"* ]]
+    [[ "$output" != *reached* ]]
+  done
+}
+
 # ---------------------------------------------------------------- cluster_lock
 start_holder() { # background process that holds the cluster lock until killed
   bash -c "cd '$FIXTURE'; . '$REPO_ROOT/scripts/common.sh'; cluster_lock; touch '$BATS_TEST_TMPDIR/held'; exec sleep 60" &
@@ -230,6 +256,21 @@ fleet_setup() {
   [[ "$output" == *"expected 2000"* ]]
 }
 
+@test "check_fleet_disarmed passes when one pod has two identical gauge series" {
+  fleet_setup
+  echo '{"data":{"result":[{"metric":{"pod":"checkout-abc-1","service":"checkout-canary"},"value":[1,"2000"]},{"metric":{"pod":"checkout-abc-1","service":"checkout-stable"},"value":[1,"2000"]}]}}' > "$BATS_TEST_TMPDIR/gauge.json"
+  run in_fixture 'load_env; check_fleet_disarmed'
+  [ "$status" -eq 0 ]
+}
+
+@test "check_fleet_disarmed fails when one pod's two gauge series disagree" {
+  fleet_setup
+  echo '{"data":{"result":[{"metric":{"pod":"checkout-abc-1","service":"a"},"value":[1,"2000"]},{"metric":{"pod":"checkout-abc-1","service":"b"},"value":[1,"200"]}]}}' > "$BATS_TEST_TMPDIR/gauge.json"
+  run in_fixture 'load_env; check_fleet_disarmed'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"expected 2000"* ]]
+}
+
 @test "check_fleet_disarmed fails when the rate is below the SLO" {
   fleet_setup
   echo '{"data":{"result":[{"metric":{},"value":[1,"90.0"]}]}}' > "$BATS_TEST_TMPDIR/rate.json"
@@ -289,4 +330,31 @@ helm_setup() {
   run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml'"
   [ "$status" -eq 0 ]
   grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
+}
+
+@test "helm_ensure skips when the merged values of several files are unchanged" {
+  helm_setup
+  printf 'a: 1\nb:\n  c: 1\n  d: 1\n' > "$BATS_TEST_TMPDIR/values.yaml"
+  printf 'b:\n  c: 2\n' > "$BATS_TEST_TMPDIR/overlay.yaml"
+  echo '{"a":1,"b":{"c":2,"d":1}}' > "$BATS_TEST_TMPDIR/getvalues.json"
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml' '$BATS_TEST_TMPDIR/overlay.yaml'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip: helm release rel"* ]]
+  ! grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
+}
+
+@test "helm_ensure passes every values file, in order, when it upgrades" {
+  helm_setup
+  echo 'a: 1' > "$BATS_TEST_TMPDIR/values.yaml"
+  echo 'b: 2' > "$BATS_TEST_TMPDIR/overlay.yaml"
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml' '$BATS_TEST_TMPDIR/overlay.yaml'"
+  [ "$status" -eq 0 ]
+  grep -q -- "-f $BATS_TEST_TMPDIR/values.yaml -f $BATS_TEST_TMPDIR/overlay.yaml" "$BATS_TEST_TMPDIR/helm.calls"
+}
+
+@test "helm_ensure refuses a missing values file" {
+  helm_setup
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml' '$BATS_TEST_TMPDIR/absent.yaml'"
+  [ "$status" -ne 0 ]
+  ! grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
 }
