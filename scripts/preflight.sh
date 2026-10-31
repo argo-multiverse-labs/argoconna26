@@ -41,11 +41,19 @@ section_cluster() {
   fi
 }
 
+# A stopped kind container still passes require_context (it reads only the local
+# kubeconfig), so every cluster read below is guarded: a failed kubectl is a FAIL line
+# with a reason, never a silent errexit before the summary.
+_api_up() { k get --raw=/readyz >/dev/null 2>&1; }
+
 section_nodes() {
-  local not_ready total
-  total="$(k get nodes --no-headers 2>/dev/null | wc -l)"
-  not_ready="$(k get nodes -o json 2>/dev/null \
-    | jq -r '[.items[] | select(any(.status.conditions[]; .type == "Ready" and .status != "True")) | .metadata.name] | join(" ")')" || not_ready="unknown"
+  local json not_ready total
+  if ! json="$(k get nodes -o json 2>/dev/null)"; then
+    check_fail "API server unreachable: cannot list nodes"
+    return 0
+  fi
+  total="$(jq '.items | length' <<<"$json")"
+  not_ready="$(jq -r '[.items[] | select(any(.status.conditions[]; .type == "Ready" and .status != "True")) | .metadata.name] | join(" ")' <<<"$json")"
   if [[ "$total" -ge 1 && -z "$not_ready" ]]; then
     check_pass "all $total nodes Ready"
   else
@@ -54,16 +62,23 @@ section_nodes() {
 }
 
 section_pods() {
-  local ns bad count
+  local ns json bad count
+  if ! _api_up; then
+    check_fail "API server unreachable: pods not checked"
+    return 0
+  fi
   for ns in "$NS_ARGOCD" "$NS_ROLLOUTS" "$NS_MONITORING"; do
     if ! k get namespace "$ns" >/dev/null 2>&1; then
       check_fail "namespace $ns does not exist"; continue
     fi
-    count="$(k get pods -n "$ns" -o json | jq '[.items[] | select(.status.phase != "Succeeded")] | length')"
-    bad="$(k get pods -n "$ns" -o json | jq -r '
+    if ! json="$(k get pods -n "$ns" -o json 2>/dev/null)"; then
+      check_fail "cannot list pods in $ns"; continue
+    fi
+    count="$(jq '[.items[] | select(.status.phase != "Succeeded")] | length' <<<"$json")"
+    bad="$(jq -r '
       [.items[] | select(.status.phase != "Succeeded")
        | select(any(.status.conditions[]?; .type == "Ready" and .status == "True") | not)
-       | .metadata.name] | join(" ")')"
+       | .metadata.name] | join(" ")' <<<"$json")"
     if [[ "$count" -ge 1 && -z "$bad" ]]; then
       check_pass "every pod Ready in $ns ($count)"
     else
