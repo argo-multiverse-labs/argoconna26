@@ -254,3 +254,39 @@ fleet_setup() {
   [[ "$output" == *v0.29.0* ]]
   [[ "$output" == *v0.33.0* ]]
 }
+
+# ---------------------------------------------------------------- helm_ensure
+helm_setup() {
+  echo 'a: 1' > "$BATS_TEST_TMPDIR/values.yaml"
+  make_stub "$STUBS" helm 'echo "$*" >> "'"$BATS_TEST_TMPDIR"'/helm.calls"
+    case "$*" in
+      *" list "*) cat "'"$BATS_TEST_TMPDIR"'/list.json" ;;
+      *" get values "*) cat "'"$BATS_TEST_TMPDIR"'/getvalues.json" ;;
+    esac'
+  echo '[{"name":"rel","status":"deployed","chart":"argo-cd-1.2.3"}]' > "$BATS_TEST_TMPDIR/list.json"
+  echo '{"a":1}' > "$BATS_TEST_TMPDIR/getvalues.json"
+}
+
+@test "helm_ensure skips when chart version and values are unchanged" {
+  helm_setup
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip: helm release rel"* ]]
+  ! grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
+}
+
+@test "helm_ensure upgrades when the values changed" {
+  helm_setup
+  echo 'a: 2' > "$BATS_TEST_TMPDIR/values.yaml"
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml'"
+  [ "$status" -eq 0 ]
+  grep -q 'upgrade --install rel argo/argo-cd' "$BATS_TEST_TMPDIR/helm.calls"
+}
+
+@test "helm_ensure upgrades when the chart version changed" {
+  helm_setup
+  echo '[{"name":"rel","status":"deployed","chart":"argo-cd-1.2.2"}]' > "$BATS_TEST_TMPDIR/list.json"
+  run in_fixture "load_env; helm_ensure rel argo/argo-cd 1.2.3 ns '$BATS_TEST_TMPDIR/values.yaml'"
+  [ "$status" -eq 0 ]
+  grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
+}

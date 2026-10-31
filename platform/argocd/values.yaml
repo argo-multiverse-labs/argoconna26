@@ -1,0 +1,64 @@
+# Argo CD v3.5.6 (chart 10.11.6) for the demo. No admin password hash here:
+# scripts read argocd-initial-admin-secret.
+global:
+  domain: localhost
+
+configs:
+  params:
+    # plain http on NodePort 30080; the host port binds 127.0.0.1 only
+    server.insecure: true
+  cm:
+    # D7: fast reconciliation for the demo, no random jitter
+    timeout.reconciliation: 20s
+    timeout.reconciliation.jitter: 0s
+    # read-only API token account for HolmesGPT (the token is minted in a later slice)
+    accounts.holmesgpt: apiKey
+  rbac:
+    policy.csv: |
+      g, holmesgpt, role:readonly
+
+server:
+  replicas: 1
+  service:
+    type: NodePort
+    nodePortHttp: 30080
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 256Mi}
+
+controller:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 768Mi}
+
+repoServer:
+  replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 384Mi}
+
+redis:
+  enabled: true
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {memory: 128Mi}
+
+redis-ha:
+  enabled: false
+
+dex:
+  enabled: false
+
+# chart 10.11.6 has no applicationSet.enabled switch, so the controller is scaled to zero
+applicationSet:
+  replicas: 0
+
+notifications:
+  enabled: true
+  # secrets.sh owns argocd-notifications-secret, so the chart and the script never fight over it
+  secret:
+    create: false
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 128Mi}

@@ -232,3 +232,26 @@ check_fleet_disarmed() {
   fi
   log_info "fleet disarmed: all Ready pods at ${CONFIG_HEALTHY}, success rate ${rate}% >= ${slo}%"
 }
+
+# ----------------------------------------------------- idempotent helm install
+# helm_ensure RELEASE CHART VERSION NAMESPACE VALUES_FILE
+# `helm upgrade --install` writes a new release Secret on every run even when nothing
+# changed, which breaks "the second build-all changes nothing". So skip when the release
+# is already deployed at this chart version with exactly these values.
+helm_ensure() {
+  local rel="$1" chart="$2" ver="$3" ns="$4" values="$5" name have want_vals have_vals
+  name="${chart##*/}"
+  have="$(h list -n "$ns" --filter "^${rel}\$" -o json 2>/dev/null \
+          | jq -r '.[0] | select(.status == "deployed") | .chart // empty' || true)"
+  if [[ "$have" == "${name}-${ver#v}" ]]; then
+    want_vals="$(yq -o=json '. // {}' "$values" | jq -S -c '.')"
+    have_vals="$(h get values "$rel" -n "$ns" -o json 2>/dev/null | jq -S -c '. // {}' || echo '{}')"
+    if [[ "$want_vals" == "$have_vals" ]]; then
+      log_info "skip: helm release $rel ($name-${ver#v}) unchanged"
+      return 0
+    fi
+  fi
+  log_info "helm: installing $rel ($chart $ver) into $ns"
+  h upgrade --install "$rel" "$chart" --version "$ver" -n "$ns" --create-namespace \
+    -f "$values" --wait --timeout "${HELM_TIMEOUT:-10m}"
+}

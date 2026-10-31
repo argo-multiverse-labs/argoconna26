@@ -90,3 +90,25 @@ rm-kind: ## Delete the kind cluster and its isolated kubeconfig
 	[[ "$$CLUSTER_NAME" == "argoconna26" ]] || die "refusing to delete cluster '$$CLUSTER_NAME'"
 	kind delete cluster --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG"
 	rm -f "$$KUBECONFIG"
+
+################################################################################
+# Platform                                                                     #
+################################################################################
+
+.PHONY: helm-repos
+helm-repos: ## Add the Helm repos to the isolated Helm config
+	@$(CTX)
+	helm repo add argo "$$ARGO_HELM_REPO" --force-update >/dev/null
+	helm repo add prometheus-community "$$PROM_HELM_REPO" --force-update >/dev/null
+	helm repo update >/dev/null
+
+.PHONY: argocd-install
+argocd-install: helm-repos ## Install Argo CD (skips when unchanged)
+	@$(LOCKED)
+	helm_ensure "$$ARGOCD_RELEASE" argo/argo-cd "$$ARGOCD_CHART_VERSION" "$$NS_ARGOCD" $(ROOT)/platform/argocd/values.yaml
+	k rollout status statefulset/argocd-application-controller -n "$$NS_ARGOCD" --timeout=300s
+
+.PHONY: argocd-password
+argocd-password: ## Print the Argo CD admin password
+	@$(CTX) 2>/dev/null
+	k -n "$$NS_ARGOCD" get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
