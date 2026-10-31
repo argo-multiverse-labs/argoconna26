@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
+from ..github_auth import GitHubAuthError
 from .base import ForgeError, ForgeNotFound
 
 _HEX = re.compile(r"^[0-9a-f]{7,40}$")
@@ -39,8 +40,13 @@ class GitHubForge:
         return f"GitHubForge(repo={self.repo!r})"
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        try:
+            token = await self._tokens.token()
+        except (GitHubAuthError, OSError) as exc:
+            # A failed token exchange or an unreadable key is a forge error, so callers fail closed.
+            raise ForgeError(f"{method} {path}: token unavailable ({type(exc).__name__})") from None
         headers = {
-            "Authorization": f"Bearer {await self._tokens.token()}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }

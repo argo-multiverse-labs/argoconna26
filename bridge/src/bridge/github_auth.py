@@ -20,6 +20,10 @@ JWT_BACKDATE = timedelta(seconds=60)    # tolerate clock skew with GitHub
 JWT_LIFETIME = timedelta(minutes=9)     # GitHub's maximum is 10
 REFRESH_BEFORE = timedelta(minutes=5)
 
+# Spec 7.6: contents and pull requests (write), checks (read). Requested on every
+# token so it never carries more than this, whatever the installation allows.
+TOKEN_PERMISSIONS = {"contents": "write", "pull_requests": "write", "checks": "read"}
+
 
 class GitHubAuthError(Exception):
     pass
@@ -36,6 +40,7 @@ class InstallationTokenProvider:
         installation_id: str,
         key_path: str | Path,
         *,
+        repo: str,
         api_url: str = "https://api.github.com",
         clock: Callable[[], datetime] = _utcnow,
         http: httpx.AsyncClient | None = None,
@@ -43,6 +48,10 @@ class InstallationTokenProvider:
         self.app_id = str(app_id)
         self.installation_id = str(installation_id)
         self.key_path = Path(key_path)
+        owner, _, name = repo.partition("/")
+        if not owner or not name or "/" in name:
+            raise ValueError("repo must be owner/name")
+        self.repo_name = name
         self._api = api_url.rstrip("/")
         self._clock = clock
         self._http = http or httpx.AsyncClient(timeout=20.0)
@@ -85,6 +94,7 @@ class InstallationTokenProvider:
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",
                     },
+                    json={"repositories": [self.repo_name], "permissions": TOKEN_PERMISSIONS},
                 )
             except httpx.HTTPError as exc:
                 raise GitHubAuthError(f"installation token request failed: {type(exc).__name__}") from None

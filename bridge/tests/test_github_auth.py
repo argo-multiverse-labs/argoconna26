@@ -18,6 +18,7 @@ from bridge.github_auth import InstallationTokenProvider
 API = "https://api.github.test"
 APP_ID = "123456"
 INSTALLATION_ID = "987654"
+REPO = "example-org/example-repo"
 TOKEN_URL = f"{API}/app/installations/{INSTALLATION_ID}/access_tokens"
 
 
@@ -53,7 +54,7 @@ def token_response(token: str, expires_at: datetime) -> httpx.Response:
 def test_jwt_claims_and_expiry(keypair) -> None:
     key_path, public_key = keypair
     clock = Clock(datetime(2026, 11, 2, 9, 0, tzinfo=UTC))
-    provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, key_path, api_url=API, clock=clock)
+    provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, key_path, repo=REPO, api_url=API, clock=clock)
     encoded = provider.app_jwt()
     header = jwt.get_unverified_header(encoded)
     assert header["alg"] == "RS256"
@@ -77,7 +78,7 @@ async def test_installation_token_cached_and_refreshed(respx_mock, keypair) -> N
     )
     async with httpx.AsyncClient() as http:
         provider = InstallationTokenProvider(
-            APP_ID, INSTALLATION_ID, key_path, api_url=API, clock=clock, http=http
+            APP_ID, INSTALLATION_ID, key_path, repo=REPO, api_url=API, clock=clock, http=http
         )
         assert await provider.token() == "inst-token-one"
         # Cached: 54 minutes later is still more than 5 minutes before expiry.
@@ -100,7 +101,7 @@ async def test_installation_token_error_raises_without_token(respx_mock, keypair
     key_path, _ = keypair
     respx_mock.post(TOKEN_URL).mock(return_value=httpx.Response(401, json={"message": "Bad credentials"}))
     async with httpx.AsyncClient() as http:
-        provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, key_path, api_url=API, http=http)
+        provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, key_path, repo=REPO, api_url=API, http=http)
         with pytest.raises(Exception) as excinfo:
             await provider.token()
     assert "401" in str(excinfo.value)
@@ -114,7 +115,7 @@ async def test_token_never_logged(respx_mock, keypair, caplog: pytest.LogCapture
     caplog.set_level(logging.DEBUG)
     async with httpx.AsyncClient() as http:
         provider = InstallationTokenProvider(
-            APP_ID, INSTALLATION_ID, key_path, api_url=API, clock=Clock(t0), http=http
+            APP_ID, INSTALLATION_ID, key_path, repo=REPO, api_url=API, clock=Clock(t0), http=http
         )
         token = await provider.token()
         app_jwt = provider.app_jwt()
@@ -127,6 +128,34 @@ async def test_token_never_logged(respx_mock, keypair, caplog: pytest.LogCapture
 
 
 def test_missing_key_file_raises_clear_error(tmp_path: Path) -> None:
-    provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, tmp_path / "absent", api_url=API)
+    provider = InstallationTokenProvider(APP_ID, INSTALLATION_ID, tmp_path / "absent", repo=REPO, api_url=API)
     with pytest.raises(FileNotFoundError):
         provider.app_jwt()
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_token_narrowed_to_repo_and_permissions(respx_mock, keypair) -> None:
+    """Spec 7.6: the token is scoped to this repo, contents + pull requests write, checks read."""
+    import json
+
+    key_path, _ = keypair
+    t0 = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+    route = respx_mock.post(TOKEN_URL).mock(return_value=token_response("inst-token", t0 + timedelta(hours=1)))
+    async with httpx.AsyncClient() as http:
+        provider = InstallationTokenProvider(
+            APP_ID, INSTALLATION_ID, key_path, repo="example-org/example-repo",
+            api_url=API, clock=Clock(t0), http=http,
+        )
+        await provider.token()
+    body = json.loads(route.calls[0].request.content)
+    assert body == {
+        "repositories": ["example-repo"],
+        "permissions": {"contents": "write", "pull_requests": "write", "checks": "read"},
+    }
+
+
+@pytest.mark.parametrize("repo", ["", "no-slash", "a/b/c"])
+def test_repo_must_be_owner_slash_name(keypair, repo: str) -> None:
+    key_path, _ = keypair
+    with pytest.raises(ValueError):
+        InstallationTokenProvider(APP_ID, INSTALLATION_ID, key_path, repo=repo, api_url=API)
