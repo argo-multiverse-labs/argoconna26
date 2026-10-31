@@ -1,0 +1,9 @@
+# Argo Rollouts controller only (chart 2.43.8, controller v1.10.1). No dashboard.
+controller:
+  replicas: 1
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 192Mi}
+dashboard:
+  enabled: false
+installCRDs: true

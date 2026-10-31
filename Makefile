@@ -112,3 +112,8 @@ argocd-install: helm-repos ## Install Argo CD (skips when unchanged)
 argocd-password: ## Print the Argo CD admin password
 	@$(CTX) 2>/dev/null
 	k -n "$$NS_ARGOCD" get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+.PHONY: rollouts-install
+rollouts-install: helm-repos ## Install Argo Rollouts (skips when unchanged)
+	@$(LOCKED)
+	helm_ensure "$$ROLLOUTS_RELEASE" argo/argo-rollouts "$$ROLLOUTS_CHART_VERSION" "$$NS_ROLLOUTS" $(ROOT)/platform/rollouts/values.yaml
