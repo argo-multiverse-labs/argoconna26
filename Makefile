@@ -62,3 +62,31 @@ test-bats: ## Run the bats suite
 .PHONY: consistency
 consistency: ## Hardcoded versions or names that differ from versions.env / demo.env
 	@$(ROOT)/scripts/check-consistency.sh $(ROOT)
+
+################################################################################
+# Cluster lifecycle                                                            #
+################################################################################
+
+KIND_CONFIG_VARS := $${CLUSTER_NAME} $${KIND_NODE_IMAGE} $${HOST_BIND} $${PORT_ARGOCD} $${PORT_GRAFANA} $${PORT_PROMETHEUS} $${PORT_BRIDGE} $${PORT_SIM} $${PORT_LITELLM}
+
+.PHONY: kind-cluster
+kind-cluster: ## Create the kind cluster (skips when it exists)
+	@$(PRE)
+	mkdir -p "$$(dirname "$$KUBECONFIG")"
+	if kind get clusters 2>/dev/null | grep -qx "$$CLUSTER_NAME"; then
+	  log_info "skip: cluster $$CLUSTER_NAME exists"
+	  [[ -s "$$KUBECONFIG" ]] || kind export kubeconfig --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG"
+	else
+	  envsubst '$(KIND_CONFIG_VARS)' < $(ROOT)/cluster/kind-config.yaml \
+	    | kind create cluster --config - --kubeconfig "$$KUBECONFIG" --wait 120s
+	fi
+	chmod 600 "$$KUBECONFIG"
+	require_context
+	k wait --for=condition=Ready nodes --all --timeout=120s
+
+.PHONY: rm-kind
+rm-kind: ## Delete the kind cluster and its isolated kubeconfig
+	@$(PRE)
+	[[ "$$CLUSTER_NAME" == "argoconna26" ]] || die "refusing to delete cluster '$$CLUSTER_NAME'"
+	kind delete cluster --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG"
+	rm -f "$$KUBECONFIG"
