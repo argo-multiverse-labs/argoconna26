@@ -130,6 +130,11 @@ kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admi
 	@$(LOCKED)
 	k get secret grafana-admin -n "$$NS_MONITORING" >/dev/null 2>&1 || die "grafana-admin Secret missing: run 'make secrets-base' first"
 	helm_ensure "$$KPS_RELEASE" prometheus-community/kube-prometheus-stack "$$KPS_CHART_VERSION" "$$NS_MONITORING" $(ROOT)/platform/kps/values.yaml
+	# helm --wait covers only chart-owned workloads. The Prometheus StatefulSet comes from the
+	# operator afterwards, so wait for it too (verify-idempotent snapshots right after this).
+	sts="prometheus-$${KPS_RELEASE}-prometheus"
+	wait_for "statefulset $$sts to exist" 300 k get statefulset "$$sts" -n "$$NS_MONITORING"
+	k rollout status statefulset/"$$sts" -n "$$NS_MONITORING" --timeout=300s
 
 ################################################################################
 # Build, rebuild, info, verification                                           #
