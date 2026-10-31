@@ -65,6 +65,34 @@ while IFS=: read -r file line text; do
   [[ "$ctx" == "$CLUSTER_CONTEXT" ]] || report "$file:$line: context '$ctx' is not $CLUSTER_CONTEXT"
 done < <(git grep -nI -E -e '--context[ =]+kind-[A-Za-z0-9._-]+' -- "${FILES[@]}" 2>/dev/null || true)
 
+# 5. image pins in Dockerfiles come from versions.env as build args (PYTHON_IMAGE,
+#    UV_IMAGE): no literal FROM or COPY --from image, no default on an ARG that names
+#    an image, and no unpinned `pip install uv`.
+while IFS= read -r file; do
+  stages=" "
+  while IFS= read -r st; do stages+="$st "; done < <(grep -ioE '^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]+[A-Za-z0-9._-]+' "$file" | awk '{print tolower($NF)}')
+  n=0
+  while IFS= read -r text || [[ -n "$text" ]]; do
+    n=$((n + 1))
+    if [[ "$text" =~ ^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?([^[:space:]]+) ]]; then
+      img="${BASH_REMATCH[2]}"
+      [[ "$img" == \$* || "$stages" == *" ${img,,} "* ]] \
+        || report "$file:$n: literal base image '$img' (use a build arg from versions.env)"
+    fi
+    if [[ "$text" =~ --from=([^[:space:],]+) ]]; then
+      img="${BASH_REMATCH[1]}"
+      [[ "$img" == \$* || "$stages" == *" ${img,,} "* || "$img" =~ ^[0-9]+$ ]] \
+        || report "$file:$n: literal --from image '$img' (use a build arg from versions.env)"
+    fi
+    if [[ "$text" =~ ^[[:space:]]*ARG[[:space:]]+([A-Za-z0-9_]*IMAGE[A-Za-z0-9_]*)= ]]; then
+      report "$file:$n: ARG ${BASH_REMATCH[1]} has a default (versions.env owns it)"
+    fi
+    if [[ "$text" =~ pip[[:space:]]+install[[:space:]]+([^;&|]*[[:space:]])?uv([[:space:]]|$|[^A-Za-z0-9_=.-]) ]]; then
+      report "$file:$n: unpinned 'pip install uv' (use UV_IMAGE from versions.env)"
+    fi
+  done < "$file"
+done < <(printf '%s\n' "${FILES[@]}" | grep -E '(^|/)(Dockerfile|Containerfile)[^/]*$' || true)
+
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2
   exit 1

@@ -68,3 +68,52 @@ plant() { # FILE LINE : append an offence to a tracked file and commit it
   [ "$status" -eq 0 ]
   [ "$output" = "consistency: OK" ]
 }
+
+# ------------------------------------------------------------ image pins in Dockerfiles
+plant_file() { # FILE CONTENT : add a new tracked file
+  mkdir -p "$(dirname "$WORK/$1")"
+  printf '%s\n' "$2" > "$WORK/$1"
+  git -C "$WORK" add -A
+  git -C "$WORK" commit -q -m plant
+}
+
+@test "a Dockerfile built only from build args passes" {
+  plant_file app/Dockerfile $'ARG PYTHON_IMAGE\nARG UV_IMAGE\nFROM ${UV_IMAGE} AS uv\nFROM ${PYTHON_IMAGE}\nCOPY --from=uv /uv /usr/local/bin/uv\nRUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv uv export -o /tmp/r.txt'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "consistency: OK" ]
+}
+
+@test "flags a literal FROM image" {
+  plant_file app/Dockerfile $'FROM python:3.13-slim\nCMD ["x"]'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"app/Dockerfile:1:"* ]]
+}
+
+@test "flags a default on an image build arg" {
+  plant_file app/Dockerfile $'ARG PYTHON_IMAGE=python:3.13-slim\nFROM ${PYTHON_IMAGE}'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"app/Dockerfile:1:"* ]]
+}
+
+@test "flags a literal COPY --from image" {
+  plant_file app/Dockerfile $'ARG PYTHON_IMAGE\nFROM ${PYTHON_IMAGE}\nCOPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"app/Dockerfile:3:"* ]]
+}
+
+@test "flags an unpinned pip install uv" {
+  plant_file app/Dockerfile $'ARG PYTHON_IMAGE\nFROM ${PYTHON_IMAGE}\nRUN pip install uv && uv export'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"app/Dockerfile:3:"* ]]
+}
+
+@test "pip uninstall uv after another install is not flagged" {
+  plant_file app/Dockerfile $'ARG PYTHON_IMAGE\nFROM ${PYTHON_IMAGE}\nRUN pip install -r /tmp/r.txt && pip uninstall -y uv'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+}
