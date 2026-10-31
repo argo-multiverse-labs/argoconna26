@@ -118,6 +118,13 @@ rollouts-install: helm-repos ## Install Argo Rollouts (skips when unchanged)
 	@$(LOCKED)
 	helm_ensure "$$ROLLOUTS_RELEASE" argo/argo-rollouts "$$ROLLOUTS_CHART_VERSION" "$$NS_ROLLOUTS" $(ROOT)/platform/rollouts/values.yaml
 
+.PHONY: secrets-base secrets-late secrets
+secrets-base: ## Load .env into Secrets that need no running service
+	@$(ROOT)/scripts/secrets.sh base
+secrets-late: ## Load Secrets that need running services (slice 3)
+	@$(ROOT)/scripts/secrets.sh late
+secrets: secrets-base secrets-late ## Load all Secrets
+
 .PHONY: kps-install
 kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admin Secret)
 	@$(LOCKED)
