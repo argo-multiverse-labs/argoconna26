@@ -130,3 +130,59 @@ kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admi
 	@$(LOCKED)
 	k get secret grafana-admin -n "$$NS_MONITORING" >/dev/null 2>&1 || die "grafana-admin Secret missing: run 'make secrets-base' first"
 	helm_ensure "$$KPS_RELEASE" prometheus-community/kube-prometheus-stack "$$KPS_CHART_VERSION" "$$NS_MONITORING" $(ROOT)/platform/kps/values.yaml
+
+################################################################################
+# Build, rebuild, info, verification                                           #
+################################################################################
+
+# Later slices insert targets at fixed positions; the final order is written once in Task 3.16.
+BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install
+SNAP_DIR    := $(MAIN_ROOT)/.kube/idempotency
+
+.PHONY: build-all
+build-all: ## Create the whole stack (safe to run twice)
+	@$(PRE)
+	$(MAKE) --no-print-directory $(BUILD_STEPS)
+	log_info "build-all: done"
+
+.PHONY: rebuild
+rebuild: ## Delete the cluster and build it again
+	@$(PRE)
+	$(MAKE) --no-print-directory rm-kind build-all
+
+.PHONY: preflight
+preflight: ## Pre-flight checks (exit 1 on any FAIL)
+	@$(ROOT)/scripts/preflight.sh $(RUNG)
+
+.PHONY: info
+info: ## Print URLs and how to get credentials (never the passwords)
+	@. $(ROOT)/scripts/common.sh; load_env
+	cat <<INFO
+	Argo CD     $$ARGOCD_HOST_URL      user admin, password: make -s argocd-password
+	Grafana     $$GRAFANA_HOST_URL     user admin, password: GRAFANA_ADMIN_PASSWORD in .env
+	Prometheus  $$PROM_HOST_URL
+	Context     $$CLUSTER_CONTEXT (isolated kubeconfig: $$KUBECONFIG)
+	INFO
+
+.PHONY: snapshot
+snapshot: ## (internal) record object UIDs and restart counts
+	@mkdir -p $(SNAP_DIR)
+	$(ROOT)/scripts/idempotency.sh snapshot $(SNAP_DIR)/before.txt
+
+.PHONY: compare
+compare: ## (internal) compare against the last snapshot
+	@$(ROOT)/scripts/idempotency.sh snapshot $(SNAP_DIR)/after.txt
+	$(ROOT)/scripts/idempotency.sh compare $(SNAP_DIR)/before.txt $(SNAP_DIR)/after.txt
+
+.PHONY: verify-idempotent
+verify-idempotent: ## rm-kind, build-all, build-all, compare, preflight
+	@$(PRE)
+	mkdir -p $(SNAP_DIR)
+	$(MAKE) --no-print-directory rm-kind build-all
+	$(MAKE) --no-print-directory snapshot
+	$(MAKE) --no-print-directory build-all 2>&1 | tee $(SNAP_DIR)/second-build.log
+	grep -q "skip: cluster $$CLUSTER_NAME exists" $(SNAP_DIR)/second-build.log \
+	  || die "the second build-all did not log 'skip: cluster $$CLUSTER_NAME exists'"
+	$(MAKE) --no-print-directory compare
+	$(MAKE) --no-print-directory preflight
+	log_info "verify-idempotent: OK"
