@@ -1,0 +1,58 @@
+# kube-prometheus-stack 92.14.0 (Prometheus v3.15.1, Grafana 13.2.4) sized for kind.
+# Needs the grafana-admin Secret from scripts/secrets.sh (build-all runs secrets before kps).
+fullnameOverride: kps
+
+alertmanager:
+  enabled: false
+
+# node-exporter saves RAM on kind
+nodeExporter:
+  enabled: false
+
+# kind's control-plane components are not scrapeable; their targets would only be noise
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    retention: 2d
+    # D6: pick up ServiceMonitors, PodMonitors, rules and probes from every namespace and label
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    resources:
+      requests: {cpu: 200m, memory: 512Mi}
+      limits: {memory: 1536Mi}
+
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  service:
+    type: NodePort
+    nodePort: 30030
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+  resources:
+    requests: {cpu: 50m, memory: 192Mi}
+    limits: {memory: 512Mi}

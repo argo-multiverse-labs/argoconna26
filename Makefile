@@ -117,3 +117,9 @@ argocd-password: ## Print the Argo CD admin password
 rollouts-install: helm-repos ## Install Argo Rollouts (skips when unchanged)
 	@$(LOCKED)
 	helm_ensure "$$ROLLOUTS_RELEASE" argo/argo-rollouts "$$ROLLOUTS_CHART_VERSION" "$$NS_ROLLOUTS" $(ROOT)/platform/rollouts/values.yaml
+
+.PHONY: kps-install
+kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admin Secret)
+	@$(LOCKED)
+	k get secret grafana-admin -n "$$NS_MONITORING" >/dev/null 2>&1 || die "grafana-admin Secret missing: run 'make secrets-base' first"
+	helm_ensure "$$KPS_RELEASE" prometheus-community/kube-prometheus-stack "$$KPS_CHART_VERSION" "$$NS_MONITORING" $(ROOT)/platform/kps/values.yaml
