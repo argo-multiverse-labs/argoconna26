@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from dataclasses import dataclass
@@ -17,6 +18,10 @@ _UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _WORD_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,31}$")
 _LEVELS = {"suggest", "propose", "act"}
+_APP_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+log = logging.getLogger("cdevents_sim.store")
+
 _TYPE_RE = re.compile(r"^dev\.cdevents(?:x)?\.(.+?)(?:\.\d+\.\d+\.\d+)?$")
 
 
@@ -70,7 +75,26 @@ def extract_app(event: dict) -> str | None:
     sid = _str(subj.get("id"))
     if sid and "/" in sid:
         return sid.split("/")[1] or None
-    return None
+    return _app_from_changed_files(_get(cd, "changed_files"))
+
+
+def _app_from_changed_files(files: Any) -> str | None:
+    """An operator change event (Task 3.14) names no app, only its changed files.
+    `apps/<app>/...` paths that all agree give the app; anything else gives None."""
+    if not isinstance(files, list) or not files:
+        return None
+    apps = set()
+    for f in files:
+        if not isinstance(f, str):
+            return None
+        path = f.strip()
+        while path.startswith(("./", "/")):
+            path = path[2:] if path.startswith("./") else path[1:]
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "apps" or not _APP_RE.match(parts[1]) or ".." in parts:
+            return None
+        apps.add(parts[1])
+    return apps.pop() if len(apps) == 1 else None
 
 
 def extract_revision(event: dict) -> str | None:
@@ -97,8 +121,12 @@ class AddResult:
 
 class Store:
     def __init__(self, path: Path, bridge_source: str | None = None):
+        # P16 fails closed: without the bridge's CloudEvents source, /timeline
+        # would let the bridge's standard-type events through to HolmesGPT.
+        if not bridge_source or not bridge_source.strip():
+            raise ValueError("BRIDGE_EVENT_SOURCE must be set (the bridge's CloudEvents source)")
         self.path = Path(path)
-        self.bridge_source = bridge_source
+        self.bridge_source = bridge_source.strip()
         self._lock = threading.RLock()
         self._events: list[dict] = []  # raw CDEvents, insertion order
         self._ids: set[str] = set()
@@ -110,9 +138,24 @@ class Store:
     def _load(self) -> None:
         if not self.path.exists():
             return
-        for line in self.path.read_text().splitlines():
-            if line.strip():
-                self._apply(json.loads(line))
+        data = self.path.read_bytes()
+        lines = data.split(b"\n")
+        offset = 0
+        for i, raw in enumerate(lines):
+            if raw.strip():
+                try:
+                    event = json.loads(raw)
+                except ValueError:
+                    if i < len(lines) - 1:
+                        raise  # corruption before the tail is not recoverable
+                    # A pod killed mid-append leaves a partial last line. Drop it
+                    # so the next append starts on a clean line.
+                    log.warning("dropping a partial last line in %s (%d bytes)", self.path, len(raw))
+                    with self.path.open("r+b") as f:
+                        f.truncate(offset)
+                    return
+                self._apply(event)
+            offset += len(raw) + 1
 
     def _persist(self, event: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,7 +167,7 @@ class Store:
         ctx = event["context"]
         if ctx["type"].startswith(CUSTOM_PREFIX):
             return True
-        return bool(self.bridge_source) and ctx.get("source") == self.bridge_source
+        return ctx.get("source") == self.bridge_source
 
     # -- incident bookkeeping -------------------------------------------
     def _open_incident(self, app: str | None) -> dict | None:

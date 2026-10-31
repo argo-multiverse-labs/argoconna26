@@ -102,3 +102,27 @@ def test_healthz_and_metrics(client):
     client.post("/events", json=service_deployed("e"))
     body = client.get("/metrics").text
     assert "cdevents_sim_events_total" in body
+
+
+def test_create_app_refuses_without_bridge_source(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRIDGE_EVENT_SOURCE", raising=False)
+    with pytest.raises(ValueError, match="BRIDGE_EVENT_SOURCE"):
+        create_app(store_path=tmp_path / "events.jsonl")
+
+
+def test_create_app_reads_bridge_source_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRIDGE_EVENT_SOURCE", BRIDGE_SOURCE)
+    with TestClient(create_app(store_path=tmp_path / "events.jsonl")) as c:
+        assert c.post("/events", json=change_created("bridge-pr")).status_code == 202
+        assert c.post("/events", json=service_deployed("deploy")).status_code == 202
+        assert [r["id"] for r in c.get("/timeline", params={"app": "checkout"}).json()] == ["deploy"]
+
+
+def test_operator_change_payload_on_timeline(client):
+    """Task 3.14's payload, posted as-is, shows up on /timeline?app=checkout."""
+    from test_store import operator_change_merged
+
+    r = client.post("/events", json=operator_change_merged())
+    assert r.status_code == 202, r.text
+    rows = client.get("/timeline", params={"app": "checkout"}).json()
+    assert [row["customData"]["change_ref"] for row in rows] == ["PR-242"]

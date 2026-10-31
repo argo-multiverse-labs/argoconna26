@@ -22,7 +22,10 @@ def create_app(
     seed_fixture: Path | str | None = None,
 ) -> FastAPI:
     store_path = Path(store_path or os.environ.get("CDEVENTS_STORE", "/data/events.jsonl"))
-    bridge_source = bridge_source if bridge_source is not None else os.environ.get("BRIDGE_EVENT_SOURCE")
+    bridge_source = bridge_source if bridge_source is not None else os.environ.get("BRIDGE_EVENT_SOURCE", "")
+    if not bridge_source.strip():
+        # P16: refuse to start rather than serve a /timeline that lets the bridge's events through.
+        raise ValueError("BRIDGE_EVENT_SOURCE must be set (the bridge's CloudEvents source)")
     seed_fixture = seed_fixture or os.environ.get("SEED_FIXTURE")
     store = Store(store_path, bridge_source=bridge_source)
 

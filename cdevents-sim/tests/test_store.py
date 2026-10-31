@@ -181,3 +181,78 @@ def test_persistence_survives_restart(tmp_path):
     assert b.query() == a.query()
     assert b.incidents() == a.incidents()
     assert b.add(service_deployed("e1")).status == "duplicate"
+
+
+@pytest.mark.parametrize("source", [None, "", "   "])
+def test_store_refuses_without_bridge_source(tmp_path, source):
+    """P16 fails closed: without the bridge's source the timeline filter can't work."""
+    with pytest.raises(ValueError, match="BRIDGE_EVENT_SOURCE"):
+        Store(tmp_path / "s.jsonl", bridge_source=source)
+
+
+def test_torn_last_line_is_skipped_and_truncated(tmp_path, caplog):
+    """A pod killed mid-append leaves a partial last line; the next start recovers."""
+    path = tmp_path / "p.jsonl"
+    a = Store(path, bridge_source=BRIDGE_SOURCE)
+    a.add(service_deployed("e1", when=ts(10)))
+    with path.open("a") as f:
+        f.write('{"context":{"id":"torn","ty')
+    b = Store(path, bridge_source=BRIDGE_SOURCE)
+    assert [r["id"] for r in b.query()] == ["e1"]
+    assert "torn" in caplog.text or "partial" in caplog.text
+    b.add(service_deployed("e2", when=ts(5)))
+    c = Store(path, bridge_source=BRIDGE_SOURCE)
+    assert [r["id"] for r in c.query()] == ["e2", "e1"]
+
+
+def test_corrupt_middle_line_still_fails(tmp_path):
+    """Only a torn tail is recoverable; corruption elsewhere is not silently dropped."""
+    path = tmp_path / "p.jsonl"
+    a = Store(path, bridge_source=BRIDGE_SOURCE)
+    a.add(service_deployed("e1", when=ts(10)))
+    text = path.read_text()
+    path.write_text("not json\n" + text)
+    with pytest.raises(ValueError):
+        Store(path, bridge_source=BRIDGE_SOURCE)
+
+
+def operator_change_merged(sha="d" * 40, change_ref="PR-242") -> dict:
+    """Exactly the shape Task 3.14's emit_change_event sends (Δ28): no app field."""
+    return {
+        "context": {
+            "specversion": "0.5.1",
+            "id": f"chg-{sha[:7]}",
+            "source": "/argoconna26/operator",
+            "type": "dev.cdevents.change.merged.0.3.0",
+            "timestamp": ts(1),
+        },
+        "subject": {"id": sha, "content": {"repository": {"id": "argo-multiverse-labs/argoconna26"}}},
+        "customData": {
+            "title": "checkout: tune upstream timeout",
+            "author": "operator",
+            "change_ref": change_ref,
+            "changed_files": ["apps/checkout/config/checkout-config.yaml", "./apps/checkout/CHANGELOG.md"],
+        },
+    }
+
+
+def test_operator_change_event_reaches_app_timeline(store):
+    store.add(operator_change_merged())
+    rows = store.query(app="checkout", delivery_only=True)
+    assert [r["customData"]["change_ref"] for r in rows] == ["PR-242"]
+    assert rows[0]["app"] == "checkout"
+
+
+def test_changed_files_across_apps_gives_no_app(store):
+    e = operator_change_merged()
+    e["customData"]["changed_files"] = ["apps/checkout/x.yaml", "apps/pricing/y.yaml"]
+    store.add(e)
+    assert store.query()[0]["app"] is None
+
+
+@pytest.mark.parametrize("files", [["README.md"], ["apps/"], ["apps/../etc/x"], "apps/checkout/x", []])
+def test_changed_files_without_one_app_gives_no_app(store, files):
+    e = operator_change_merged()
+    e["customData"]["changed_files"] = files
+    store.add(e)
+    assert store.query()[0]["app"] is None
