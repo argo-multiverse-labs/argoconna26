@@ -1,0 +1,40 @@
+[project]
+name = "bridge"
+version = "0.1.0"
+description = "Argo CD Notifications to HolmesGPT to Git bridge for the trust-ladder demo"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.120",
+    "uvicorn>=0.38",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.11",
+    "httpx>=0.28",
+    "pyjwt[crypto]>=2.10",
+    "pyyaml>=6.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "respx>=0.22",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra"
+filterwarnings = [
+    # starlette's TestClient warns that it will move to httpx2; harmless here.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
