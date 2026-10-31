@@ -22,7 +22,12 @@ setup() {
         echo "DIR-FILES: $(ls "$d" | tr "\n" " ")" >> "'"$CALLS"'"
         echo "apiVersion: v1"; echo "kind: Secret" ;;
       *"create namespace"*) echo "apiVersion: v1"; echo "kind: Namespace" ;;
-      *"apply -f -"*) cat > /dev/null; echo "applied" ;;
+      *"apply"*"-f -"*) cat > /dev/null; echo "applied" ;;
+      *"get secret"*)
+        if [ -f "'"$BATS_TEST_TMPDIR"'/last-applied" ]; then
+          echo "{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/last-applied-configuration\":\"x\"}}}"
+        else echo "{\"metadata\":{}}"; fi ;;
+      *"annotate secret"*) ;;
     esac'
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
   # fake values, held in neutrally named variables so secret scanners see no credential-shaped lines
@@ -44,10 +49,10 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
 @test "secrets is idempotent" {
   run run_secrets base
   [ "$status" -eq 0 ]
-  first="$(grep -c 'apply -f -' "$CALLS")"
+  first="$(grep -c 'apply.*-f -' "$CALLS")"
   run run_secrets base
   [ "$status" -eq 0 ]
-  second="$(grep -c 'apply -f -' "$CALLS")"
+  second="$(grep -c 'apply.*-f -' "$CALLS")"
   [ "$first" -gt 0 ]
   [ "$second" -eq $((first * 2)) ]
   # every secret goes through create --dry-run | apply, never a bare create
@@ -106,4 +111,21 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
   run run_secrets late
   [ "$status" -eq 0 ]
   [[ "$output" == *"skipped: holmes"* ]]
+}
+
+@test "secrets use server-side apply, so no last-applied copy of the values is kept" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  grep 'ARGS:' "$CALLS" | grep -q -- 'apply --server-side --field-manager=secrets-sh --force-conflicts -f -'
+  # every apply that follows a 'create secret' is server-side
+  grep -qE 'ARGS:.* apply ' "$CALLS"
+  ! grep -E 'ARGS:.* apply ' "$CALLS" | grep -v -- '--server-side' | grep -q .
+  ! grep -q 'annotate secret' "$CALLS"
+}
+
+@test "secrets strip a last-applied annotation left by an older client-side apply" {
+  echo '{"x":1}' > "$BATS_TEST_TMPDIR/last-applied"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  grep -q 'annotate secret grafana-admin -n monitoring kubectl.kubernetes.io/last-applied-configuration-' "$CALLS"
 }

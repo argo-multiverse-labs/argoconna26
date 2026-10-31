@@ -32,12 +32,25 @@ _put() { printf '%s' "$2" > "$SECRET_DIR/$1"; } # KEY VALUE (printf is a builtin
 
 _cleanup_secret_dir() { [[ -z "${SECRET_DIR:-}" ]] || rm -rf "$SECRET_DIR"; SECRET_DIR=""; }
 
+LAST_APPLIED=kubectl.kubernetes.io/last-applied-configuration
+
 # _apply_secret NS NAME [--from-file=k=path ...]
+# Server-side apply: unlike client-side apply it writes no last-applied-configuration
+# annotation, which would hold a second copy of every value in object metadata. An
+# unchanged Secret is a no-op (same UID and resourceVersion), so build-all stays idempotent.
 _apply_secret() {
   local ns="$1" name="$2"; shift 2
   _ensure_ns "$ns"
   k create secret generic "$name" -n "$ns" --from-file="$SECRET_DIR" "$@" \
-    --dry-run=client -o yaml | k apply -f - >/dev/null
+    --dry-run=client -o yaml \
+    | k apply --server-side --field-manager=secrets-sh --force-conflicts -f - >/dev/null
+  # A Secret first written by an older client-side apply still carries the annotation.
+  # (Checked with jq -e, so the annotation's value is never read into the shell.)
+  if k get secret "$name" -n "$ns" -o json 2>/dev/null \
+       | jq -e --arg a "$LAST_APPLIED" '.metadata.annotations[$a] != null' >/dev/null; then
+    k annotate secret "$name" -n "$ns" "${LAST_APPLIED}-" >/dev/null
+    log_info "secret: $ns/$name (removed the old last-applied annotation)"
+  fi
   log_info "secret: $ns/$name"
   _cleanup_secret_dir
 }
