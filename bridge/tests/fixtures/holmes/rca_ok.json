@@ -1,0 +1,130 @@
+{
+ "_fixture": {
+  "envelope": "real HolmesGPT 0.45.0 /api/chat response",
+  "model_turns": "scripted by a mock OpenAI-compatible server, NOT Claude",
+  "see": "README.md"
+ },
+ "analysis": "{\"root_cause\": \"MOCK\", \"cause_commit_sha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"evidence\": [\"mock\"], \"delivery_context\": \"mock\", \"confidence\": 0.5, \"proposed_patch\": {\"file\": \"f\", \"key\": \"k\", \"from\": \"1\", \"to\": \"2\"}}",
+ "conversation_history": [
+  {
+   "content": "\nYou are HolmesGPT version 0.45.0, an AI agent for troubleshooting and answering questions about DevOps, IT and observability systems, using tool calls to gather data.\nMake multiple independent tool calls in parallel whenever possible \u2014 it saves the user time.\nDo not say 'based on the tool output' or explicitly refer to tools at all.\nIf, after answering, you realize more tool calls are needed, you may call more tools at that point.\nIf you have a concrete suggestion for how the user can fix something, share it even if not asked explicitly.\n\n\n\n\n\n\n\n\n\n\n# Investigation guidelines\n\n* Gather data with as many tool calls as needed before responding; keep going until you reach the deepest root cause you can find.\n* Use the \"five whys\" approach: if a problem in service A traces to service B, investigate B too.\n* Even after finding a root cause, keep investigating to find other possible causes and exact details (resource names, versions, labels). If there are multiple possible causes, list them in a numbered list.\n* Always provide specific details from the user's environment \u2014 exact resource names, namespaces, versions \u2014 not generic examples.\n* If you cannot find the resource the user referred to, assume a possible typo: try substrings and spelling variations.\n* **Adjacent / similarly-named entities:** when the exact entity the user named has no data but similar-named ones do (siblings, same prefix/namespace), report both facts: state explicitly that you found nothing for the exact name (verbatim), report what you found in the similar entities, clearly labeled as coming from a different, related entity \u2014 never silently merge the user's name into the found ones \u2014 and suggest the user verify the name.\n* Distinguish confirmed facts (directly observed in tool output) from hypotheses. Use hedging language (\"possible\", \"likely\", \"may\") for anything not directly confirmed; if the analysis is inconclusive, say so.\n* Treat error messages as exact diagnostic evidence: `authentication failed` / `password authentication failed` for user X means user X EXISTS; `role does not exist` / `user not found` means the user is absent. These are mutually exclusive \u2014 never add \"or the user may not exist\" to an authentication failure.\n* Do not conclude a resource is absent from a running system just because it isn't in deployment configuration \u2014 stateful systems accumulate state (SQL, API calls, admin operations) that leaves no K8s trace. If you can't read a value (e.g. a Secret), say you couldn't verify it rather than guessing.\n* Data often contains errors that are irrelevant to the question \u2014 ignore them in your conclusion unless you tied them to the actual problem.\n* ALWAYS check application logs when investigating whether an app, pod, service or deployment has issues \u2014 \"running\" and healthy-looking does not mean issue-free.\n\n# Impact and blast radius\n\n* Name an entity as affected only when you observed evidence for THAT entity \u2014 its own event, status/condition, log line or metric \u2014 and say what that evidence is (e.g. \"`checkout-cache`: Evicted event, now Pending\").\n* Never widen the blast radius by inference. A node condition does not tell you which pods it hit; a failing dependency does not tell you which of its clients broke; an unhealthy shared component does not mean its consumers are unhealthy. Check each entity before you name it, or do not name it \u2014 sampling a workload's replicas characterizes the WORKLOAD, so attribute what you found to it rather than to replicas you did not look at.\n* A restart, recreation, error or status change on an entity during the incident window is not impact until you have read its reason and found that it ties to this cause: the event's reason and message and who emitted it (`Evicted` from the kubelet is impact; `SuccessfulCreate` from a controller is a rollout), the container's last-state reason and exit code (`OOMKilled` vs `Completed`), or the log line. A pod that is 5 minutes old on a node that had trouble 5 minutes ago was not necessarily evicted \u2014 check what created it. Coincidence in time is not causation, and \"also affected\" is a claim that needs its own evidence.\n* The same discipline applies to clearing entities: \"X was unaffected\" also needs a look. If you did not check, say you did not check.\n* Entities you checked and found healthy are a finding worth reporting, not something to drop.\n* Consequences you did not observe \u2014 downstream services, customer impact, data loss, other namespaces or clusters \u2014 are either verified before you state them, or marked explicitly as unverified with what would confirm them.\n* Counts and scope words (\"all\", \"several\", \"cluster-wide\", \"also affected\") must match what you actually observed. Do not generalize from a sample you did not take.\n* When you write up impact, sort every entity you name into one of four groups and label them: **Affected** \u2014 only entities with their own eviction, kill, error or failure evidence tied to this cause. Every line here quotes the exact reason token that proves it, in parentheses: `Evicted`, `OOMKilled`, `BackOff`, `Failed`, `Unhealthy` on a long-running pod, an error log line. If you cannot quote such a token for that entity, it does not go here \u2014 `SuccessfulDelete`, `SuccessfulCreate`, `Scheduled`, `Started` and a probe miss at startup are not among them. A recreation, restart or probe miss inside the window is never enough on its own, whatever sub-label you give it; **Checked, healthy** \u2014 you looked and found nothing wrong; **Changed during the window for another reason** \u2014 it restarted, was recreated or errored, and you name what did it (a controller rollout, a scheduled job, an operator, a probe at startup) and how you know; **Not checked**. Anything that changed during the window and that you cannot place in the first or third group goes in the fourth \u2014 it is not impact, and it does not go under an impact heading with a time-window qualifier as a substitute for a cause.\n\n# If investigating Kubernetes problems\n\n* Run as many kubectl commands as needed, walking the ownership chain (e.g. deployment \u2192 replicaset \u2192 pod) and checking both resource status and application logs.\n* When a pod crashed or an application errors, always run kubectl_describe and fetch the logs.\n* Don't stop at surface answers like \"the pod is pending\" or \"node affinity doesn't match\" \u2014 say why (which resource is short, which label doesn't match) and how to fix it.\n* When many pods are affected, checking up to 3 representative pods per deployment is enough \u2014 to conclude about the DEPLOYMENT. Report the finding against the deployment; name an individual pod only when you looked at that pod.\n* Eviction and OOM leave their mark on the pod: an `Evicted` event from the kubelet, or `OOMKilled` as a container's last termination reason. A pod that was deleted and recreated by its own controller \u2014 `SuccessfulDelete` / `SuccessfulCreate` from the daemonset-, replicaset- or statefulset-controller, a new pod name, a fresh `pod-template-generation`, Restart Count 0 \u2014 was rolled out or rescheduled by that controller, not damaged by the node, even when it happened in the same minute as the incident. For any pod younger than the incident, ask two things before you write about it: who created it (the `SuccessfulCreate` emitter), and whether the same controller replaced its siblings on other nodes in the same minutes \u2014 nodes that had no trouble. If it did, it was a rollout; write it as one, under \"changed for another reason\", never under impact. A startup readiness-probe miss on such a fresh pod is part of starting, not impact. Count a pod as affected only on its own eviction or kill evidence.\n* If the user says something isn't working: describe the owner workload and pods (looking for transient issues), check for misconfigured ingresses/services, and read application logs for runtime issues.\n\n\n\n# Available Toolsets\n## Logs\n\n* ALWAYS tell the user what logs you fetched and how: the time period covered (even if it was just the default, e.g. \"Logs from last 1 hour...\"), any limit applied and how many logs were shown vs total (e.g. \"Showing last 100 lines\"), and any filter used (e.g. \"Logs filtered for 'error':\").\n\n* You have no tools to fetch kubernetes logs for nodes, pods, services or apps \u2014 likely a misconfiguration. If you need logs, tell the user to enable one of these toolsets: 'kubernetes/logs', 'grafana/loki', 'opensearch/logs', 'coralogix', 'datadog/logs', 'openshift/logs', 'newrelic'.\n\n\n\n## cdevents-timeline\nYou have access to a generic HTTP tool for making requests to whitelisted API endpoints.\n\nOnly use the cdevents_timeline_request tool when:\n1. No dedicated toolset exists for the API you need to access\n2. The endpoint is configured in the HTTP toolset whitelist\n\nThe tool supports:\n- JSON response filtering with `jq` expressions and `max_depth`\n- Requests are restricted to whitelisted hosts, paths, and HTTP methods\n\n\n**Whitelisted endpoints** (requests to other URLs will be rejected):\n\n- Hosts: cdevents-sim.aiops.svc:8080, cdevents-sim.aiops.svc.cluster.local:8080\n  Paths: /timeline*, /incidents*\n  Methods: GET\n\n\nIMPORTANT: You can ONLY call URLs matching these host/path/method combinations.\nIf you try to access other URLs, the tool will return an error.\n\n\n\nAvailable HTTP tools: cdevents_timeline_request\n\n\n## API-Specific Instructions\n\nUse this toolset to read the delivery timeline for an app.\nCall GET http://cdevents-sim.aiops.svc:8080/timeline?app=<app>&since=-72h\nRows: id, type, timestamp, subject_id, app, revision, summary, customData.\nCall GET http://cdevents-sim.aiops.svc:8080/incidents?app=<app> for incidents.\n# Disabled & failed Toolsets\n\nThese toolsets are DISABLED (unconfigured) unless marked FAILED (misconfigured). Setup docs per toolset: `https://holmesgpt.dev/data-sources/builtin-toolsets/<name before any slash>/` unless a different URL is given.\n\n* argocd/core: Set of tools to get argocd metadata like list of apps, repositories, projects, etc.\n* kubernetes/core: Read access to cluster resources (excluding secrets and other sensitive data)\n* kubernetes/live-metrics: Provides real-time metrics for pods and nodes\n* kubernetes/kube-prometheus-stack: Fetches prometheus definition\n* helm/core: Read access to cluster's Helm charts and releases\n* kubevela/core: Set of tools to inspect KubeVela applications, components, and workflows\n* slab: Fetches slab pages\n* openshift/core: Read access to OpenShift cluster resources including projects, routes, and deployment configs\n* openshift/logs: Read pod logs using oc command\n* openshift/live-metrics: Provides real-time metrics for pods and nodes using oc\n* openshift/security: OpenShift security-related resources and configurations\n* crossplane/core: Tools for troubleshooting Crossplane managed resources, compositions, providers, and claims\n* internet: Fetch webpages\n* connectivity_check: Check TCP connectivity to endpoints [setup: https://holmesgpt.dev/data-sources/builtin-toolsets/connectivity-check/]\n* robusta: Fetches detailed data about Robusta findings (alerts and configuration changes)\n* grafana/loki: Runs loki log queries using Grafana Loki or Loki directly. [setup: https://holmesgpt.dev/data-sources/builtin-toolsets/grafanaloki/]\n* grafana/tempo: Fetches kubernetes traces from Tempo [setup: https://holmesgpt.dev/data-sources/builtin-toolsets/grafanatempo/]\n* newrelic: Toolset for interacting with New Relic to fetch logs, traces, and execute freeform NRQL queries\n* grafana/dashboards: Provides tools for interacting with Grafana dashboards, including visual rendering of panels and dashboards [setup: https://holmesgpt.dev/data-sources/builtin-toolsets/grafanadashboards/]\n* notion: Fetch notion webpages\n* kafka/admin: Fetches metadata from multiple Kafka clusters\n* datadog/logs: Toolset for fetching logs from Datadog, including historical data for pods no longer in the cluster\n* datadog/general: General-purpose Datadog API access for read-only operations including monitors, dashboards, SLOs, incidents, synthetics, logs, metrics, and more. Note: For logs and metrics, prefer using the specialized datadog/logs and datadog/metrics toolsets when available as they provide optimized functionality\n* datadog/metrics: Toolset for fetching metrics and metadata from Datadog, including historical data for pods no longer in the cluster\n* datadog/traces: Toolset for interacting with Datadog APM to fetch and analyze traces\n* opensearch/query_assist: OpenSearch query assist with PPL queries.\n* coralogix: Toolset for interacting with Coralogix to fetch logs, traces, metrics, and execute DataPrime queries [setup: https://holmesgpt.dev/data-sources/builtin-toolsets/coralogix-logs/]\n* rabbitmq/core: Provides tools to interact with RabbitMQ to diagnose cluster health, node status, and specifically network partitions (split-brain).\n* bash: Execute bash commands validated against prefix-based allow/deny lists, with user approval for unknown commands.\n* confluence: Fetch and search Confluence pages\n* MongoDBAtlas: The MongoDB Atlas API allows access to Mongodb projects and processes. You can find logs, alerts, events, slow queries and various metrics to understand the state of Mongodb projects. [setup: https://www.mongodb.com/docs/atlas/reference/api-resources-spec/v2/]\n* skills: Fetch skills [setup: https://holmesgpt.dev/data-sources/]\n* servicenow/tables: Tools for retrieving records from ServiceNow tables\n* victorialogs: Query logs from VictoriaLogs using LogsQL. Provides search, log stream discovery, and field/value enumeration.\n* database/sql: Query SQL databases (PostgreSQL, MySQL, MariaDB, ClickHouse, SQL Server, SQLite)\n* elasticsearch/data: Search and query data in Elasticsearch/OpenSearch indices - logs, metrics, documents\n* elasticsearch/cluster: Troubleshoot Elasticsearch/OpenSearch cluster health - shards, nodes, allocation\n* prometheus/metrics: Prometheus integration to fetch metadata and execute PromQL queries\n* prometheus/multi-tenant-metrics: Prometheus integration for multi-tenant backends that selects the tenant per request from a Kubernetes resource label value\n* kubernetes/logs: Read Kubernetes pod logs using a unified API\n\n\nIf you need a system you can't reach with your current tools: for a matching FAILED toolset, tell the user and copy its error into your response; for a matching disabled toolset (including when users ask how to set up or grant access to a system), ask the user to configure it and share its setup URL. If no toolset matches, say you're missing an integration for that system and that one can be added via an [HTTP connector](https://holmesgpt.dev/data-sources/api-toolsets/) (quickest for REST APIs \u2014 supports auth, endpoint whitelisting and response filtering), an [MCP server](https://holmesgpt.dev/data-sources/remote-mcp-servers/), or a [custom toolset](https://holmesgpt.dev/data-sources/custom-toolsets/).\n\n\n\n# Handling Permission Errors\n\nIf a tool hits a permissions error (e.g. `Error from server (Forbidden):`): identify the missing resource, API group and verbs from the error; check which user/service account you run as and its permissions; report this to the user with a link to https://holmesgpt.dev/data-sources/permissions/\n\n\n\n# Special cases\n\n* Distinguish \"I investigated and found error X caused this problem\" from \"errors prevented me from completing the investigation\". A permission error when running a tool follows the Handling Permission Errors section; a permission error found *inside* a pod's logs is a root cause to explain to the user.\n* Issues are a subset of findings. When asked about an issue or finding and you have an id, use `fetch_finding_by_id`.\n* Reuse results of tools that were already called. If a tool call returns nothing, adjust the parameters instead of repeating it verbatim. When unsure which namespace a resource is in, use a cluster-level tool to locate it.\n\n\n\n# Style guide\n\n* Reply with terse output; be painfully concise; drop filler words.\n* But never at the expense of important data like the root cause and how to fix it.\n* Distinguish confirmed facts from hypotheses (\"possible cause\", \"might be\").\n\n## Example\n\nUser: Why did the checkout service crash?\n(Call a discovery tool to locate the failing resource)\n(Call a logs tool to read the most recent error output)\n\nAI: `checkout` crashed due to an email validation error while handling `/api/create_user`.\nRelevant logs:\n\n```\n2021-01-01T00:00:00.000Z [ERROR] Missing required field 'email' in request body\n```\n\nValidation error led to an unhandled exception causing a crash.\n\n\n\n\n",
+   "role": "system",
+   "token_count": 3703
+  },
+  {
+   "content": "Checkout aborted its canary. Use the cdevents-timeline toolset once for app=checkout (last 72h) to find the change that caused it, then return the RCA.\n\n\n\nWhen querying tools, always query for the relevant time period. The current UTC date and time are 2026-10-31 20:56:40.142356+00:00. The current UTC timestamp in seconds is 1793480200.\nWhen users mention dates without years (e.g., 'March 25th', 'last May', etc.), assume they either mean the current year (2026) unless context suggests otherwise.",
+   "role": "user",
+   "token_count": 137
+  },
+  {
+   "provider_specific_fields": {
+    "refusal": null
+   },
+   "role": "assistant",
+   "token_count": 43,
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"url\": \"http://cdevents-sim.aiops.svc:8080/timeline?app=checkout&since=-72h\", \"method\": \"GET\"}",
+      "name": "cdevents_timeline_request"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  },
+  {
+   "content": "Params used for the tool call: {\"url\": \"http://cdevents-sim.aiops.svc:8080/timeline?app=checkout&since=-72h\", \"method\": \"GET\"}. The tool call output follows on the next line.\ntool_call_metadata={\"tool_name\": \"cdevents_timeline_request\", \"tool_call_id\": \"call_1\"}{\"status_code\":200,\"body\":[{\"id\":\"e2\",\"type\":\"dev.cdevents.change.merged.0.4.0\",\"timestamp\":\"2026-10-31T10:12:00Z\",\"subject_id\":\"pr-42\",\"app\":\"checkout\",\"revision\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"summary\":\"change merged: UPSTREAM_TIMEOUT_MS 2000 -> 200 (config-version not bumped)\",\"customData\":{\"change_ref\":\"pr-42\"}},{\"id\":\"e1\",\"type\":\"dev.cdevents.service.deployed.0.3.0\",\"timestamp\":\"2026-10-31T09:00:00Z\",\"subject_id\":\"checkout\",\"app\":\"checkout\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"deployed v1.4.1\",\"customData\":{}}]}",
+   "name": "cdevents_timeline_request",
+   "role": "tool",
+   "token_count": 266,
+   "tool_call_id": "call_1"
+  },
+  {
+   "content": "{\"root_cause\": \"MOCK\", \"cause_commit_sha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"evidence\": [\"mock\"], \"delivery_context\": \"mock\", \"confidence\": 0.5, \"proposed_patch\": {\"file\": \"f\", \"key\": \"k\", \"from\": \"1\", \"to\": \"2\"}}",
+   "provider_specific_fields": {
+    "refusal": null
+   },
+   "role": "assistant",
+   "token_count": 84
+  }
+ ],
+ "follow_up_actions": [
+  {
+   "action_label": "Logs",
+   "id": "logs",
+   "pre_action_notification_text": "Fetching relevant logs...",
+   "prompt": "Show me the relevant logs"
+  },
+  {
+   "action_label": "Graphs",
+   "id": "graphs",
+   "pre_action_notification_text": "Drawing some graphs...",
+   "prompt": "Show me the relevant graphs. Use prometheus and make sure you embed the results with `<< >>` to display a graph"
+  },
+  {
+   "action_label": "Articles",
+   "id": "articles",
+   "pre_action_notification_text": "Looking up and summarizing runbooks and links...",
+   "prompt": "List the relevant runbooks and links used. Write a short summary for each"
+  }
+ ],
+ "metadata": {
+  "costs": {
+   "cache_creation_tokens": null,
+   "cached_tokens": null,
+   "completion_tokens": 2,
+   "max_completion_tokens_per_call": 1,
+   "max_prompt_tokens_per_call": 1,
+   "num_compactions": 0,
+   "prompt_tokens": 2,
+   "reasoning_tokens": 0,
+   "total_cost": 0.0,
+   "total_tokens": 4
+  },
+  "finish_reason": "stop",
+  "max_output_tokens": 64000,
+  "max_tokens": 200000,
+  "request_id": "<uuid>",
+  "tokens": {
+   "assistant_tokens": 127,
+   "other_tokens": 0,
+   "system_tokens": 3703,
+   "tools_to_call_tokens": 341,
+   "tools_tokens": 266,
+   "total_tokens": 4562,
+   "user_tokens": 137
+  },
+  "usage": {
+   "completion_tokens": 1,
+   "prompt_tokens": 1,
+   "total_tokens": 2
+  }
+ },
+ "pending_approvals": null,
+ "tool_calls": [
+  {
+   "description": "HTTP GET http://cdevents-sim.aiops.svc:8080/timeline?app...",
+   "result": {
+    "data": "{\"status_code\":200,\"body\":[{\"id\":\"e2\",\"type\":\"dev.cdevents.change.merged.0.4.0\",\"timestamp\":\"2026-10-31T10:12:00Z\",\"subject_id\":\"pr-42\",\"app\":\"checkout\",\"revision\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"summary\":\"change merged: UPSTREAM_TIMEOUT_MS 2000 -> 200 (config-version not bumped)\",\"customData\":{\"change_ref\":\"pr-42\"}},{\"id\":\"e1\",\"type\":\"dev.cdevents.service.deployed.0.3.0\",\"timestamp\":\"2026-10-31T09:00:00Z\",\"subject_id\":\"checkout\",\"app\":\"checkout\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"deployed v1.4.1\",\"customData\":{}}]}",
+    "elapsed_seconds": 0.003573894500732422,
+    "error": null,
+    "icon_url": "https://cdn-icons-png.flaticon.com/512/2165/2165004.png",
+    "images": null,
+    "invocation": null,
+    "params": {
+     "method": "GET",
+     "url": "http://cdevents-sim.aiops.svc:8080/timeline?app=checkout&since=-72h"
+    },
+    "return_code": null,
+    "schema_version": "robusta:v1.0.0",
+    "status": "success",
+    "url": "http://cdevents-sim.aiops.svc:8080/timeline?app=checkout&since=-72h"
+   },
+   "size": null,
+   "tool_call_id": "call_1",
+   "tool_name": "cdevents_timeline_request",
+   "toolset_name": "cdevents-timeline"
+  }
+ ]
+}

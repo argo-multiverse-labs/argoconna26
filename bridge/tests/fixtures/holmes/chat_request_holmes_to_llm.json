@@ -1,0 +1,203 @@
+{
+ "messages": [
+  {
+   "role": "system",
+   "content": "\nYou are HolmesGPT version 0.45.0, an AI agent for troubleshooting and answering questions about DevOps, IT and observability systems, using tool calls to gather data.\nMake multiple independent tool c...<truncated>"
+  },
+  {
+   "role": "user",
+   "content": "Checkout aborted its canary. Use the cdevents-timeline toolset once for app=checkout (last 72h) to find the change that caused it, then return the RCA.\n\n\n\nWhen querying tools, always query for the rel...<truncated>"
+  }
+ ],
+ "model": "rca",
+ "max_tokens": 64000,
+ "response_format": {
+  "type": "json_schema",
+  "json_schema": {
+   "name": "RCA",
+   "strict": true,
+   "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "root_cause",
+     "cause_commit_sha",
+     "evidence",
+     "delivery_context",
+     "confidence",
+     "proposed_patch"
+    ],
+    "properties": {
+     "root_cause": {
+      "type": "string"
+     },
+     "cause_commit_sha": {
+      "type": "string"
+     },
+     "evidence": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "delivery_context": {
+      "type": "string"
+     },
+     "confidence": {
+      "type": "number"
+     },
+     "proposed_patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "file",
+       "key",
+       "from",
+       "to"
+      ],
+      "properties": {
+       "file": {
+        "type": "string"
+       },
+       "key": {
+        "type": "string"
+       },
+       "from": {
+        "type": "string"
+       },
+       "to": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "temperature": 0,
+ "tool_choice": "auto",
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "TodoWrite",
+    "description": "Save investigation tasks to break down complex problems into manageable sub-tasks. ALWAYS provide the COMPLETE list of all tasks, not just the ones being updated.",
+    "parameters": {
+     "properties": {
+      "todos": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "content": {
+          "type": "string"
+         },
+         "status": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "content",
+         "status"
+        ],
+        "additionalProperties": false
+       },
+       "description": "COMPLETE list of ALL tasks on the task list. Each task should have: id (string), content (string), status (pending/in_progress/completed/failed)"
+      }
+     },
+     "required": [
+      "todos"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "cdevents_timeline_request",
+    "description": "Make HTTP requests to cdevents-timeline API (2 hosts)",
+    "parameters": {
+     "properties": {
+      "max_depth": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Maximum JSON nesting depth to return. Must be >= 1 (e.g. 1 keeps only the top-level structure, 3 keeps three levels). Omit this parameter for the full response. For precise field extraction prefer the `jq` parameter. Do NOT pass 0 or negative values \u2014 they return no usable data."
+      },
+      "jq": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Optional jq expression to extract specific parts of the JSON. Supports full jq syntax including filters, slicing, transformations, and more (e.g., '.items[] | select(.price > 10)', '.items[0:5]', '.items[].name')."
+      },
+      "url": {
+       "type": "string",
+       "description": "The full URL to request (must match a whitelisted endpoint)"
+      },
+      "method": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "HTTP method (default: GET). Must be allowed by the endpoint configuration."
+      },
+      "body": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Request body (JSON string) for POST/PUT/PATCH requests"
+      },
+      "headers": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Additional HTTP headers as a JSON object (optional, overrides defaults)"
+      }
+     },
+     "required": [
+      "max_depth",
+      "jq",
+      "url",
+      "method",
+      "body",
+      "headers"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  }
+ ]
+}
