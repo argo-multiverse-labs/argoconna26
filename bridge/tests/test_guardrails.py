@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from bridge.config import Settings
 from bridge.forge import ForgeError
 from bridge.forge.fake import FakeForge
+from bridge.forge.github import GitHubForge
+from bridge.github_auth import GitHubAuthError
 from bridge.guardrails import Refusal, evaluate
 from bridge.models import ArgoDegradedHook
 from bridge.rca import RCA
@@ -217,3 +220,61 @@ async def test_reads_the_tracked_branch(settings_: Settings) -> None:
     forge = make_forge()
     await evaluate(make_rca(), make_hook(), forge, settings_)
     assert ("read_file", PATH, BRANCH) in forge.calls
+
+
+@pytest.mark.parametrize("key", ["kind", "apiVersion", "metadata"])
+async def test_top_level_field_refused(settings_: Settings, key: str) -> None:
+    """Only ConfigMap `data` keys are config values; the object's own fields never are."""
+    rca = make_rca(patch={"key": key, "from": "ConfigMap", "to": "Secret"})
+    _, refusals = await evaluate(rca, make_hook(), make_forge(), settings_)
+    assert reasons(refusals) == ["key_not_found"]
+
+
+async def test_key_outside_configmap_refused(settings_: Settings) -> None:
+    """A `data` map on a kind other than ConfigMap is not a config value either."""
+    text = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\ndata:\n  UPSTREAM_TIMEOUT_MS: '200'\n"
+    forge = FakeForge(
+        files={(PATH, BRANCH): text},
+        commits=[SYNCED, PREVIOUS],
+        ancestors={SYNCED: {PREVIOUS}},
+    )
+    _, refusals = await evaluate(make_rca(), make_hook(), forge, settings_)
+    assert reasons(refusals) == ["key_not_found"]
+
+
+def test_threshold_above_one_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 4.6's forced-refusal path sets the threshold above 1; Settings must accept it."""
+    monkeypatch.setenv("CONFIDENCE_THRESHOLD", "1.01")
+    assert Settings().confidence_threshold == pytest.approx(1.01)
+
+
+async def test_threshold_above_one_refuses_full_confidence() -> None:
+    settings = Settings(tracked_branch=BRANCH, confidence_threshold=1.01)
+    _, refusals = await evaluate(make_rca(confidence=1.0), make_hook(), make_forge(), settings)
+    assert reasons(refusals) == ["low_confidence"]
+
+
+def test_negative_threshold_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONFIDENCE_THRESHOLD", "-0.1")
+    with pytest.raises(ValueError):
+        Settings()
+
+
+class _FailingTokens:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    async def token(self) -> str:
+        raise self.exc
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [GitHubAuthError("installation token request returned 401"), FileNotFoundError("app-key")],
+)
+async def test_token_failure_fails_closed(settings_: Settings, exc: Exception) -> None:
+    """A failed token exchange or a missing key file is a forge error: refuse, don't raise."""
+    async with httpx.AsyncClient() as http:
+        forge = GitHubForge("example-org/example-repo", _FailingTokens(exc), api_url="https://api.github.test", http=http)
+        _, refusals = await evaluate(make_rca(cause_commit_sha=OLD_CAUSE), make_hook(), forge, settings_)
+    assert set(reasons(refusals)) == {"cause_not_in_history", "key_not_found"}

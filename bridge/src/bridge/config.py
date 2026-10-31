@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     holmes_timeout_s: float = Field(default=115, gt=0, validation_alias=_env("HOLMES_TIMEOUT_S"))
     stage_cols: int = Field(default=30, ge=8, validation_alias=_env("STAGE_COLS"))
     cdevents_url: str = Field(default="", validation_alias=_env("CDEVENTS_URL"))
-    confidence_threshold: float = Field(default=0.7, ge=0, le=1, validation_alias=_env("CONFIDENCE_THRESHOLD"))
+    # No upper bound: a value above 1 refuses every answer (the Task 4.6 forced-refusal hook).
+    confidence_threshold: float = Field(default=0.7, ge=0, validation_alias=_env("CONFIDENCE_THRESHOLD"))
     config_allowlist: list[str] = Field(
         default_factory=lambda: ["apps/*/config/*.yaml"], validation_alias=_env("CONFIG_ALLOWLIST")
     )

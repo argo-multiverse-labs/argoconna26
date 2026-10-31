@@ -103,14 +103,17 @@ async def _check_cause(
 
 
 def _find_key(text: str, key: str) -> tuple[bool, Any]:
+    """Look the key up in a ConfigMap's `data` only.
+
+    Top-level fields (`kind`, `apiVersion`, `metadata`) and other kinds are never
+    config values, so the agent can't patch them (matches the policy's rule 1).
+    """
     for doc in yaml.safe_load_all(text):
-        if not isinstance(doc, dict):
+        if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
             continue
         data = doc.get("data")
         if isinstance(data, dict) and key in data:
             return True, data[key]
-        if key in doc:
-            return True, doc[key]
     return False, None
 
 
