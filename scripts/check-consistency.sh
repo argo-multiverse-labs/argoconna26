@@ -49,6 +49,8 @@ check_ns() { # file line value
   [[ "$allowed_ns" == *" $v "* ]] || report "$1:$2: unknown namespace literal '$v'"
 }
 while IFS=: read -r file line text; do
+  # conftest's --namespace names a Rego package, not a Kubernetes namespace
+  text="${text%%conftest *}"
   if [[ "$text" =~ ([[:space:]]|^)(-n|--namespace)[[:space:]=]+([^[:space:]]+) ]]; then
     check_ns "$file" "$line" "${BASH_REMATCH[3]}"
   fi

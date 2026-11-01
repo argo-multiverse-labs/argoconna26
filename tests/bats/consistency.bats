@@ -126,3 +126,12 @@ plant_file() { # FILE CONTENT : add a new tracked file
   run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
   [ "$status" -eq 0 ]
 }
+
+@test "conftest's --namespace is a Rego package, not a Kubernetes namespace" {
+  plant Makefile $'\tkubectl kustomize apps/x | conftest test --policy policy --namespace goldenpath -'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+  plant Makefile $'\tkubectl get pods -n nosuchns'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+}
