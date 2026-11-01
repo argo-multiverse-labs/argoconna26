@@ -3,7 +3,7 @@
 {{ rca.root_cause | plain }}
 
 {% for item in evidence %}- {{ item | plain }}
-{% endfor %}- Timeline: {{ rca.delivery_context | plain }}
+{% endfor %}- Timeline: {{ timeline | plain }}
 
 Cause: {{ rca.cause_commit_sha }}{% if cause_title %} ({{ cause_title | plain }}){% endif %}
 

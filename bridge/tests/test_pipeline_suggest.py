@@ -299,6 +299,21 @@ async def test_comment_contains_delivery_context_bullet(deps) -> None:
     assert f"- Timeline: {MODEL_CONTEXT}" in body.splitlines()
 
 
+@pytest.mark.parametrize("prefix", ["Timeline: ", "timeline:", "  TIMELINE :  ", "Timeline - "])
+async def test_delivery_context_timeline_prefix_not_doubled(deps, prefix: str) -> None:
+    d = deps(holmes=StubHolmes(rca(delivery_context=prefix + MODEL_CONTEXT)))
+    await handle_incident(make_hook(), d)
+    body = d.forge.commit_comments[0][1]
+    assert f"- Timeline: {MODEL_CONTEXT}" in body.splitlines()
+
+
+async def test_delivery_context_that_mentions_the_timeline_later_is_kept(deps) -> None:
+    text = "CHG-7f3a is the only change on the timeline: config-only."
+    d = deps(holmes=StubHolmes(rca(delivery_context=text)))
+    await handle_incident(make_hook(), d)
+    assert f"- Timeline: {text}" in d.forge.commit_comments[0][1].splitlines()
+
+
 async def test_comment_cause_line_is_full_sha(deps) -> None:
     d = deps(holmes=StubHolmes(rca(cause_commit_sha=CAUSE[:7].upper())))
     await handle_incident(make_hook(), d)

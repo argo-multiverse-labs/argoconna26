@@ -82,6 +82,13 @@ _MENTION = re.compile(r"(?<![\w.+-])@(?=[A-Za-z0-9_-])")
 _MARKDOWN = re.compile(r"([\[\]()!<>`\\])")
 # `#123` and `owner/repo#123` would write a cross-reference into that issue.
 _ISSUE_REF = re.compile(r"#(?=[A-Za-z0-9])")
+# `GH-12` is GitHub's other issue-reference form.
+_GH_REF = re.compile(r"\b(GH)-(?=\d)", re.IGNORECASE)
+# GFM autolinks a bare `scheme://...` and `www....` without any Markdown syntax.
+_SCHEME_SEP = re.compile(r"(?<=[A-Za-z0-9+.-]):(?=//)")
+_WWW = re.compile(r"\b(www)\.", re.IGNORECASE)
+# The template already labels the line "Timeline:"; the model often starts the field with it too.
+_TIMELINE_PREFIX = re.compile(r"^\s*timeline\s*[:\-\u2013\u2014]\s*", re.IGNORECASE)
 
 
 def plain(value: object) -> str:
@@ -90,13 +97,22 @@ def plain(value: object) -> str:
     Format characters are dropped (they can hide text from the PII scan), whitespace is
     collapsed (so it can't start a new Markdown block), link, image, autolink and code
     syntax is backslash-escaped (so it can't link, embed a tracking image or break out of
-    the line), and @-mentions and issue references are broken with a zero-width space
-    (so they notify no one and write nothing into another issue).
+    the line), and @-mentions, issue references (`#12`, `GH-12`) and bare autolinks
+    (`https://...`, `www....`) are broken with a zero-width space (so they notify no one,
+    write nothing into another issue and put no clickable link in a public comment).
     """
     text = " ".join(pii.strip_format(str(value)).split())
     text = _MARKDOWN.sub(r"\\\1", text)
     text = _ISSUE_REF.sub("#\u200b", text)
+    text = _GH_REF.sub("\\1\u200b-", text)
+    text = _SCHEME_SEP.sub(":\u200b", text)
+    text = _WWW.sub("\\1\u200b.", text)
     return _MENTION.sub("@\u200b", text)
+
+
+def timeline_line(delivery_context: str) -> str:
+    """The delivery context without a leading "Timeline:" the template already prints."""
+    return _TIMELINE_PREFIX.sub("", delivery_context, count=1)
 
 
 _env = Environment(
@@ -240,6 +256,7 @@ class _Run:
             body = render(
                 "rca_comment.md.j2",
                 rca=rca,
+                timeline=timeline_line(rca.delivery_context),
                 evidence=rca.evidence[:EVIDENCE_BULLETS],
                 patch=rca.proposed_patch,
                 cause_title=await self.cause_title(rca.cause_commit_sha),
