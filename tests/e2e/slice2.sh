@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Slice-2 end to end on the real kind cluster: the incident mechanics, with real waits.
 #
-#   seed-history -> bump (canary aborts) -> fix (Healthy) -> rearm (aborts again)
-#   -> naive-revert (green, then the next deploy aborts) -> disarm --image v1.4.1
+#   disarm --image v1.4.1 -> seed-history -> bump (canary aborts) -> fix (Healthy)
+#   -> disarm --image v1.4.1 -> rearm (v1.4.1 -> v1.4.2, aborts again)
+#   -> naive-revert (back to v1.4.1, green, then the next deploy aborts) -> disarm --image v1.4.1
+#
+# It pins its own start state, and on any failure an EXIT trap runs the same disarm, so the
+# branch is never left armed for the next run.
+#
+# Spec §6 says the stable pods keep serving. With the replica-based canary, Rollouts scales
+# the stable ReplicaSet down during the steps and back up on abort, and the pods it starts
+# then read the armed ConfigMap. The run counts those pods, and the armed stable pods at the
+# naive revert's "green", and FAILS when there are any, unless SLICE2_ALLOW_ARMED_STABLE=1
+# (a known, recorded deviation awaiting a decision), which turns that into a loud warning.
 #
 # Run it from the main checkout: tests/e2e/slice2.sh
 # It holds the cluster lock for the whole run, and the make targets it calls re-enter it.
 # Timings print as one "slice2:" line at the end and are appended to
 # $EVIDENCE_DIR/slice-2/runs.tsv (EVIDENCE_DIR from .env, default <main checkout>/.evidence).
 #
-# Exit codes: 1 an assertion failed, 3 wrong context, 4 a wait timed out, 5 cluster lock held.
+# Exit codes: 1 an assertion failed (or armed stable pods, see above), 3 wrong context,
+# 4 a wait timed out, 5 cluster lock held.
 
 set -euo pipefail
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -142,6 +153,45 @@ report_new_stable_pods() { # STABLE_HASH T0
   printf '%s\n' "$n"
 }
 
+# Pods of HASH that read the armed value at any time between FROM and TO (epochs), from
+# Prometheus. A pod is scraped 15-25 s after it starts, so an instant query at "green"
+# misses the stable pod Rollouts has just started; a range up to TO does not.
+armed_pods_between() { # HASH FROM TO
+  prom_at "count(max_over_time(checkout_config_upstream_timeout_ms{namespace=\"$NS_DEMO\",pod=~\"checkout-$1-.*\"}[$(($3 - $2))s]) == $CONFIG_ARMED)" "$3" \
+    | jq -r '.data.result[0].value[1] // "0"'
+}
+
+prom_at() { # EXPR EPOCH -> JSON
+  curl -sf --max-time 10 --get --data-urlencode "query=$1" --data-urlencode "time=$2" "${PROM_HOST_URL}/api/v1/query"
+}
+
+# True when the canary of HASH was measured with data at least once (a gate that only
+# saw empty results would have promoted blind).
+analysis_saw_data() { # HASH
+  k get analysisrun -n "$NS_DEMO" -l "rollouts-pod-template-hash=$1" -o json \
+    | jq -e '[.items[].status.metricResults[]?.measurements[]?.value // "[]"
+              | select(. != "[]" and . != "[NaN]")] | length > 0' >/dev/null
+}
+
+deploy_exists() { k get deploy "$1" -n "$NS_AIOPS" >/dev/null 2>&1; }
+
+# Back to the start state: timeout 2000, image CHECKOUT_STABLE_TAG, Healthy.
+disarm_to_stable() {
+  run_make disarm IMAGE="${STABLE_TAG:-$CHECKOUT_STABLE_TAG}" >/dev/null
+  wait_for "checkout Rollout Healthy (disarmed)" "$HEALTHY_WAIT_S" rollout_promoted_past "" ""
+}
+
+# EXIT trap: after a failure, leave the branch disarmed at the stable tag.
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  if ((rc != 0)) && [[ -n "${RUN_LOG:-}" ]] && [[ "${SLICE2_NO_CLEANUP:-0}" != "1" ]]; then
+    log_warn "slice2: failed (exit $rc); disarming to ${STABLE_TAG:-$CHECKOUT_STABLE_TAG}"
+    ( disarm_to_stable ) || log_error "slice2: the cleanup disarm failed too; run make disarm IMAGE=${STABLE_TAG:-$CHECKOUT_STABLE_TAG}"
+  fi
+  exit "$rc"
+}
+
 all_new_stable_pods_scraped() { # STABLE_HASH T0
   local g p
   g="$(gauge_by_pod)" || return 1
@@ -158,6 +208,7 @@ main() {
   [[ "$(cd "$E2E_DIR/../.." && pwd -P)" == "$(cd "$ROOT" && pwd -P)" ]] \
     || die "run slice2.sh from the main checkout ($ROOT), not a worktree"
   cluster_lock
+  trap on_exit EXIT
 
   local evdir run_id t_start
   evdir="${EVIDENCE_DIR:-$ROOT/.evidence}/slice-2"
@@ -171,13 +222,18 @@ main() {
   step "fresh bridge and sim code (Task 2.4)"
   local d
   for d in bridge:redeploy-bridge cdevents-sim:redeploy-sim; do
-    if [[ -f "$ROOT/${d%%:*}/Dockerfile" ]]; then
+    if [[ ! -f "$ROOT/${d%%:*}/Dockerfile" ]]; then
+      log_info "skip: ${d%%:*} has no Dockerfile on this branch yet"
+    elif ! deploy_exists "${d%%:*}"; then
+      log_info "skip: ${d%%:*} has no Deployment in $NS_AIOPS yet"
+    else
       run_make "${d#*:}" >/dev/null
       "$ROOT/scripts/ensure-image.sh" --assert-running "${d%%:*}" || fail "${d%%:*} runs a stale image"
-    else
-      log_info "skip: ${d%%:*} has no Dockerfile on this branch yet"
     fi
   done
+
+  step "start state: disarm --image ${STABLE_TAG:-$CHECKOUT_STABLE_TAG}"
+  disarm_to_stable
 
   step "seed history (disarm, PR-242, docs)"
   run_make seed-history >/dev/null
@@ -216,6 +272,13 @@ main() {
   fix_s=$(($(now) - t_fix))
   wait_for "checkout Application Healthy" 60 app_health_is Healthy
   log_info "fix -> Healthy: ${fix_s}s"
+  analysis_saw_data "$(ro_get '{.status.stableRS}')" \
+    || fail "the fix's canary was promoted, but its AnalysisRun never measured any data"
+
+  # ---- back to the stable tag, so the rearm bump is v1.4.1 -> v1.4.2 and the naive
+  # revert lands on a tag without the CVE fix (P14)
+  step "disarm --image ${STABLE_TAG:-$CHECKOUT_STABLE_TAG} (before rearm)"
+  disarm_to_stable
 
   # ---- rearm: config 200 as its own revision, then a bump that aborts
   local stable2 t_rearm t_rearmed rearm_abort_s
@@ -249,6 +312,9 @@ main() {
     esac
   done <"$naive_log"
   [[ -n "$t_green" ]] || fail "naive-revert never printed green"
+  grep -q " green: image back to ${STABLE_TAG:-$CHECKOUT_STABLE_TAG}\$" "$naive_log" \
+    || fail "the naive revert did not land on ${STABLE_TAG:-$CHECKOUT_STABLE_TAG}"
+  grep -q ' security fix is gone$' "$naive_log" || fail "naive-revert did not say the security fix is gone"
   [[ -n "$t_bump2" ]] || fail "naive-revert never pushed the second bump"
   grep -q ' aborted again: still armed$' "$naive_log" || fail "naive-revert did not end aborted"
   rollout_event_seen SkipSteps "$((t_rev - 1))" "$t_bump2" >/dev/null \
@@ -259,14 +325,19 @@ main() {
   rollout_aborted_off "$(ro_get '{.status.stableRS}')" || fail "Rollout is not Degraded/aborted after naive-revert"
   app_health_is Degraded || fail "checkout Application is not Degraded after naive-revert"
   log_info "naive-revert: green ${green_s}s after start, second bump Degraded ${naive_abort_s}s after its push"
+  local green_stable armed_green
+  green_stable="$(ro_get '{.status.stableRS}')"
+  # Stable pods that read 200 between the rearm and the end of naive-revert: started by the
+  # rearm's abort, so they serve (and fail) through "green". Pods started by the second
+  # abort, at the very end, are not scraped yet and don't count.
+  armed_green="$(armed_pods_between "$green_stable" "$t_rearm" "$t_nr_end")" || armed_green="?"
+  log_info "naive-revert: around green, $armed_green stable pod(s) of $green_stable read $CONFIG_ARMED" 2>&1 | tee -a "$RUN_LOG" >&2
 
   # ---- back to the start
   local t_dis disarm_s tag
-  step "disarm --image v1.4.1"
+  step "disarm --image ${STABLE_TAG:-$CHECKOUT_STABLE_TAG}"
   t_dis="$(now)"
-  run_make disarm IMAGE="${STABLE_TAG:-$CHECKOUT_STABLE_TAG}" >/dev/null
-  wait_for "checkout Rollout Healthy (disarmed)" "$HEALTHY_WAIT_S" \
-    rollout_promoted_past "" ""
+  disarm_to_stable
   disarm_s=$(($(now) - t_dis))
   tag="$(k get rollout checkout -n "$NS_DEMO" -o jsonpath='{.spec.template.spec.containers[0].image}')"
   [[ "$tag" == "checkout:${STABLE_TAG:-$CHECKOUT_STABLE_TAG}" ]] || fail "image is $tag after disarm"
@@ -275,7 +346,7 @@ main() {
     check_fleet_disarmed || { FLEET_WAIT_S=5 check_fleet_disarmed || true; fail "fleet is not disarmed"; }
 
   local total_s=$(($(now) - t_start)) summary
-  summary="slice2: run=$run_id abort_s=$abort_s fix_s=$fix_s rearm_abort_s=$rearm_abort_s green_s=$green_s naive_abort_s=$naive_abort_s disarm_s=$disarm_s armed_stable_pods=$armed_stable total_s=$total_s"
+  summary="slice2: run=$run_id abort_s=$abort_s fix_s=$fix_s rearm_abort_s=$rearm_abort_s green_s=$green_s naive_abort_s=$naive_abort_s disarm_s=$disarm_s armed_stable_pods=$armed_stable armed_at_green=$armed_green total_s=$total_s"
   printf '%s\n' "$summary" | tee -a "$RUN_LOG"
   [[ -s "$evdir/runs.tsv" ]] \
     || printf 'run\tabort_s\tfix_s\trearm_abort_s\tgreen_s\tnaive_abort_s\tdisarm_s\tarmed_stable_pods\ttotal_s\n' >"$evdir/runs.tsv"
@@ -286,8 +357,23 @@ main() {
   # Spec §3: the abort lands in "about 30-60 s".
   ((abort_s >= 25 && abort_s <= 60)) || { log_warn "abort ${abort_s}s is outside about 30-60s"; rc=1; }
   ((fix_s <= 75)) || { log_warn "fix -> Healthy ${fix_s}s is over 75s"; rc=1; }
-  if ((rc == 0)); then log_info "slice2: PASS"; else log_error "slice2: timing outside the acceptance window"; fi
-  return "$rc"
+  ((rc == 0)) || { log_error "slice2: timing outside the acceptance window"; return "$rc"; }
+
+  # Spec §6: the stable pods keep serving. Armed stable pods break that, and the "green"
+  # beat then serves 502s from half the fleet.
+  if [[ "$armed_stable" != 0 || "$armed_green" != 0 ]]; then
+    local msg="stable pods read $CONFIG_ARMED: $armed_stable after the first abort, $armed_green at the naive revert's green (spec §6 says stable keeps serving)"
+    if [[ "${SLICE2_ALLOW_ARMED_STABLE:-0}" == "1" ]]; then
+      log_warn "slice2: DEVIATION: $msg"
+      log_warn "slice2: DEVIATION: the green beat is not fully green; awaiting a decision (SLICE2_ALLOW_ARMED_STABLE=1)"
+      log_info "slice2: PASS with a known deviation (armed stable pods)" 2>&1 | tee -a "$RUN_LOG" >&2
+      return 0
+    fi
+    log_error "slice2: FAIL: $msg"
+    log_error "slice2: set SLICE2_ALLOW_ARMED_STABLE=1 to accept this recorded deviation"
+    return 1
+  fi
+  log_info "slice2: PASS"
 }
 
 main "$@"
