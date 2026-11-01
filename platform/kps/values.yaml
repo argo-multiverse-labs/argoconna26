@@ -47,6 +47,27 @@ grafana:
     auth.anonymous:
       enabled: true
       org_role: Viewer
+  # Annotations (written by cdevents-sim) live in Grafana's database: keep it across restarts.
+  # Do not rebuild between a recorded rung-3 run and its review (Task 3.13 Step 2).
+  persistence:
+    enabled: true
+    size: 1Gi
+  # one Grafana pod on one volume: stop the old pod before the new one starts
+  deploymentStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  # Infinity reads cdevents-sim's HTTP API for the events table (INFINITY_PLUGIN_VERSION in versions.env).
+  plugins:
+    - yesoreyeram-infinity-datasource@4.1.3
+  additionalDataSources:
+    - name: cdevents-sim
+      uid: cdevents-sim
+      type: yesoreyeram-infinity-datasource
+      access: proxy
+      jsonData:
+        auth_method: none
+        allowedHosts:
+          - http://cdevents-sim.aiops.svc:8080
   sidecar:
     dashboards:
       enabled: true
