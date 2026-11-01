@@ -46,3 +46,19 @@ async def test_quiet_per_request_with_summary_every_30s(capsys):
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 2  # at 30 s and 60 s, nothing per request
     assert all(line.startswith("loadgen:") for line in lines)
+
+
+def test_client_opens_a_new_connection_per_request():
+    # kube-proxy balances connections, not requests. A pooled keep-alive client stays on the
+    # pods it first reached, so a new canary pod would see no traffic and the analysis
+    # would pass on an empty result.
+    from app.main import make_client
+
+    client = make_client()
+    try:
+        pool = client._transport._pool
+        assert pool._max_keepalive_connections == 0
+    finally:
+        import asyncio
+
+        asyncio.run(client.aclose())

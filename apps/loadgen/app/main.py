@@ -57,10 +57,16 @@ async def run(target: str, rps: float, client, clock, stop: Callable[[], bool]) 
         await asyncio.gather(*in_flight, return_exceptions=True)
 
 
+def make_client() -> httpx.AsyncClient:
+    """No keep-alive: kube-proxy balances connections, so a new connection per request
+    spreads the load over every pod, a fresh canary pod included."""
+    return httpx.AsyncClient(timeout=5.0, limits=httpx.Limits(max_keepalive_connections=0))
+
+
 async def _main() -> None:
     target = os.environ["TARGET_URL"]
     rps = float(os.environ.get("RPS", "20"))
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with make_client() as client:
         await run(target, rps, client, RealClock(), lambda: False)
 
 
