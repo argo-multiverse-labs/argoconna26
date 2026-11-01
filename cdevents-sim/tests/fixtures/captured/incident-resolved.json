@@ -1,0 +1,32 @@
+{
+  "context": {
+    "specversion": "0.5.1",
+    "id": "0362c235-40e9-4a12-afbb-d61fba5cf2b8:resolved:2026-11-01T15:41:26Z",
+    "source": "/argocd/argocd",
+    "type": "dev.cdevents.incident.resolved.0.3.0",
+    "timestamp": "2026-11-01T15:41:26Z"
+  },
+  "subject": {
+    "id": "demo/checkout/incident-f7d43e2c9a46fab2e8e27e15eac403167aa27f81",
+    "source": "/argocd/argocd",
+    "content": {
+      "description": "ArgoCD application checkout health recovered to Healthy",
+      "environment": {
+        "id": "demo"
+      },
+      "service": {
+        "id": "demo/checkout"
+      },
+      "artifactId": "pkg:generic/checkout@f7d43e2c9a46fab2e8e27e15eac403167aa27f81"
+    }
+  },
+  "customData": {
+    "argocd": {
+      "application": "checkout",
+      "healthStatus": "Healthy",
+      "syncStatus": "Synced",
+      "cluster": "https://kubernetes.default.svc",
+      "namespace": "demo"
+    }
+  }
+}

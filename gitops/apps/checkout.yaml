@@ -3,6 +3,12 @@ kind: Application
 metadata:
   name: checkout
   namespace: argocd
+  annotations:
+    # CDEvents to cdevents-sim (platform/argocd/notifications-cdevents.yaml)
+    notifications.argoproj.io/subscribe.on-deployed-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-health-degraded-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-sync-failed-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-health-recovered-cdevents.cdevents: ""
 spec:
   project: default
   revisionHistoryLimit: 25

@@ -105,7 +105,8 @@ helm-repos: ## Add the Helm repos to the isolated Helm config
 .PHONY: argocd-install
 argocd-install: helm-repos ## Install Argo CD (skips when unchanged)
 	@$(LOCKED)
-	helm_ensure "$$ARGOCD_RELEASE" argo/argo-cd "$$ARGOCD_CHART_VERSION" "$$NS_ARGOCD" $(ROOT)/platform/argocd/values.yaml
+	helm_ensure "$$ARGOCD_RELEASE" argo/argo-cd "$$ARGOCD_CHART_VERSION" "$$NS_ARGOCD" \
+	  $(ROOT)/platform/argocd/values.yaml $(ROOT)/platform/argocd/notifications-cdevents.yaml
 	k rollout status statefulset/argocd-application-controller -n "$$NS_ARGOCD" --timeout=300s
 
 .PHONY: argocd-password

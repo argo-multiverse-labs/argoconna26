@@ -1,0 +1,33 @@
+{
+  "context": {
+    "specversion": "0.5.1",
+    "id": "0362c235-40e9-4a12-afbb-d61fba5cf2b8:degraded:2026-11-01T15:40:27Z",
+    "source": "/argocd/argocd",
+    "type": "dev.cdevents.incident.detected.0.3.0",
+    "timestamp": "2026-11-01T15:40:27Z"
+  },
+  "subject": {
+    "id": "demo/checkout/incident-170cdaa4da518e0b5cf1287d3ac977afe3fee263",
+    "source": "/argocd/argocd",
+    "content": {
+      "description": "ArgoCD application checkout health is Degraded",
+      "environment": {
+        "id": "demo"
+      },
+      "service": {
+        "id": "demo/checkout"
+      },
+      "artifactId": "pkg:generic/checkout@170cdaa4da518e0b5cf1287d3ac977afe3fee263"
+    }
+  },
+  "customData": {
+    "argocd": {
+      "application": "checkout",
+      "healthStatus": "Degraded",
+      "healthMessage": "",
+      "syncStatus": "Synced",
+      "cluster": "https://kubernetes.default.svc",
+      "namespace": "demo"
+    }
+  }
+}
