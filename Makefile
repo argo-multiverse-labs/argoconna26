@@ -247,6 +247,30 @@ info: ## Print URLs and how to get credentials (never the passwords)
 operator-clone: ## Clone the repo for the operator scripts and install the pre-commit hook
 	@$(ROOT)/scripts/git-ops.sh operator-clone
 
+.PHONY: seed-history
+seed-history: ## Disarm, then commit PR-242 and one harmless docs change
+	@$(ROOT)/scripts/seed-history.sh
+
+.PHONY: bump
+bump: ## Bump the checkout image tag by one patch version
+	@$(ROOT)/scripts/git-ops.sh bump
+
+.PHONY: rearm
+rearm: ## Re-apply the PR-242 timeout, then bump the image (refuses when armed)
+	@$(ROOT)/scripts/rearm.sh
+
+.PHONY: fix
+fix: ## Restore the timeout and bump config-version in one commit
+	@$(ROOT)/scripts/fix.sh
+
+.PHONY: naive-revert
+naive-revert: ## Revert the last image bump: green but wrong
+	@$(ROOT)/scripts/naive-revert.sh
+
+.PHONY: disarm
+disarm: ## Timeout back to 2000 (IMAGE=vX.Y.Z also pins the tag; GIT_ONLY=1 skips the wait)
+	@$(ROOT)/scripts/git-ops.sh disarm $(if $(IMAGE),--image $(IMAGE)) $(if $(GIT_ONLY),--git-only)
+
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts
 	@mkdir -p $(SNAP_DIR)
