@@ -201,17 +201,66 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   [ "$(tag_value)" = "v1.4.1" ]
 }
 
-@test "disarm --image v1.4.1 restores value and tag in one commit" {
-  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null     # armed, tag v1.4.2
+@test "disarm --image v1.4.1 on an armed tip: value and tag first, then the cv pin, so pods restart" {
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null     # armed, cv 7, tag v1.4.2
   before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
   run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
   [ "$status" -eq 0 ]
-  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 1)) ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 2)) ]
   [ "$(cfg_value)" = "2000" ]
-  [ "$(cv_value)" = "8" ]
+  [ "$(cv_value)" = "7" ]                  # pinned at the end
   [ "$(tag_value)" = "v1.4.1" ]
-  [ "$(commit_files refs/heads/build/demo)" = "$CFG $ROLL $KUST " ]
+  [ "$(commit_files refs/heads/build/demo)" = "$ROLL " ]          # the pin
+  [ "$(commit_files refs/heads/build/demo~1)" = "$CFG $ROLL $KUST " ]   # value, tag and cv 8
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" show refs/heads/build/demo~1:$ROLL | yq -r '.spec.template.metadata.annotations["example.dev/config-version"]')" = "8" ]
   grep -q '^HEALTH checkout' "$CALLS"
+}
+
+@test "disarm --image pins config-version back to 7 after a fix" {
+  arm_origin
+  ops_run "$REPO_ROOT/scripts/fix.sh" >/dev/null       # 2000, cv 8
+  [ "$(cv_value)" = "8" ]
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$(cfg_value)" = "2000" ]
+  [ "$(cv_value)" = "7" ]
+  [ "$(commit_files refs/heads/build/demo)" = "$ROLL " ]
+}
+
+@test "disarm --image pins cv 7 and the value together when both differ" {
+  arm_origin
+  other_commit "test: cv 9" "$ROLL" '.spec.template.metadata.annotations["example.dev/config-version"]' 9
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$(cfg_value)" = "2000" ]
+  [ "$(cv_value)" = "7" ]
+}
+
+@test "disarm --image with only the value armed and cv at 7 restarts pods through cv 8, then pins 7" {
+  arm_origin                                           # 200, cv 7, tag v1.4.1
+  before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 2)) ]
+  [ "$(cfg_value)" = "2000" ]
+  [ "$(cv_value)" = "7" ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" show refs/heads/build/demo~1:$ROLL | yq -r '.spec.template.metadata.annotations["example.dev/config-version"]')" = "8" ]
+}
+
+@test "disarm --image --git-only pins in one commit without a bump (no pods yet)" {
+  arm_origin
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1 --git-only
+  [ "$status" -eq 0 ]
+  [ "$(cfg_value)" = "2000" ]
+  [ "$(cv_value)" = "7" ]
+  [ "$(events)" = "PUSH " ]
+}
+
+@test "disarm without --image still bumps config-version when the value differs" {
+  arm_origin
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm
+  [ "$status" -eq 0 ]
+  [ "$(cv_value)" = "8" ]
 }
 
 @test "disarm is a no-op when nothing differs" {

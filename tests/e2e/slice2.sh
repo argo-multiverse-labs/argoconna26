@@ -8,11 +8,13 @@
 # It pins its own start state, and on any failure an EXIT trap runs the same disarm, so the
 # branch is never left armed for the next run.
 #
-# Spec §6 says the stable pods keep serving. With the replica-based canary, Rollouts scales
-# the stable ReplicaSet down during the steps and back up on abort, and the pods it starts
-# then read the armed ConfigMap. The run counts those pods, and the armed stable pods at the
-# naive revert's "green", and FAILS when there are any, unless SLICE2_ALLOW_ARMED_STABLE=1
-# (a known, recorded deviation awaiting a decision), which turns that into a loud warning.
+# Armed stable pods are expected (spec §6 as reworded, O15). With the replica-based canary,
+# Rollouts scales the stable ReplicaSet down during the steps and back up on abort, and the
+# pods it starts then read the armed ConfigMap. So the run asserts the rule by start time:
+# every pod started before PR-242's sync reads 2000, every pod started after it reads 200
+# (canary or stable). It records how many post-sync stable pods there are, and how many
+# stable pods read 200 around the naive revert's "green" (which is Healthy while the SLO
+# panel still shows 502s).
 #
 # Run it from the main checkout: tests/e2e/slice2.sh
 # It holds the cluster lock for the whole run, and the make targets it calls re-enter it.
@@ -123,24 +125,31 @@ stable_pods() { # HASH SINCE before|after
         | .metadata.name' | sort
 }
 
-# Δ1 evidence (a): every canary pod reads ARMED, and every stable pod that was already
-# running before T0 reads HEALTHY. (Stable pods that Rollouts starts after T0, when it
-# scales the stable ReplicaSet back up on abort, read the armed ConfigMap too: see
-# report_new_stable_pods.)
-gauge_split_ok() { # CANARY_HASH STABLE_HASH T0
-  local g canary stable p v
+# Δ1 evidence (a), by start time (O15): every live checkout pod started before T_PR242
+# reads HEALTHY, and every one started at or after it reads ARMED, canary or stable. At
+# least one pod of each kind must exist, and every pod needs a gauge series (a pod is
+# scraped 15-25 s after it starts, so callers wait on this).
+gauge_by_start_ok() { # T_PR242
+  local g pods name created v pre=0 post=0
   g="$(gauge_by_pod)" || return 1
-  canary="$(awk -v h="checkout-$1-" 'index($1, h) == 1 {print $2}' <<<"$g" | sort -u)"
-  [[ "$canary" == "$CONFIG_ARMED" ]] || return 1
-  stable="$(stable_pods "$2" "$3" before)"
-  [[ -n "$stable" ]] || return 1
-  while read -r p; do
-    v="$(awk -v p="$p" '$1 == p {print $2}' <<<"$g")"
-    [[ "$v" == "$CONFIG_HEALTHY" ]] || return 1
-  done <<<"$stable"
+  pods="$(k get pods -n "$NS_DEMO" -l rollouts-pod-template-hash -o json \
+    | jq -r '.items[] | select(.metadata.deletionTimestamp == null)
+             | "\(.metadata.name) \(.metadata.creationTimestamp | fromdateiso8601)"')" || return 1
+  while read -r name created; do
+    [[ -n "$name" ]] || continue
+    v="$(awk -v p="$name" '$1 == p {print $2}' <<<"$g")"
+    if ((created < $1)); then
+      [[ "$v" == "$CONFIG_HEALTHY" ]] || return 1
+      pre=$((pre + 1))
+    else
+      [[ "$v" == "$CONFIG_ARMED" ]] || return 1
+      post=$((post + 1))
+    fi
+  done <<<"$pods"
+  ((pre > 0 && post > 0))
 }
 
-# Stable pods started after T0, with the value each one reads. Prints "N armed" on stdout.
+# Stable pods started after T0, with the value each one reads. Prints how many read ARMED.
 report_new_stable_pods() { # STABLE_HASH T0
   local g p v n=0
   g="$(gauge_by_pod)" || true
@@ -192,14 +201,6 @@ on_exit() {
   exit "$rc"
 }
 
-all_new_stable_pods_scraped() { # STABLE_HASH T0
-  local g p
-  g="$(gauge_by_pod)" || return 1
-  while read -r p; do
-    [[ -z "$p" ]] || grep -q "^$p " <<<"$g" || return 1
-  done <<<"$(stable_pods "$1" "$2" after)"
-}
-
 # ------------------------------------------------------------------ main
 main() {
   load_env
@@ -237,6 +238,9 @@ main() {
 
   step "seed history (disarm, PR-242, docs)"
   run_make seed-history >/dev/null
+  # PR-242's sync is done when seed-history returns; no pod starts between PR-242 and T0.
+  local t_pr242
+  t_pr242="$(now)"
 
   # ---- first incident: bump -> abort
   local stable0 t0 t_bumped t_abort abort_s canary1 stable1 armed_stable
@@ -255,11 +259,10 @@ main() {
   wait_for "a RolloutAborted event since T0" 30 rollout_event_seen RolloutAborted "$t0" \
     || fail "no RolloutAborted event since T0"
   rollout_event_seen RolloutAborted "$t0" | tee -a "$RUN_LOG" >&2
-  wait_for "gauge: canary pods at $CONFIG_ARMED, pre-T0 stable pods at $CONFIG_HEALTHY" 60 \
-    gauge_split_ok "$canary1" "$stable1" "$t0" || { gauge_by_pod >&2; fail "gauge split not seen"; }
-  wait_for "a gauge series for every stable pod started after T0" 60 \
-    all_new_stable_pods_scraped "$stable1" "$t0" || true
+  wait_for "gauge: pods started before PR-242's sync at $CONFIG_HEALTHY, every pod started after it at $CONFIG_ARMED" 90 \
+    gauge_by_start_ok "$t_pr242" || { gauge_by_pod >&2; fail "gauge split by start time not seen"; }
   armed_stable="$(report_new_stable_pods "$stable1" "$t0" 2> >(tee -a "$RUN_LOG" >&2))"
+  log_info "stable pods started after PR-242's sync, all reading $CONFIG_ARMED: $armed_stable" 2>&1 | tee -a "$RUN_LOG" >&2
   gauge_by_pod | grep -E "^checkout-($canary1|$stable1)-" | tee -a "$RUN_LOG" >&2
 
   # ---- the real fix
@@ -354,25 +357,13 @@ main() {
     "$green_s" "$naive_abort_s" "$disarm_s" "$armed_stable" "$total_s" >>"$evdir/runs.tsv"
 
   local rc=0
-  # Spec §3: the abort lands in "about 30-60 s".
-  ((abort_s >= 25 && abort_s <= 60)) || { log_warn "abort ${abort_s}s is outside about 30-60s"; rc=1; }
+  # Spec §3: the abort lands in "about 30-60 s"; faster is fine on stage (O12), so the floor is 20 s.
+  ((abort_s >= 20 && abort_s <= 60)) || { log_warn "abort ${abort_s}s is outside about 20-60s"; rc=1; }
   ((fix_s <= 75)) || { log_warn "fix -> Healthy ${fix_s}s is over 75s"; rc=1; }
   ((rc == 0)) || { log_error "slice2: timing outside the acceptance window"; return "$rc"; }
 
-  # Spec §6: the stable pods keep serving. Armed stable pods break that, and the "green"
-  # beat then serves 502s from half the fleet.
-  if [[ "$armed_stable" != 0 || "$armed_green" != 0 ]]; then
-    local msg="stable pods read $CONFIG_ARMED: $armed_stable after the first abort, $armed_green at the naive revert's green (spec §6 says stable keeps serving)"
-    if [[ "${SLICE2_ALLOW_ARMED_STABLE:-0}" == "1" ]]; then
-      log_warn "slice2: DEVIATION: $msg"
-      log_warn "slice2: DEVIATION: the green beat is not fully green; awaiting a decision (SLICE2_ALLOW_ARMED_STABLE=1)"
-      log_info "slice2: PASS with a known deviation (armed stable pods)" 2>&1 | tee -a "$RUN_LOG" >&2
-      return 0
-    fi
-    log_error "slice2: FAIL: $msg"
-    log_error "slice2: set SLICE2_ALLOW_ARMED_STABLE=1 to accept this recorded deviation"
-    return 1
-  fi
+  # O15: armed stable pods after the abort are expected; the gauge split above asserted them.
+  log_info "slice2: armed stable pods after the abort: $armed_stable; around the naive revert's green: $armed_green (Healthy while the SLO panel shows 502s)" 2>&1 | tee -a "$RUN_LOG" >&2
   log_info "slice2: PASS"
 }
 

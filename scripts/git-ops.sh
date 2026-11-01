@@ -250,9 +250,11 @@ image_tag_set() { yaml_set "$KUSTOMIZATION_FILE" "(${_image_sel})" "$1"; }
 # ------------------------------------------------------------ disarm and bump
 # op_disarm [--image TAG] [--git-only]
 # One commit: value back to CONFIG_HEALTHY (and config-version +1) when it differs, and the
-# image tag to TAG when given and different (P14). No-op when nothing differs. Sets DISARM_SHA.
+# image tag to TAG when given and different (P14). With --image, config-version ends at
+# CONFIG_VERSION_START (see below; an armed reset at the start value takes a second commit).
+# No-op when nothing differs. Sets DISARM_SHA.
 op_disarm() {
-  local image="" git_only=0 files=() msg beats=() cv b
+  local image="" git_only=0 files=() msg beats=() b
   while (($#)); do
     case "$1" in
       --image) image="${2:?--image needs a tag}"; shift 2 ;;
@@ -266,17 +268,42 @@ op_disarm() {
     return 0
   fi
   op_sync
+  local value_changed=0 image_changed=0 cv_now cv_new=""
   if [[ "$(config_value_get)" != "$CONFIG_HEALTHY" ]]; then
     config_value_set "$CONFIG_HEALTHY"
-    cv="$(config_version_bump)"
-    files+=("$CONFIG_FILE" "$ROLLOUT_FILE")
-    beats+=("pushed: config $CONFIG_HEALTHY, cv $cv")
+    value_changed=1
+    files+=("$CONFIG_FILE")
   fi
   if [[ -n "$image" && "$(image_tag_get)" != "$image" ]]; then
     image_tag_set "$image"
+    image_changed=1
     files+=("$KUSTOMIZATION_FILE")
-    beats+=("pushed: image $image")
   fi
+  # config-version. Without --image, a changed value bumps it (+1), so the pods roll and read
+  # the new ConfigMap. With --image (the reset), it ends at CONFIG_VERSION_START, so every
+  # rehearsal's fix shows 7 -> 8.
+  #   cv differs from the start value: pin it (the pod template changes, the pods restart).
+  #   cv is already the start value and the value was armed: the template would equal the
+  #   armed one, and pods that started while armed (the stable pods Rollouts recreates after
+  #   an abort read 200) would be reused. So bump first, wait for fresh pods, then pin in a
+  #   second commit (pin_after). With --git-only there are no pods yet, so no bump is needed.
+  local pin_after=0
+  cv_now="$(config_version_get)"
+  if [[ -n "$image" ]]; then
+    if [[ "$cv_now" != "$CONFIG_VERSION_START" ]]; then
+      yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
+      cv_new="$CONFIG_VERSION_START"
+    elif ((value_changed && !git_only)); then
+      cv_new="$(config_version_bump)"
+      pin_after=1
+    fi
+  elif ((value_changed)); then
+    cv_new="$(config_version_bump)"
+  fi
+  [[ -z "$cv_new" ]] || files+=("$ROLLOUT_FILE")
+  ((!value_changed)) || beats+=("pushed: config $CONFIG_HEALTHY, cv ${cv_new:-$cv_now}")
+  ((!image_changed)) || beats+=("pushed: image $image")
+  if ((!value_changed)) && [[ -n "$cv_new" ]]; then beats+=("pushed: cv $cv_new"); fi
   if ((${#files[@]} == 0)); then
     # Git is disarmed, but an earlier disarm or fix may not have finished rolling out
     # (Review Focus 1): wait until the cluster is Healthy and no Ready pod reads the armed value.
@@ -295,6 +322,17 @@ op_disarm() {
   argo_refresh_and_wait checkout "$DISARM_SHA"
   op_wait_health checkout Healthy
   beat "healthy"
+  if ((pin_after)); then
+    local pin_sha
+    yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
+    pin_sha="$(op_commit_push "chore(demo): pin config-version to $CONFIG_VERSION_START" "$ROLLOUT_FILE")"
+    beat "pushed: cv $CONFIG_VERSION_START"
+    argo_refresh_and_wait checkout "$pin_sha"
+    op_wait_health checkout Healthy
+    op_wait_fleet_disarmed
+    beat "healthy"
+    DISARM_SHA="$pin_sha"
+  fi
 }
 
 # op_bump : next patch tag in the kustomization only, ensure-image, push, refresh. Sets BUMP_SHA.
