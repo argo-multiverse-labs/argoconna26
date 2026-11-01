@@ -103,6 +103,12 @@ and it must be able to merge without a human review. "A human merges at the prop
 therefore enforced by the bridge (it never calls merge or auto-merge on that path, and a unit
 test says so), not by GitHub. Be honest about that if you present the demo.
 
+What an admin push looks like once the ruleset is on: the push succeeds, and GitHub prints
+`remote: Bypassed rule violations for refs/heads/<branch>: Changes must be made through a pull
+request.` That line is expected for the operator scripts and for build-side pushes made with an
+admin login; it is GitHub recording the bypass, not an error. An App push to the same branch
+gets a 422 with "Repository rule violations found" instead.
+
 `require_last_push_approval` means a commit pushed after an approval doesn't keep the approval.
 It must not block an act-level PR that touches no code-owned file; the merge-mechanics spike on
 a scratch branch is how to confirm that (section 4).
@@ -215,3 +221,5 @@ Two refusals don't carry a ruleset message, and the check handles them explicitl
 | Names the scripts read | `demo.env`: `REPO_SLUG`, `BOT_LOGIN`, `PROMOTION_TEAM`, `RULESET_BRANCHES`, `RULESET_INTEGRITY`, `RULESET_TRACKED`, `RULESET_PROMOTE`, `POLICY_CHECK_CONTEXT`, `POLICY_CHECK_INTEGRATION_ID` |
 | Secrets the bridge needs | `.env`: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_KEY_PATH` (key file outside the repo) |
 | `gh` scopes for the operator | `repo`, `read:org`, `workflow` |
+| Bridge write switch | `DRY_FORGE=1` in the bridge Deployment turns every GitHub write into a `▸ dry: would ...` log line (reads still use the App). The committed Deployment has it unset, so the bridge posts for real; `GET /status` reports `dry_forge` |
+| Where the agent's comments land (suggest level) | On the cause commit, or on its PR when it has one. Refusals land on the cause only once it is verified, otherwise on the synced revision |
