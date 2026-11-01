@@ -53,10 +53,22 @@ esac'
 case "$*" in
   "config current-context") echo kind-argoconna26 ;;
   *"get deploy bridge"*) echo "{\"spec\":{\"selector\":{\"matchLabels\":{\"app\":\"bridge\"}},\"template\":{\"spec\":{\"containers\":[{\"image\":\"bridge:v0.1.0\"}]}}}}" ;;
-  *"get pods"*) echo "{\"items\":[{\"metadata\":{\"name\":\"bridge-1\"},\"spec\":{\"nodeName\":\"argoconna26-worker\"},\"status\":{\"containerStatuses\":[{\"imageID\":\"$(cat "$DATA/pod_id")\"}]}}]}" ;;
+  *"get pods"*)
+    echo "kubectl get pods" >> "$DATA/log"
+    uid="$(cat "$DATA/pod_uid" 2>/dev/null || echo uid-1)"
+    if [ -s "$DATA/terminating" ]; then
+      # right after the delete: the old pod is still listed, and its replacement has no imageID yet
+      n="$(cat "$DATA/terminating")"; echo $((n - 1)) > "$DATA/terminating"; [ "$n" -gt 1 ] || : > "$DATA/terminating"
+      echo "{\"items\":[{\"metadata\":{\"name\":\"bridge-1\",\"uid\":\"uid-1\"},\"spec\":{\"nodeName\":\"argoconna26-worker\"},\"status\":{\"containerStatuses\":[{\"imageID\":\"sha256:aaa\"}]}},{\"metadata\":{\"name\":\"bridge-2\",\"uid\":\"uid-2\"},\"spec\":{\"nodeName\":\"argoconna26-worker\"},\"status\":{}}]}"
+    else
+      echo "{\"items\":[{\"metadata\":{\"name\":\"bridge-1\",\"uid\":\"$uid\"},\"spec\":{\"nodeName\":\"argoconna26-worker\"},\"status\":{\"containerStatuses\":[{\"imageID\":\"$(cat "$DATA/pod_id")\"}]}}]}"
+    fi ;;
   *"delete pod"*) echo "kubectl delete pod" >> "$DATA/log"
         # the replacement pod starts from whatever the node has now
-        cat "$DATA/node_argoconna26-worker_bridge_v0.1.0" > "$DATA/pod_id" ;;
+        cat "$DATA/node_argoconna26-worker_bridge_v0.1.0" > "$DATA/pod_id"
+        echo uid-2 > "$DATA/pod_uid"
+        [ -z "${SLOW_DELETE:-}" ] || echo "$SLOW_DELETE" > "$DATA/terminating" ;;
+  *"wait --for=condition=Ready"*) echo "kubectl wait ready" >> "$DATA/log" ;;
   *"rollout status"*) echo "kubectl rollout status" >> "$DATA/log" ;;
   *) echo "kubectl stub: unexpected $*" >&2; exit 2 ;;
 esac'
@@ -172,6 +184,19 @@ ensure()     { run bash -c "cd '$FIXTURE' && '$REPO_ROOT/scripts/ensure-image.sh
   grep -q 'kubectl delete pod' "$DATA/log"
   grep -q 'kubectl rollout status' "$DATA/log"
   [ "$(cat "$DATA/pod_id")" = sha256:bbb ]
+}
+
+@test "redeploy waits for the old pods to go and the new ones to be Ready before it checks" {
+  set_local bridge:v0.1.0 sha256:bbb
+  both_nodes bridge:v0.1.0 sha256:bbb
+  printf 'sha256:aaa' > "$DATA/pod_id"
+  export SLOW_DELETE=1      # the first listing after the delete still shows the old pod
+  ensure --redeploy bridge
+  [ "$status" -eq 0 ]
+  order="$(grep -E 'delete pod|wait ready|rollout status' "$DATA/log" | tr '\n' ' ')"
+  [ "$order" = "kubectl delete pod kubectl wait ready kubectl rollout status " ]
+  # it listed the pods again after the delete until the old one was gone
+  [ "$(sed -n '/delete pod/,/wait ready/p' "$DATA/log" | grep -c 'get pods')" -ge 2 ]
 }
 
 @test "redeploy leaves a current pod alone" {

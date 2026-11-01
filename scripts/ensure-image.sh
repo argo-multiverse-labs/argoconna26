@@ -108,15 +108,27 @@ assert_running() {
   log_info "$deploy runs the local $ref"
 }
 
+# True while any pod with one of the UIDs in OLD_UIDS (space separated) still exists.
+_old_pods_gone() { # SELECTOR OLD_UIDS
+  local now u
+  now=" $(k get pods -n "$DEPLOY_NS" -l "$1" -o json | jq -r '[.items[].metadata.uid] | join(" ")') "
+  for u in $2; do [[ "$now" != *" $u "* ]] || return 1; done
+}
+
 redeploy() {
-  local deploy="$1" selector
+  local deploy="$1" selector old
   if assert_running "$deploy" 2>/dev/null; then
     log_info "$deploy already runs the local image"
     return 0
   fi
   selector="$(k get deploy "$deploy" -n "$DEPLOY_NS" -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
+  old="$(k get pods -n "$DEPLOY_NS" -l "$selector" -o json | jq -r '[.items[].metadata.uid] | join(" ")')"
   log_info "$deploy runs a stale image: deleting its pods"
   k delete pod -n "$DEPLOY_NS" -l "$selector" --wait=false >&2
+  # Check only once the old pods are gone and their replacements are Ready: right after the
+  # delete, rollout status can still count the old pods, and a new pod has no imageID yet.
+  wait_for "the old $deploy pods to go" 180 _old_pods_gone "$selector" "$old"
+  k wait --for=condition=Ready pod -n "$DEPLOY_NS" -l "$selector" --timeout=180s >&2
   k rollout status deploy/"$deploy" -n "$DEPLOY_NS" --timeout=180s >&2
   assert_running "$deploy"
 }
