@@ -15,6 +15,27 @@ facts the model reads are scripted, its reasoning is not. `rca_toolcall_refused_
 (the refused-path behaviour is the toolset's, not the model's). Keys, IPs and request IDs are
 scrubbed.
 
+**Edited after recording:** the stub served the merge row as `dev.cdevents.change.merged.0.4.0`,
+a type CDEvents v0.5.1 does not define (it defines `change.merged.0.3.0`). That type string was
+changed to `0.3.0` in place, in the tool result and in the conversation history, so nothing
+copied from these files carries a type the vendored schema rejects
+(`test_fixture_event_types.py` checks this). Nothing else in the recordings was changed.
+
+### What these files do not prove (use them as parse and contract fixtures only)
+
+They prove the envelope and the request contract, not an RCA the bridge would accept, so they
+are never the happy path in a pipeline test (Task 3.9):
+
+- Both analyses report `confidence: 0.6`, under the bridge's `confidence_threshold` (0.7), and
+  `proposed_patch.file` is free text, so the guardrails would refuse them (low confidence or a
+  disallowed file).
+- The stub's merge row is not the event shape the demo uses (Δ28): its summary names the key,
+  both values and "config-version not bumped", which gives the answer away, and its revision
+  `bbbb…` (2026-10-31T10:12Z) is a fake SHA inside the 72 h lookback, which O6 rules out. So they
+  don't show that the model finds the cause from Δ28-shaped events.
+- Re-record in Task 3.12 against a Δ28-shaped timeline whose checkout events point at real
+  seeded commits, and check that the confidence clears 0.7.
+
 Measured on the real run: strict mode works through LiteLLM to Claude; the model used the
 `cdevents-sim.aiops.svc:8080` host form; one call takes about 9 to 10 s end to end. In one of
 three runs Claude's first two timeline calls failed on bad tool parameters (`max_depth`, then a
@@ -26,7 +47,7 @@ one tool call.
 | File | What it is |
 |---|---|
 | `chat_request_bridge_to_holmes.json` | The request body the bridge sends (strict RCA schema inside `response_format`) |
-| `chat_request_holmes_to_llm.json` | What HolmesGPT sends on to the LLM endpoint (system prompt truncated) |
+| `chat_request_holmes_to_llm.json` | What HolmesGPT sent on to the LLM endpoint in the scripted run (system prompt truncated). Its `temperature: 0` is the pre-fix value Claude rejects; it is not the request contract (see finding 3) |
 | `rca_ok.json` | Full response envelope |
 | `rca_toolcall_timeline.json` | Same, with a successful `cdevents_timeline_request` call |
 | `rca_toolcall_refused_events.json` | A call to `/events` refused by the path allow-list |
@@ -47,14 +68,18 @@ one tool call.
 ## Contract findings
 
 1. Auth: `X-API-Key` works (401 without it). `Authorization: Bearer <key>` was also accepted.
-2. HolmesGPT sends `temperature: 0` (from the `modelList` entry), `tool_choice: "auto"`,
+2. HolmesGPT sends the `modelList` entry's temperature (`0` in the scripted run's entry, which
+   Claude rejects; see 3), `tool_choice: "auto"`,
    `max_tokens: 64000`, `response_format` = the strict json_schema unchanged, and
    `strict: true` on **every** tool, including its built-in `TodoWrite`, even with
    `behavior_controls.todowrite_*` false.
-3. (Recheck 2026-10-31: omitting `temperature` from `modelList.rca` is NOT enough; HolmesGPT then sends `temperature: 1e-08`, which is rejected the same way. `temperature: 1` in the entry works and is what Claude applies.) **`temperature: 0` is rejected for `claude-sonnet-5-5`** by LiteLLM
-   (`UnsupportedParamsError: ... Only temperature=1 is supported`). Either omit `temperature`
-   from the Holmes `modelList.rca` entry or set `litellm_settings.drop_params: true` (with it,
-   the request reaches Anthropic).
+3. **Set `temperature: 1` in the Holmes `modelList.rca` entry** (measured 2026-10-31: it works,
+   and it is the temperature Claude applies). `claude-sonnet-5-5` accepts only temperature 1:
+   `temperature: 0` is rejected by LiteLLM (`UnsupportedParamsError: ... Only temperature=1 is
+   supported`), and omitting `temperature` is not enough either, because HolmesGPT then sends
+   `temperature: 1e-08`, which is rejected the same way. `litellm_settings.drop_params: true` let
+   the scripted-run request reach Anthropic, but it was not re-measured against Claude and it
+   hides what the provider applied, so it is not the recommendation.
 4. **Path globs are bypassable.** With `paths: ['/timeline*']`, a tool call to
    `/timeline-x/../events` passed the allow-list and the stub received `GET /events`. Use exact
    paths (`/timeline`, `/incidents`). Exact paths allow query strings, refuse `/events`,
