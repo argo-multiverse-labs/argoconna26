@@ -110,7 +110,10 @@ class HolmesClient:
                 response = await self._http.post(
                     f"{self.url}/api/chat",
                     json=self.request_body(prompt),
-                    headers={"X-API-Key": self._api_key},
+                    # HolmesGPT hands every request header to its shell tools and refuses to
+                    # run kubectl or argocd when one holds a shell metacharacter, so the
+                    # default `Accept: */*` would break every cluster read.
+                    headers={"X-API-Key": self._api_key, "Accept": "application/json"},
                     timeout=httpx.Timeout(self.timeout_s),
                 )
         except (TimeoutError, httpx.TimeoutException):

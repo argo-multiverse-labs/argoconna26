@@ -71,6 +71,26 @@ async def test_request_shape(respx_mock, client: HolmesClient) -> None:
     assert body["behavior_controls"] == {"todowrite_instructions": False, "todowrite_reminder": False}
 
 
+# HolmesGPT 0.45 copies every request header into its shell tools' context and refuses
+# to run any kubectl or argocd tool when a header value holds a shell metacharacter.
+# httpx's default `Accept: */*` did exactly that: every kubernetes and argocd call in a
+# real investigation returned an error, and the model answered with low confidence.
+HOLMES_SHELL_METACHARACTERS = set("`$\\\"'();|&<>*?[]{}\n\r")
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_request_headers_carry_no_shell_metacharacters(respx_mock, client: HolmesClient) -> None:
+    route = respx_mock.post(f"{URL}/api/chat").mock(
+        return_value=httpx.Response(200, json=envelope(json.dumps(RCA_JSON)))
+    )
+    await client.investigate("why is checkout degraded?")
+    headers = route.calls.last.request.headers
+    assert headers["accept"] == "application/json"
+    for name, value in headers.items():
+        bad = sorted(set(value) & HOLMES_SHELL_METACHARACTERS)
+        assert not bad, f"header {name} carries {bad}"
+
+
 @respx.mock(assert_all_mocked=True)
 async def test_analysis_string_parsed(respx_mock, client: HolmesClient) -> None:
     respx_mock.post(f"{URL}/api/chat").mock(
