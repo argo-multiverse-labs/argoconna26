@@ -555,3 +555,16 @@ event_for() { sim_events | jq -c --arg s "$1" 'select(.subject.id == $s)'; }
   [ "$status" -eq 0 ]
   while IFS= read -r line; do [ "${#line}" -le "$STAGE_COLS" ]; done <<<"$output"
 }
+
+@test "disarm's config-version pin commit posts its own change event" {
+  arm_origin                                           # 200, cv 7: disarm bumps to 8, then pins 7
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  pin="$(origin_tip)"
+  first="$("$REAL_GIT" --git-dir="$ORIGIN" rev-parse refs/heads/build/demo~1)"
+  [ -n "$(event_for "$first")" ]
+  ev="$(event_for "$pin")"
+  [ -n "$ev" ]
+  [ "$(jq -r .customData.title <<<"$ev")" = "chore(demo): pin config-version to 7" ]
+  [ "$(jq -r '.customData.changed_files | join(" ")' <<<"$ev")" = "$ROLL" ]
+}

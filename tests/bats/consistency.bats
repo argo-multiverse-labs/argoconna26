@@ -164,6 +164,80 @@ sim_files() { # SOURCE TAG : a cdevents-sim deploy dir and the demo.env values t
   [[ "$output" == *"SIM_TAG"* ]]
 }
 
+bridge_files() { # [NAME=VALUE...] : a bridge deploy dir matching demo.env, with overrides
+  mkdir -p "$WORK/bridge/deploy"
+  cat >> "$WORK/demo.env" <<'ENV'
+ARGOCD_HOST_URL=http://127.0.0.1:30080
+SIM_URL=http://cdevents-sim.aiops.svc:8080
+HOLMES_RELEASE=holmes
+HOLMES_URL=http://holmes-holmes.aiops.svc
+HOLMES_TIMEOUT_S=115
+STAGE_COLS=30
+TRACKED_BRANCH=build/demo
+REPO_SLUG=example-org/example-repo
+BRIDGE_EVENT_SOURCE=/argoconna26/bridge
+BRIDGE_TAG=v0.1.0
+ENV
+  declare -A v=(
+    [REPO_SLUG]=example-org/example-repo [TRACKED_BRANCH]=build/demo
+    [HOLMES_URL]='"http://holmes-holmes.aiops.svc"' [HOLMES_TIMEOUT_S]='"115"' [STAGE_COLS]='"30"'
+    [CDEVENTS_URL]='"http://cdevents-sim.aiops.svc:8080/events"' [BRIDGE_EVENT_SOURCE]=/argoconna26/bridge
+    [ARGO_UI_URL]='"http://127.0.0.1:30080"'
+  )
+  local kv tag=v0.1.0
+  for kv in "$@"; do
+    if [[ "${kv%%=*}" == TAG ]]; then tag="${kv#*=}"; else v[${kv%%=*}]="${kv#*=}"; fi
+  done
+  {
+    printf '          env:\n'
+    for k in REPO_SLUG TRACKED_BRANCH HOLMES_URL HOLMES_TIMEOUT_S STAGE_COLS CDEVENTS_URL BRIDGE_EVENT_SOURCE ARGO_UI_URL; do
+      printf '            - {name: %s, value: %s}\n' "$k" "${v[$k]}"
+    done
+  } > "$WORK/bridge/deploy/deployment.yaml"
+  printf 'images:\n  - name: bridge\n    newTag: %s\n' "$tag" > "$WORK/bridge/deploy/kustomization.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m bridge
+}
+
+@test "bridge Deployment values equal to demo.env pass" {
+  bridge_files
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+}
+
+@test "flags a bridge BRIDGE_EVENT_SOURCE that differs from demo.env" {
+  bridge_files BRIDGE_EVENT_SOURCE=/argoconna26/other
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"bridge/deploy/deployment.yaml: BRIDGE_EVENT_SOURCE"* ]]
+}
+
+@test "flags each bridge env value that differs from demo.env" {
+  for kv in REPO_SLUG=other/repo TRACKED_BRANCH=main HOLMES_URL=http://x.aiops.svc HOLMES_TIMEOUT_S='"60"' \
+            STAGE_COLS='"40"' CDEVENTS_URL='"http://other:8080/events"' ARGO_UI_URL='"http://127.0.0.1:1"'; do
+    rm -rf "$WORK"; setup
+    bridge_files "$kv"
+    run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"bridge/deploy/deployment.yaml: ${kv%%=*}"* ]]
+  done
+}
+
+@test "flags a bridge env value that is missing" {
+  bridge_files
+  sed -i '/name: HOLMES_URL/d' "$WORK/bridge/deploy/deployment.yaml"
+  git -C "$WORK" commit -qam drop
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HOLMES_URL"* ]]
+}
+
+@test "flags a bridge image tag that differs from BRIDGE_TAG" {
+  bridge_files TAG=v0.2.0
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BRIDGE_TAG"* ]]
+}
+
 litellm_files() { # TAG PGIMAGE : LiteLLM platform files and the pins to compare with
   mkdir -p "$WORK/platform/litellm"
   printf 'LITELLM_IMAGE_TAG=v1.106.4\nPOSTGRES_IMAGE=postgres:16.11-alpine@sha256:abc\n' >> "$WORK/versions.env"

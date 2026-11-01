@@ -101,24 +101,38 @@ cmd_spend() {
 
 cmd_budget_check() {
   _have LITELLM_MASTER_KEY || die "LITELLM_MASTER_KEY is missing in .env"
-  local key code n body
+  local key code n body resp
   key="$(llm_master POST /key/generate "$(jq -nc --arg m "$LLM_ALIAS_RCA" \
     '{key_alias: "budget-check", models: [$m], max_budget: 0.0001}')" | jq -r '.key // empty')"
   [[ -n "$key" ]] || die "no temporary key"
+  resp="$(mktemp)"
+  _budget_cleanup() {
+    rm -f "$resp"
+    llm_master POST /key/delete "$(jq -nc '{key_aliases: ["budget-check"]}')" >/dev/null || true
+  }
   body="$(jq -nc --arg m "$LLM_ALIAS_RCA" \
     '{model: $m, max_tokens: 20, messages: [{role: "user", content: "Count from one to ten in words, then reply with the single word done."}]}')"
+  # Call 1 must succeed: a 4xx there means a bad key or model alias, not a budget, and would
+  # prove nothing. After that, only a 4xx whose body names the budget counts.
   for n in 1 2 3 4; do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST -H 'Content-Type: application/json' -d "$body" \
+    : > "$resp"
+    code="$(curl -s -o "$resp" -w '%{http_code}' --max-time 60 -X POST -H 'Content-Type: application/json' -d "$body" \
       -K <(printf 'header = "Authorization: Bearer %s"\n' "$key") "${LITELLM_HOST_URL}/v1/chat/completions" || true)"
     log_info "budget-check call $n: HTTP $code"
-    if [[ "$code" =~ ^4 ]]; then
-      llm_master POST /key/delete "$(jq -nc '{key_aliases: ["budget-check"]}')" >/dev/null || true
+    [[ "$code" == 200 ]] && continue
+    if ((n > 1)) && [[ "$code" =~ ^4 ]] && grep -qiE 'budget_exceeded|budget has been exceeded' "$resp"; then
+      _budget_cleanup
       log_info "budget-check: refused on call $n (max_budget 0.0001)"
       return 0
     fi
+    _budget_cleanup
+    if ((n == 1)); then
+      die "budget-check: call 1 returned HTTP $code, not 200 (check the key and the $LLM_ALIAS_RCA alias)"
+    fi
+    die "budget-check: call $n returned HTTP $code without a budget error"
   done
-  llm_master POST /key/delete "$(jq -nc '{key_aliases: ["budget-check"]}')" >/dev/null || true
-  die "budget-check: no 4xx in 4 calls; the budget is not enforced"
+  _budget_cleanup
+  die "budget-check: no budget refusal in 4 calls; the budget is not enforced"
 }
 
 main() {

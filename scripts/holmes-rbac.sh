@@ -61,7 +61,11 @@ can_i() {
 
 cmd_live() {
   local rc=0
-  can_i no get secret/bridge-github -n "$NS_AIOPS" || rc=1
+  # The Secrets that matter: the bridge's GitHub App key and webhook token, the Argo CD
+  # notifications secret (the bridge bearer) and the LiteLLM master key.
+  can_i no get secret/bridge-secrets -n "$NS_AIOPS" || rc=1
+  can_i no get secret/argocd-notifications-secret -n "$NS_ARGOCD" || rc=1
+  can_i no get secret/litellm-masterkey -n "$NS_AIOPS" || rc=1
   can_i no list secrets --all-namespaces || rc=1
   can_i no create pods -n "$NS_DEMO" || rc=1
   can_i yes get pods -n "$NS_DEMO" || rc=1

@@ -14,9 +14,9 @@ setup() {
   : > "$CALLS"
   # curl: a tiny LiteLLM. Credentials arrive through -K files and are never in argv.
   make_stub "$STUBS" curl 'echo "CURL: $*" >> "'"$CALLS"'"
-    method=GET; cfg=""; url=""; body=""
+    method=GET; cfg=""; url=""; body=""; outf=""
     while [ $# -gt 0 ]; do
-      case "$1" in -X) method="$2"; shift 2 ;; -K) cfg="$2"; shift 2 ;; -d) body="$2"; shift 2 ;; -H|--max-time|-o|-w) shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+      case "$1" in -X) method="$2"; shift 2 ;; -K) cfg="$2"; shift 2 ;; -d) body="$2"; shift 2 ;; -o) outf="$2"; shift 2 ;; -H|--max-time|-w) shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
     done
     path="${url#*://*/}"; path="/${path#/}"
     [ -z "$cfg" ] || cp "$cfg" "'"$STATE"'/last-cfg" 2>/dev/null || true
@@ -28,6 +28,11 @@ setup() {
       "GET /key/list"*)
         a="$(sed -n "s/.*key_alias=\([a-z]*\).*/\1/p" <<<"$path")"
         if grep -qx "$a" "'"$STATE"'/aliases" 2>/dev/null; then echo "{\"keys\":[{\"key_alias\":\"$a\"}]}"; else echo "{\"keys\":[]}"; fi ;;
+      "POST /v1/chat/completions")
+        # one line of STATE/chat per call: "<code> <body>"
+        c=$(( $(cat "'"$STATE"'/chat-n" 2>/dev/null || echo 0) + 1 )); echo $c > "'"$STATE"'/chat-n"
+        line="$(sed -n "${c}p" "'"$STATE"'/chat")"
+        printf %s "${line#* }" > "${outf:-/dev/null}"; printf %s "${line%% *}" ;;
       "POST /key/delete") echo "$body" >> "'"$STATE"'/deleted"; echo "{}" ;;
       "POST /key/generate")
         echo "$body" >> "'"$STATE"'/generated"
@@ -105,4 +110,37 @@ run_keys() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/litellm.sh" keys ); }
 @test "spend_total with no files is the live spend" {
   run bash -c ". '$REPO_ROOT/scripts/litellm.sh'; spend_total '$BATS_TEST_TMPDIR/nope' 0.1"
   [ "$output" = "0.1000" ]
+}
+
+run_budget() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/litellm.sh" budget-check ); }
+
+@test "budget-check passes on 200 then a budget_exceeded refusal, and deletes the key" {
+  printf '%s\n' '200 {"choices":[]}' '400 {"error":{"type":"budget_exceeded","message":"Budget has been exceeded"}}' > "$STATE/chat"
+  run run_budget
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"refused on call 2"* ]]
+  grep -q budget-check "$STATE/deleted"
+}
+
+@test "budget-check fails when call 1 is not a 200" {
+  printf '%s\n' '400 {"error":{"type":"invalid_request_error","message":"Invalid model name"}}' > "$STATE/chat"
+  run run_budget
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"call 1"* ]]
+  grep -q budget-check "$STATE/deleted"
+}
+
+@test "budget-check fails on a later 4xx that is not a budget error" {
+  printf '%s\n' '200 {}' '401 {"error":{"type":"auth_error","message":"Invalid key"}}' > "$STATE/chat"
+  run run_budget
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"refused on call"* ]]
+  grep -q budget-check "$STATE/deleted"
+}
+
+@test "budget-check fails when every call succeeds" {
+  printf '%s\n' '200 {}' '200 {}' '200 {}' '200 {}' > "$STATE/chat"
+  run run_budget
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not enforced"* ]]
 }

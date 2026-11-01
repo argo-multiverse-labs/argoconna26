@@ -110,6 +110,43 @@ if [[ -n "${SIM_TAG:-}" && -f cdevents-sim/deploy/kustomization.yaml ]]; then
     || report "cdevents-sim/deploy/kustomization.yaml: newTag '$got' differs from demo.env SIM_TAG ($SIM_TAG)"
 fi
 
+# 6b. bridge: every env value its Deployment takes from demo.env, and the kustomize image
+#     tag (BRIDGE_TAG). A BRIDGE_EVENT_SOURCE that differs from the sim's would let the
+#     bridge's own standard-type events reach HolmesGPT through /timeline (P16).
+# env_value FILE NAME : the value of env NAME, in the `- {name: N, value: V}` or the
+# two-line `- name: N` / `value: V` form, quotes removed; empty when absent.
+env_value() {
+  awk -v n="$2" '
+    function clean(s) { gsub(/["\047]/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    $0 ~ ("name:[[:space:]]*" n "[[:space:]]*,") && /value:/ {
+      s = $0; sub(/.*value:[[:space:]]*/, "", s); sub(/[[:space:]]*}[[:space:]]*$/, "", s); print clean(s); exit
+    }
+    $0 ~ ("name:[[:space:]]*" n "[[:space:]]*$") {
+      if ((getline) > 0 && $0 ~ /^[[:space:]]*value:/) { sub(/^[[:space:]]*value:[[:space:]]*/, ""); print clean($0) }
+      exit
+    }' "$1"
+}
+if [[ -f bridge/deploy/deployment.yaml ]]; then
+  declare -A bridge_want=(
+    [REPO_SLUG]="${REPO_SLUG:-}" [TRACKED_BRANCH]="${TRACKED_BRANCH:-}" [HOLMES_URL]="${HOLMES_URL:-}"
+    [HOLMES_TIMEOUT_S]="${HOLMES_TIMEOUT_S:-}" [STAGE_COLS]="${STAGE_COLS:-}"
+    [CDEVENTS_URL]="${SIM_URL:+${SIM_URL}/events}" [BRIDGE_EVENT_SOURCE]="${BRIDGE_EVENT_SOURCE:-}"
+    [ARGO_UI_URL]="${ARGOCD_HOST_URL:-}"
+  )
+  for name in REPO_SLUG TRACKED_BRANCH HOLMES_URL HOLMES_TIMEOUT_S STAGE_COLS CDEVENTS_URL BRIDGE_EVENT_SOURCE ARGO_UI_URL; do
+    want="${bridge_want[$name]}"
+    [[ -n "$want" ]] || continue
+    got="$(env_value bridge/deploy/deployment.yaml "$name")"
+    [[ "$got" == "$want" ]] \
+      || report "bridge/deploy/deployment.yaml: $name '${got:-<missing>}' differs from demo.env ($want)"
+  done
+fi
+if [[ -n "${BRIDGE_TAG:-}" && -f bridge/deploy/kustomization.yaml ]]; then
+  got="$(awk '/name: bridge[[:space:]]*$/ {getline; sub(/^[[:space:]]*newTag:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' bridge/deploy/kustomization.yaml)"
+  [[ "$got" == "$BRIDGE_TAG" ]] \
+    || report "bridge/deploy/kustomization.yaml: newTag '$got' differs from demo.env BRIDGE_TAG ($BRIDGE_TAG)"
+fi
+
 # 7. LiteLLM: the chart values' image tag and the Postgres StatefulSet image must equal the pins.
 if [[ -n "${LITELLM_IMAGE_TAG:-}" && -f platform/litellm/values.yaml ]]; then
   got="$(awk '/^image:/ {f=1; next} f && /^[[:space:]]+tag:/ {sub(/^[[:space:]]*tag:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' platform/litellm/values.yaml)"

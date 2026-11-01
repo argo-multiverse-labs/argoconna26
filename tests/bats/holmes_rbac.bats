@@ -60,3 +60,15 @@ check() { ( . "$REPO_ROOT/scripts/holmes-rbac.sh"; check_rules "$BATS_TEST_TMPDI
   [[ "$output" == *"refused  http://cdevents-sim.aiops.svc:8080/timeline/../events"* ]]
   [[ "$output" != *"FAIL"* ]]
 }
+
+@test "live checks the Secrets that exist: bridge-secrets, the notifications secret and the LiteLLM master key" {
+  run bash -c '. "$1/scripts/holmes-rbac.sh"
+    NS_AIOPS=aiops NS_ARGOCD=argocd NS_DEMO=demo HOLMES_SA=holmes-sa
+    k() { case "$*" in *secret*|*"create pods"*) echo no ;; *) echo yes ;; esac; }
+    cmd_live' _ "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"can-i get secret/bridge-secrets -n aiops -> no"* ]]
+  [[ "$output" == *"can-i get secret/argocd-notifications-secret -n argocd -> no"* ]]
+  [[ "$output" == *"can-i get secret/litellm-masterkey -n aiops -> no"* ]]
+  [[ "$output" != *"bridge-github"* ]]
+}

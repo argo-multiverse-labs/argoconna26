@@ -323,10 +323,11 @@ op_disarm() {
   op_wait_health checkout Healthy
   beat "healthy"
   if ((pin_after)); then
-    local pin_sha
+    local pin_sha pin_msg="chore(demo): pin config-version to $CONFIG_VERSION_START"
     yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
-    pin_sha="$(op_commit_push "chore(demo): pin config-version to $CONFIG_VERSION_START" "$ROLLOUT_FILE")"
+    pin_sha="$(op_commit_push "$pin_msg" "$ROLLOUT_FILE")"
     beat "pushed: cv $CONFIG_VERSION_START"
+    emit_change_event "$pin_sha" disarm "$pin_msg" ""
     argo_refresh_and_wait checkout "$pin_sha"
     op_wait_health checkout Healthy
     op_wait_fleet_disarmed
