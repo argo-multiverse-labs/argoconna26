@@ -164,6 +164,11 @@ litellm-install: ## Install LiteLLM and its Postgres (needs the litellm Secrets 
 	rm -f "$$cfg"
 	(( rc == 0 )) || exit "$$rc"
 	k rollout status deployment/litellm -n "$$NS_AIOPS" --timeout=300s
+	# The proxy reports ready before the chart's migration Job has created its tables, and
+	# /key/generate fails until then. So installed means the migrations are complete too.
+	if k get job litellm-migrations -n "$$NS_AIOPS" >/dev/null 2>&1; then
+	  k wait --for=condition=complete job/litellm-migrations -n "$$NS_AIOPS" --timeout=300s
+	fi
 
 .PHONY: holmes-install
 holmes-install: helm-repos ## Install HolmesGPT (read-only; needs make litellm-keys and make secrets-late first)
@@ -272,11 +277,61 @@ gitops-bootstrap: ## Apply the root app-of-apps (Argo CD then creates checkout, 
 # Build, rebuild, info, verification                                           #
 ################################################################################
 
-# Later slices insert targets at fixed positions; the final order is written once in Task 3.16.
+# The build order (Task 3.16; the README's layout section repeats it):
+#   vendor -> kind-cluster -> namespaces -> argocd-install (values, notifications-cdevents,
+#   notifications-bridge) -> rollouts-install -> secrets-base -> kps-install -> images
+#   -> litellm-install -> litellm-keys -> grafana-token -> secrets-late (the holmesgpt Argo
+#   token, minted through the Argo CD HTTP API) -> holmes-install -> dryrun-summary-restore
+#   -> disarm-git-only -> gitops-bootstrap -> wait-platform
 # disarm-git-only comes before gitops-bootstrap, so an armed branch never meets a fresh
 # cluster (Review Focus 1): Argo's first sync already reads the disarmed config.
-BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install images disarm-git-only gitops-bootstrap
+# Seeding is not part of build-all (reset-demo does it). rm-kind, and so rebuild, first runs
+# llm-spend-export when the cluster is up, so LiteLLM's spend outlives the cluster.
+BUILD_STEPS := vendor kind-cluster namespaces argocd-install rollouts-install secrets-base kps-install \
+	images litellm-install litellm-keys grafana-token secrets-late holmes-install \
+	dryrun-summary-restore disarm-git-only gitops-bootstrap wait-platform
 SNAP_DIR    := $(MAIN_ROOT)/.kube/idempotency
+
+.PHONY: namespaces
+namespaces: ## Create the demo namespaces (only those missing)
+	@$(LOCKED)
+	for ns in "$$NS_ARGOCD" "$$NS_ROLLOUTS" "$$NS_MONITORING" "$$NS_DEMO" "$$NS_AIOPS"; do
+	  k get namespace "$$ns" >/dev/null 2>&1 || k create namespace "$$ns"
+	done
+
+.PHONY: dryrun-summary-restore
+dryrun-summary-restore: ## ConfigMap dryrun-summary from .dryruns/summary.json, when that file exists
+	@$(LOCKED)
+	f="$(MAIN_ROOT)/.dryruns/summary.json"
+	if [[ ! -s "$$f" ]]; then
+	  log_info "skip: no .dryruns/summary.json yet (the accuracy panel shows pending)"
+	  exit 0
+	fi
+	k create configmap dryrun-summary -n "$$NS_AIOPS" --from-file=summary.json="$$f" \
+	  --dry-run=client -o yaml | k apply -f - >/dev/null
+	log_info "dryrun-summary restored from .dryruns/summary.json"
+
+WAIT_PLATFORM_S ?= 600
+
+.PHONY: wait-platform
+wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and every pod is Ready
+	@$(CTX)
+	apps_ok() {
+	  k get applications -n "$$NS_ARGOCD" -o json | jq -e '(.items | length) > 0 and
+	    all(.items[]; .status.sync.status == "Synced" and .status.health.status == "Healthy")' >/dev/null
+	}
+	pods_ok() {
+	  local ns
+	  for ns in "$$NS_ARGOCD" "$$NS_ROLLOUTS" "$$NS_MONITORING" "$$NS_DEMO" "$$NS_AIOPS"; do
+	    k get pods -n "$$ns" -o json | jq -e 'all(.items[] | select(.status.phase != "Succeeded");
+	      any(.status.conditions[]?; .type == "Ready" and .status == "True"))' >/dev/null || return 1
+	  done
+	}
+	if ! wait_for "every Application Synced and Healthy" "$(WAIT_PLATFORM_S)" apps_ok; then
+	  k get applications -n "$$NS_ARGOCD" >&2; exit 4
+	fi
+	wait_for "every pod Ready" "$(WAIT_PLATFORM_S)" pods_ok || { k get pods -A | grep -v Running >&2; exit 4; }
+	log_info "wait-platform: all Applications Synced and Healthy, all pods Ready"
 
 .PHONY: build-all
 build-all: ## Create the whole stack (safe to run twice)
