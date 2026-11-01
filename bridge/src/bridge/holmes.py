@@ -95,6 +95,14 @@ class HolmesClient:
             "behavior_controls": {"todowrite_instructions": False, "todowrite_reminder": False},
         }
 
+    async def reachable(self) -> bool:
+        """True when HolmesGPT answers its readiness endpoint with 200. No LLM call."""
+        try:
+            response = await self._http.get(f"{self.url}/readyz", timeout=httpx.Timeout(5.0))
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200
+
     async def investigate(self, prompt: str) -> HolmesResult:
         started = time.monotonic()
         try:

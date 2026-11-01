@@ -18,9 +18,10 @@ from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import ValidationError
 
 from . import stagelog
+from .autonomy import read_autonomy
 from .config import Settings
 from .events import CDEventsEmitter
-from .forge import DryForge
+from .forge import DryForge, Forge
 from .forge.github import GitHubForge
 from .github_auth import InstallationTokenProvider
 from .holmes import HolmesClient
@@ -42,14 +43,29 @@ async def _log_only_handler(hook: ArgoDegradedHook) -> None:
 _REQUIRED = ("github_repo", "github_app_id", "github_installation_id", "github_app_key_path", "holmes_url")
 
 
+@dataclass
+class Probes:
+    """What the periodic refresh checks. All None when the pipeline is not configured."""
+
+    forge: Forge | None = None
+    tokens: InstallationTokenProvider | None = None
+    holmes: HolmesClient | None = None
+
+
 def build_handler(
     settings: Settings, registry: IncidentRegistry, metrics: Metrics, http: httpx.AsyncClient
 ) -> Handler:
     """The real pipeline over GitHub and HolmesGPT, or the log-only handler when unconfigured."""
+    return build_pipeline(settings, registry, metrics, http)[0]
+
+
+def build_pipeline(
+    settings: Settings, registry: IncidentRegistry, metrics: Metrics, http: httpx.AsyncClient
+) -> tuple[Handler, Probes]:
     missing = [name for name in _REQUIRED if not getattr(settings, name)]
     if missing:
         log.warning("pipeline not configured (missing %s); incidents are only logged", ", ".join(missing))
-        return _log_only_handler
+        return _log_only_handler, Probes()
     tokens = InstallationTokenProvider(
         settings.github_app_id,
         settings.github_installation_id,
@@ -58,16 +74,18 @@ def build_handler(
         api_url=settings.github_api_url,
         http=http,
     )
-    forge = GitHubForge(settings.github_repo, tokens, api_url=settings.github_api_url, http=http)
+    github = GitHubForge(settings.github_repo, tokens, api_url=settings.github_api_url, http=http)
+    forge: Forge = DryForge(github, settings.stage_cols) if settings.dry_forge else github
+    holmes = HolmesClient(
+        settings.holmes_url,
+        settings.holmes_api_key.get_secret_value(),
+        settings.holmes_model,
+        settings.holmes_timeout_s,
+        http=http,
+    )
     deps = Deps(
-        forge=DryForge(forge, settings.stage_cols) if settings.dry_forge else forge,
-        holmes=HolmesClient(
-            settings.holmes_url,
-            settings.holmes_api_key.get_secret_value(),
-            settings.holmes_model,
-            settings.holmes_timeout_s,
-            http=http,
-        ),
+        forge=forge,
+        holmes=holmes,
         emitter=CDEventsEmitter(settings.cdevents_url, http=http),
         settings=settings,
         registry=registry,
@@ -77,7 +95,7 @@ def build_handler(
     async def handler(hook: ArgoDegradedHook) -> Outcome:
         return await handle_incident(hook, deps)
 
-    return handler
+    return handler, Probes(forge=forge, tokens=tokens, holmes=holmes)
 
 
 @dataclass
@@ -90,6 +108,45 @@ class BridgeState:
     last_incident: dict[str, Any] | None = None
     holmes_reachable: bool | None = None
     github_token_ok: bool | None = None
+    probes: Probes = field(default_factory=Probes)
+    metrics: Metrics | None = None
+    # Set once the first refresh has finished (tests and readiness wait on it).
+    refreshed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def refresh(self) -> None:
+        """Probe GitHub and HolmesGPT for /status, and set the touchpoints gauge from
+        aiops/autonomy.yaml, so panel 3 has data before the first incident (D8) and
+        follows a promotion merge within one interval. Each step fails on its own."""
+        p = self.probes
+        if p.tokens is not None:
+            try:
+                await p.tokens.token()  # cached; minted only when missing or near expiry
+                self.github_token_ok = True
+            except Exception as exc:  # noqa: BLE001  any failure means "not ok"
+                log.warning("github token check failed: %s", type(exc).__name__)
+                self.github_token_ok = False
+        if p.holmes is not None:
+            try:
+                self.holmes_reachable = await p.holmes.reachable()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("holmes readiness check failed: %s", type(exc).__name__)
+                self.holmes_reachable = False
+        if p.forge is not None and self.metrics is not None:
+            autonomy, failsafe_reason = await read_autonomy(p.forge, self.settings.tracked_branch)
+            if failsafe_reason is None:
+                self.metrics.set_touchpoints(autonomy.touchpoints)
+
+    async def refresher(self) -> None:
+        while True:
+            try:
+                await self.refresh()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("status refresh failed")
+            finally:
+                self.refreshed.set()
+            await asyncio.sleep(self.settings.status_refresh_s)  # a fixed period, not a wait for a condition
 
     async def worker(self) -> None:
         while True:
@@ -135,24 +192,29 @@ def create_app(
     registry = registry or IncidentRegistry()
     metrics = metrics or Metrics(dryrun_summary_path=settings.dryrun_summary_path)
     http = httpx.AsyncClient(timeout=20.0)
-    state = BridgeState(
-        settings=settings,
-        handler=handler or build_handler(settings, registry, metrics, http),
-        registry=registry,
-    )
+    probes = Probes()
+    if handler is None:
+        handler, probes = build_pipeline(settings, registry, metrics, http)
+    state = BridgeState(settings=settings, handler=handler, registry=registry, probes=probes, metrics=metrics)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stagelog.configure()
         # The queue must belong to the running loop.
         state.queue = asyncio.Queue()
-        task = asyncio.create_task(state.worker(), name="incident-worker")
+        state.refreshed = asyncio.Event()
+        tasks = [
+            asyncio.create_task(state.worker(), name="incident-worker"),
+            asyncio.create_task(state.refresher(), name="status-refresh"),
+        ]
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await http.aclose()
 
     app = FastAPI(title="aiops bridge", lifespan=lifespan, docs_url=None, redoc_url=None)

@@ -51,3 +51,6 @@ class Settings(BaseSettings):
     )
     argo_ui_url: str = Field(default="", validation_alias=_env("ARGO_UI_URL"))
     dry_forge: bool = Field(default=False, validation_alias=_env("DRY_FORGE"))
+    # How often /status probes (GitHub token, HolmesGPT readiness) and the touchpoints
+    # gauge (aiops/autonomy.yaml) are refreshed. The first refresh runs at startup.
+    status_refresh_s: float = Field(default=60, gt=0, validation_alias=_env("STATUS_REFRESH_S"))

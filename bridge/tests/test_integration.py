@@ -161,6 +161,7 @@ class World:
         else:
             self.holmes = router.post(f"{HOLMES}/api/chat").mock(return_value=holmes)
         self.sink = router.post(SINK).mock(return_value=httpx.Response(202, json={"id": "x"}))
+        self.readyz = router.get(f"{HOLMES}/readyz").mock(return_value=httpx.Response(200, text="ok"))
 
     def posted(self) -> list[tuple[str, str]]:
         """(commit sha, body) for every commit comment the bridge posted."""
@@ -280,3 +281,64 @@ async def test_several_tool_calls_with_errors_end_to_end(respx_mock, settings: S
         stagelog.line("holmes", "GET /events (refused)", settings.stage_cols),
         "▸ holmes: GET /timeline",
     ]
+
+
+async def started_status(settings: Settings) -> dict:
+    """/status and /metrics once the startup refresh has run, before any webhook."""
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        await app.state.bridge.refreshed.wait()  # the first refresh has finished
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://bridge.test") as client:
+            status = (await client.get("/status")).json()
+            metrics = (await client.get("/metrics")).text
+    return {"status": status, "metrics": metrics}
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_startup_sets_touchpoints_and_probes_before_any_incident(respx_mock, settings: Settings, caplog) -> None:
+    world = World(respx_mock, httpx.Response(500))
+
+    result = await started_status(settings)
+
+    assert 'aiops_human_touchpoints{level="suggest"} 4.0' in result["metrics"]
+    assert 'aiops_human_touchpoints{level="act"} 1.0' in result["metrics"]
+    assert result["status"]["github_token_ok"] is True
+    assert result["status"]["holmes_reachable"] is True
+    assert result["status"]["last_incident"] is None
+    assert world.readyz.call_count == 1
+    assert world.holmes.call_count == 0  # no LLM call at startup
+    assert INSTALLATION_TOKEN not in caplog.text
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_startup_probes_report_failures(respx_mock, settings: Settings) -> None:
+    world = World(respx_mock, httpx.Response(500))
+    world.token.mock(return_value=httpx.Response(401, json={"message": "Bad credentials"}))
+    world.readyz.mock(return_value=httpx.Response(503))
+
+    result = await started_status(settings)
+
+    assert result["status"]["github_token_ok"] is False
+    assert result["status"]["holmes_reachable"] is False
+    # The autonomy file could not be read, so no touchpoints are made up.
+    assert "aiops_human_touchpoints{" not in result["metrics"]
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_unreadable_key_reports_token_not_ok(respx_mock, settings: Settings, key_path: Path) -> None:
+    World(respx_mock, httpx.Response(500))
+    key_path.chmod(0)
+    try:
+        result = await started_status(settings)
+    finally:
+        key_path.chmod(0o600)
+    assert result["status"]["github_token_ok"] is False
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_holmes_connection_error_is_not_reachable(respx_mock, settings: Settings) -> None:
+    world = World(respx_mock, httpx.Response(500))
+    world.readyz.mock(side_effect=httpx.ConnectError("refused"))
+    result = await started_status(settings)
+    assert result["status"]["holmes_reachable"] is False
