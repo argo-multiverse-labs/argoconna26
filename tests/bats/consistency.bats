@@ -191,3 +191,31 @@ litellm_files() { # TAG PGIMAGE : LiteLLM platform files and the pins to compare
   [ "$status" -ne 0 ]
   [[ "$output" == *"POSTGRES_IMAGE"* ]]
 }
+
+holmes_files() { # IMAGE URL : platform/holmes/values.yaml and the demo.env names to compare with
+  mkdir -p "$WORK/platform/holmes"
+  printf 'HOLMES_CHART_VERSION=0.45.0\n' >> "$WORK/versions.env"
+  printf 'HOLMES_RELEASE=holmes\nHOLMES_URL=%s\nNS_AIOPS=aiops\n' "$2" >> "$WORK/demo.env"
+  printf 'registry: robustadev\nimage: %s\n' "$1" > "$WORK/platform/holmes/values.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m holmes
+}
+
+@test "holmes image and HOLMES_URL equal to the pins pass" {
+  holmes_files holmes:0.45.0 http://holmes-holmes.aiops.svc
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+}
+
+@test "flags a holmes image that differs from HOLMES_CHART_VERSION" {
+  holmes_files holmes:0.44.0 http://holmes-holmes.aiops.svc
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HOLMES_CHART_VERSION"* ]]
+}
+
+@test "flags a HOLMES_URL that is not the release Service" {
+  holmes_files holmes:0.45.0 http://holmes.aiops.svc
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HOLMES_URL"* ]]
+}

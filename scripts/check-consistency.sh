@@ -122,6 +122,18 @@ if [[ -n "${POSTGRES_IMAGE:-}" && -f platform/litellm/postgres.yaml ]]; then
     || report "platform/litellm/postgres.yaml: image '$got' differs from versions.env POSTGRES_IMAGE ($POSTGRES_IMAGE)"
 fi
 
+# 8. HolmesGPT: the chart values' image must be the pinned version, and HOLMES_URL must name the
+#    release's Service (<release>-holmes) in the aiops namespace.
+if [[ -n "${HOLMES_CHART_VERSION:-}" && -f platform/holmes/values.yaml ]]; then
+  got="$(awk '/^image:/ {sub(/^image:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' platform/holmes/values.yaml)"
+  [[ "$got" == "holmes:${HOLMES_CHART_VERSION}" ]] \
+    || report "platform/holmes/values.yaml: image '$got' differs from versions.env HOLMES_CHART_VERSION (holmes:$HOLMES_CHART_VERSION)"
+fi
+if [[ -n "${HOLMES_URL:-}" && -n "${HOLMES_RELEASE:-}" && -n "${NS_AIOPS:-}" ]]; then
+  [[ "$HOLMES_URL" == "http://${HOLMES_RELEASE}-holmes.${NS_AIOPS}.svc" ]] \
+    || report "demo.env: HOLMES_URL '$HOLMES_URL' is not the Service http://${HOLMES_RELEASE}-holmes.${NS_AIOPS}.svc"
+fi
+
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2
   exit 1

@@ -83,8 +83,47 @@ secret_litellm() {
   _apply_secret "$NS_AIOPS" litellm-env
 }
 
+# argo_call BEARER METHOD PATH [JSON_BODY] : Argo CD HTTP API on the host port. The bearer goes
+# through a curl config file descriptor, the body through stdin: neither shows in process args.
+argo_call() {
+  local bearer="$1" method="$2" path="$3" body="${4:-}" args=()
+  [[ -z "$body" ]] || args=(-H 'Content-Type: application/json' --data-binary @-)
+  if [[ -n "$bearer" ]]; then
+    printf '%s' "$body" | curl -sf --max-time 15 -X "$method" "${args[@]}" \
+      -K <(printf 'header = "Authorization: Bearer %s"\n' "$bearer") "${ARGOCD_HOST_URL}${path}"
+  else
+    printf '%s' "$body" | curl -sf --max-time 15 -X "$method" "${args[@]}" "${ARGOCD_HOST_URL}${path}"
+  fi
+}
+
+# HolmesGPT: HOLMES_API_KEY for its server (holmes-api) and an API token for the read-only
+# Argo CD account holmesgpt (holmes-argocd). The token is minted through the Argo CD HTTP API
+# (session with the admin password, then POST /api/v1/account/holmesgpt/token), so no argocd
+# CLI login is involved (P13). A token Argo CD still accepts is kept.
 secret_holmes() {
-  log_info "skipped: holmes (added in slice 3)"
+  if _have HOLMES_API_KEY; then
+    _new_secret_dir; _put HOLMES_API_KEY "$HOLMES_API_KEY"
+    _apply_secret "$NS_AIOPS" holmes-api
+  else
+    log_warn "skipped: holmes-api (HOLMES_API_KEY missing in .env)"
+  fi
+  local cur pw sess tok
+  cur="$(k get secret holmes-argocd -n "$NS_AIOPS" -o jsonpath='{.data.ARGOCD_AUTH_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [[ -n "$cur" ]] && argo_call "$cur" GET /api/v1/applications >/dev/null 2>&1; then
+    log_info "skip: Secret $NS_AIOPS/holmes-argocd holds a token Argo CD accepts"
+    return 0
+  fi
+  pw="$(k get secret argocd-initial-admin-secret -n "$NS_ARGOCD" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [[ -z "$pw" ]]; then
+    log_warn "skipped: holmes-argocd (argocd-initial-admin-secret not readable)"; return 0
+  fi
+  # the password reaches jq through its environment, not its arguments
+  sess="$(argo_call "" POST /api/v1/session "$(ARGO_PW="$pw" jq -nc '{username: "admin", password: env.ARGO_PW}')" 2>/dev/null | jq -r '.token // empty' || true)"
+  [[ -n "$sess" ]] || { log_warn "skipped: holmes-argocd (Argo CD session failed on $ARGOCD_HOST_URL)"; return 0; }
+  tok="$(argo_call "$sess" POST /api/v1/account/holmesgpt/token '{"name":"holmes"}' 2>/dev/null | jq -r '.token // empty' || true)"
+  [[ -n "$tok" ]] || { log_warn "skipped: holmes-argocd (Argo CD would not mint a holmesgpt token)"; return 0; }
+  _new_secret_dir; _put ARGOCD_AUTH_TOKEN "$tok"
+  _apply_secret "$NS_AIOPS" holmes-argocd
 }
 
 secret_cdevents_grafana() {

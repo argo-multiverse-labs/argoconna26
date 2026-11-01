@@ -104,6 +104,7 @@ helm-repos: ## Add the Helm repos to the isolated Helm config
 	@$(CTX)
 	helm repo add argo "$$ARGO_HELM_REPO" --force-update >/dev/null
 	helm repo add prometheus-community "$$PROM_HELM_REPO" --force-update >/dev/null
+	helm repo add robusta "$$ROBUSTA_HELM_REPO" --force-update >/dev/null
 	helm repo update >/dev/null
 
 .PHONY: argocd-install
@@ -162,6 +163,22 @@ litellm-install: ## Install LiteLLM and its Postgres (needs the litellm Secrets 
 	rm -f "$$cfg"
 	(( rc == 0 )) || exit "$$rc"
 	k rollout status deployment/litellm -n "$$NS_AIOPS" --timeout=300s
+
+.PHONY: holmes-install
+holmes-install: helm-repos ## Install HolmesGPT (read-only; needs make litellm-keys and make secrets-late first)
+	@$(LOCKED)
+	for s in holmes-llm holmes-argocd holmes-api; do
+	  k get secret "$$s" -n "$$NS_AIOPS" >/dev/null 2>&1 || die "Secret $$s missing: run 'make litellm-keys secrets-late' first"
+	done
+	$(ROOT)/scripts/holmes-rbac.sh check
+	helm_ensure "$$HOLMES_RELEASE" robusta/holmes "$$HOLMES_CHART_VERSION" "$$NS_AIOPS" $(ROOT)/platform/holmes/values.yaml
+	k rollout status deployment/"$$HOLMES_RELEASE"-holmes -n "$$NS_AIOPS" --timeout=300s
+	$(ROOT)/scripts/holmes-rbac.sh live
+
+.PHONY: holmes-rbac-check
+holmes-rbac-check: helm-repos ## Offline proof that the rendered HolmesGPT role is read-only, and the allow-list test
+	@$(ROOT)/scripts/holmes-rbac.sh check
+	$(ROOT)/scripts/holmes-rbac.sh allowlist
 
 .PHONY: litellm-keys
 litellm-keys: ## Virtual keys holmes and judge -> Secrets holmes-llm and judge-llm

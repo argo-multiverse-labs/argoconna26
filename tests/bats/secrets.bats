@@ -20,14 +20,35 @@ setup() {
         d="$(grep -o -- "--from-file=/[^ ]*" <<<"$*" | cut -d= -f2-)"
         echo "DIR-MODE: $(stat -c %a "$d")" >> "'"$CALLS"'"
         echo "DIR-FILES: $(ls "$d" | tr "\n" " ")" >> "'"$CALLS"'"
+        [ ! -f "$d/ARGOCD_AUTH_TOKEN" ] || cp "$d/ARGOCD_AUTH_TOKEN" "'"$BATS_TEST_TMPDIR"'/holmes-argocd"
         echo "apiVersion: v1"; echo "kind: Secret" ;;
       *"create namespace"*) echo "apiVersion: v1"; echo "kind: Namespace" ;;
       *"apply"*"-f -"*) cat > /dev/null; echo "applied" ;;
+      *"get secret argocd-initial-admin-secret"*"jsonpath"*) printf %s argo-admin-s3cret | base64 -w0 ;;
+      *"get secret holmes-argocd"*"jsonpath"*) [ -f "'"$BATS_TEST_TMPDIR"'/holmes-argocd" ] && base64 -w0 < "'"$BATS_TEST_TMPDIR"'/holmes-argocd" || true ;;
+      *"get secret"*"jsonpath"*) ;;
       *"get secret"*)
         if [ -f "'"$BATS_TEST_TMPDIR"'/last-applied" ]; then
           echo "{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/last-applied-configuration\":\"x\"}}}"
         else echo "{\"metadata\":{}}"; fi ;;
       *"annotate secret"*) ;;
+    esac'
+  # curl: a tiny Argo CD API for the holmesgpt token. Credentials arrive through -K files or stdin.
+  make_stub "$STUBS" curl 'echo "CURL: $*" >> "'"$BATS_TEST_TMPDIR"'/curl.calls"
+    method=GET; cfg=""; url=""; data=""
+    while [ $# -gt 0 ]; do
+      case "$1" in -X) method="$2"; shift 2 ;; -K) cfg="$2"; shift 2 ;; --data-binary) data="$(cat)"; shift 2 ;; -H|--max-time|-o|-w) shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+    done
+    path="${url#*://*/}"; path="/${path#/}"
+    tok=""; [ -z "$cfg" ] || tok="$(sed -n "s/^header = \"Authorization: Bearer \(.*\)\"$/\1/p" "$cfg")"
+    case "$method $path" in
+      "POST /api/v1/session") grep -q argo-admin-s3cret <<<"$data" && echo "{\"token\":\"sess-token\"}" || exit 22 ;;
+      "POST /api/v1/account/holmesgpt/token")
+        [ "$tok" = sess-token ] || exit 22
+        n=$(( $(cat "'"$BATS_TEST_TMPDIR"'/n" 2>/dev/null || echo 0) + 1 )); echo $n > "'"$BATS_TEST_TMPDIR"'/n"
+        echo "$n" >> "'"$BATS_TEST_TMPDIR"'/argo-valid"; echo "{\"token\":\"holmes-argo-$n\"}" ;;
+      "GET /api/v1/applications") [ "${tok#holmes-argo-}" != "$tok" ] && grep -qx "${tok#holmes-argo-}" "'"$BATS_TEST_TMPDIR"'/argo-valid" 2>/dev/null && echo "{}" || exit 22 ;;
+      *) echo "unexpected: $method $path" >&2; exit 22 ;;
     esac'
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
   # fake values, held in neutrally named variables so secret scanners see no credential-shaped lines
@@ -115,10 +136,10 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
   [ "$status" -eq 3 ]
 }
 
-@test "late secrets are stubs in slice 1" {
+@test "late secrets: cdevents-grafana is made by make grafana-token" {
   run run_secrets late
   [ "$status" -eq 0 ]
-  [[ "$output" == *"skipped: holmes"* ]]
+  [[ "$output" == *"skipped: cdevents-grafana"* ]]
 }
 
 @test "secrets use server-side apply, so no last-applied copy of the values is kept" {
@@ -136,4 +157,36 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
   run run_secrets base
   [ "$status" -eq 0 ]
   grep -q 'annotate secret grafana-admin -n monitoring kubectl.kubernetes.io/last-applied-configuration-' "$CALLS"
+}
+
+@test "holmes: stores the API key and a read-only Argo token" {
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/holmes-argocd")" = "holmes-argo-1" ]
+  grep -q 'DIR-FILES: HOLMES_API_KEY' "$CALLS"
+  grep -q 'POST .*api/v1/account/holmesgpt/token' "$BATS_TEST_TMPDIR/curl.calls"
+}
+
+@test "holmes: a token Argo CD still accepts is kept" {
+  run_secrets late
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip"*"holmes-argocd"* ]]
+  [ "$(cat "$BATS_TEST_TMPDIR/holmes-argocd")" = "holmes-argo-1" ]
+  [ "$(grep -c 'account/holmesgpt/token' "$BATS_TEST_TMPDIR/curl.calls")" -eq 1 ]
+}
+
+@test "holmes: neither the admin password nor a token reaches curl or kubectl arguments" {
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  ! grep -q 'argo-admin-s3cret' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+  ! grep -q 'holmes-argo-' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+  ! grep -q 'sess-token' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+}
+
+@test "holmes: without HOLMES_API_KEY the API-key Secret is skipped with a warning" {
+  grep -v HOLMES_API_KEY "$FIXTURE/.env" > "$FIXTURE/.env.new" && mv "$FIXTURE/.env.new" "$FIXTURE/.env"
+  chmod 600 "$FIXTURE/.env"
+  run run_secrets late
+  [[ "$output" == *"skipped: holmes-api"* ]]
 }
