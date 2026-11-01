@@ -1,6 +1,7 @@
 """e2e harness commands. Not part of the running bridge; never imported by the app.
 
     python -m bridge.cli try-direct-push [--repo OWNER/NAME] [--branches a,b] [--operator-ref REF]
+    python -m bridge.cli spike-pr --base rehearse/merge-spike --scenario two-line [--repo OWNER/NAME]
 
 `try-direct-push` proves, with the App's own installation token, that the standing rulesets hold:
 for each protected branch it creates (through the Git Data API) a commit whose parent is the
@@ -15,10 +16,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import os
 import re
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -154,6 +157,118 @@ async def run_try_direct_push(
     return results
 
 
+# --- spike-pr: GitHub merge mechanics (Task 4.5a) ---------------------------------------------
+
+SPIKE_BASE = "rehearse/merge-spike"
+_SPIKE_FILE = "apps/pricing/README.md"
+_REV_LINE = re.compile(r"^(Notes revision: )(\d+)$", re.MULTILINE)
+_ENABLE_AUTO_MERGE = (
+    "mutation($id: ID!, $method: PullRequestMergeMethod!) {"
+    " enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {"
+    " pullRequest { autoMergeRequest { enabledAt mergeMethod } } } }"
+)
+
+
+class SpikeError(Exception):
+    pass
+
+
+@dataclass
+class SpikeResult:
+    number: int
+    url: str
+    branch: str
+    auto_merge_enabled: bool
+    auto_merge_error: str
+    merged: bool
+    final_state: str
+    mergeable_state: str
+    waited_s: float
+
+
+async def run_spike_pr(
+    http: httpx.AsyncClient,
+    tokens: Any,
+    *,
+    repo: str,
+    base: str,
+    scenario: str = "two-line",
+    api_url: str = _API,
+    stamp: str | None = None,
+    wait: bool = True,
+    timeout_s: float = 600.0,
+    poll_s: float = 5.0,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> SpikeResult:
+    """Open an App-authored PR that changes one line, enable auto-merge, wait on the PR state.
+
+    Refuses any base but the scratch branch, before any request. Only `two-line` exists
+    here; `autonomy-raise` is Task 4.5a Step 2.
+    """
+    if base != SPIKE_BASE:
+        raise SpikeError(f"spike-pr only runs against {SPIKE_BASE}, not {base!r}")
+    if scenario != "two-line":
+        raise SpikeError(f"scenario {scenario!r} is not implemented here (autonomy-raise is Task 4.5a Step 2)")
+    gh = _Gh(http, tokens, repo, api_url)
+    stamp = stamp or str(int(time.time()))
+    branch = f"agent/spike-{stamp}"
+
+    head = await gh.head(base)
+    cur = await gh.call("GET", f"/contents/{_SPIKE_FILE}", params={"ref": base})
+    cur.raise_for_status()
+    text = base64.b64decode(cur.json()["content"]).decode()
+    if not _REV_LINE.search(text):
+        raise SpikeError(f"{_SPIKE_FILE} has no 'Notes revision: N' line")
+    new_text = _REV_LINE.sub(lambda m: f"{m.group(1)}{int(m.group(2)) + 1}", text, count=1)
+
+    (await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": head})).raise_for_status()
+    put = await gh.call(
+        "PUT",
+        f"/contents/{_SPIKE_FILE}",
+        json={
+            "message": "spike: bump the notes revision",
+            "content": base64.b64encode(new_text.encode()).decode(),
+            "sha": cur.json()["sha"],
+            "branch": branch,
+        },
+    )
+    put.raise_for_status()
+    pr = await gh.call(
+        "POST",
+        "/pulls",
+        json={"title": "spike: bump the notes revision", "head": branch, "base": base,
+              "body": "Merge-mechanics spike (Task 4.5a). Scratch branch only."},
+    )
+    pr.raise_for_status()
+    number, node_id, url = pr.json()["number"], pr.json()["node_id"], pr.json().get("html_url", "")
+
+    enabled, err = False, ""
+    g = await http.post(
+        f"{api_url.rstrip('/')}/graphql",
+        headers={"Authorization": f"Bearer {await tokens.token()}", "Accept": "application/vnd.github+json"},
+        json={"query": _ENABLE_AUTO_MERGE, "variables": {"id": node_id, "method": "MERGE"}},
+    )
+    body = g.json() if g.headers.get("content-type", "").startswith("application/json") else {}
+    if g.status_code < 300 and not body.get("errors"):
+        enabled = True
+    else:
+        err = "; ".join(e.get("message", "") for e in body.get("errors", [])) or f"HTTP {g.status_code}"
+
+    merged, state, mstate, waited = False, "OPEN", "", 0.0
+    while True:
+        v = await gh.call("GET", f"/pulls/{number}")
+        v.raise_for_status()
+        j = v.json()
+        merged, state, mstate = bool(j.get("merged")), str(j.get("state", "")).upper(), str(j.get("mergeable_state", ""))
+        if merged:
+            state = "MERGED"
+        if merged or state == "CLOSED" or not wait or waited >= timeout_s:
+            break
+        await sleep(poll_s)
+        waited += poll_s
+    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited)
+
+
 def _print(results: list[AttemptResult]) -> None:
     for x in results:
         print(f"{'ok  ' if x.ok else 'FAIL'} {x.action:<6} {x.target:<28} {x.status} {x.detail}")
@@ -185,6 +300,31 @@ async def _try_direct_push(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+async def _spike_pr(args: argparse.Namespace) -> int:
+    for key in ("GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_KEY_PATH"):
+        if not os.environ.get(key):
+            print(f"missing {key} (load .env)", file=sys.stderr)
+            return 2
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        provider = InstallationTokenProvider(
+            os.environ["GITHUB_APP_ID"],
+            os.environ["GITHUB_INSTALLATION_ID"],
+            os.environ["GITHUB_APP_KEY_PATH"],
+            repo=args.repo,
+            http=http,
+        )
+        try:
+            res = await run_spike_pr(http, provider, repo=args.repo, base=args.base, scenario=args.scenario,
+                                     wait=not args.no_wait, timeout_s=args.timeout)
+        except SpikeError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+    print(f"pr={res.number} branch={res.branch} url={res.url}")
+    print(f"auto_merge_enabled={res.auto_merge_enabled} error={res.auto_merge_error or '-'}")
+    print(f"final_state={res.final_state} merged={res.merged} mergeable_state={res.mergeable_state or '-'} waited_s={res.waited_s:.0f}")
+    return 0 if res.merged or args.no_wait else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bridge.cli", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -192,9 +332,17 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
     t.add_argument("--branches", default=os.environ.get("RULESET_BRANCHES", ""), help="comma list (default: $RULESET_BRANCHES)")
     t.add_argument("--operator-ref", default=None, help="a promote/* branch the operator pushed; the App tries to move it")
+    sp = sub.add_parser("spike-pr", help="open an App-authored PR on the scratch branch and enable auto-merge")
+    sp.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    sp.add_argument("--base", required=True, help=f"must be {SPIKE_BASE}")
+    sp.add_argument("--scenario", choices=["two-line", "autonomy-raise"], default="two-line")
+    sp.add_argument("--timeout", type=float, default=600.0, help="seconds to wait for MERGED (default 600)")
+    sp.add_argument("--no-wait", action="store_true", help="open and enable auto-merge, do not wait")
     args = ap.parse_args(argv)
     if args.repo.count("/") != 1:
         ap.error("--repo must be OWNER/NAME")
+    if args.cmd == "spike-pr":
+        return asyncio.run(_spike_pr(args))
     return asyncio.run(_try_direct_push(args))
 
 
