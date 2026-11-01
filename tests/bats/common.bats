@@ -372,3 +372,54 @@ helm_setup() {
   [ "$status" -ne 0 ]
   ! grep -q upgrade "$BATS_TEST_TMPDIR/helm.calls"
 }
+
+# ---------------------------------------------------------------- pods_ready
+# kubectl stub: pods and jobs from files.
+pods_setup() {
+  make_stub "$STUBS" kubectl 'case "$*" in
+    *"get pods"*) cat "'"$BATS_TEST_TMPDIR"'/pods.json" ;;
+    *"get jobs"*) cat "'"$BATS_TEST_TMPDIR"'/jobs.json" ;;
+  esac'
+  echo '{"items":[]}' > "$BATS_TEST_TMPDIR/jobs.json"
+}
+ready_pod='{"metadata":{"name":"a"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}'
+done_pod='{"metadata":{"name":"m-ok","ownerReferences":[{"kind":"Job","name":"litellm-migrations"}]},"status":{"phase":"Succeeded"}}'
+failed_job_pod='{"metadata":{"name":"m-1","ownerReferences":[{"kind":"Job","name":"litellm-migrations"}]},"status":{"phase":"Failed"}}'
+complete_job='{"items":[{"metadata":{"name":"litellm-migrations"},"status":{"conditions":[{"type":"Complete","status":"True"}]}}]}'
+
+@test "pods_ready passes when every pod is Ready or Succeeded" {
+  pods_setup
+  echo "{\"items\":[$ready_pod,$done_pod]}" > "$BATS_TEST_TMPDIR/pods.json"
+  run in_fixture 'load_env; pods_ready aiops'
+  [ "$status" -eq 0 ]
+}
+
+@test "pods_ready ignores a Failed attempt of a Job that has since completed" {
+  pods_setup
+  echo "{\"items\":[$ready_pod,$failed_job_pod,$done_pod]}" > "$BATS_TEST_TMPDIR/pods.json"
+  echo "$complete_job" > "$BATS_TEST_TMPDIR/jobs.json"
+  run in_fixture 'load_env; pods_ready aiops'
+  [ "$status" -eq 0 ]
+}
+
+@test "pods_ready fails on a Failed pod of a Job that has not completed" {
+  pods_setup
+  echo "{\"items\":[$ready_pod,$failed_job_pod]}" > "$BATS_TEST_TMPDIR/pods.json"
+  run in_fixture 'load_env; pods_ready aiops'
+  [ "$status" -ne 0 ]
+}
+
+@test "pods_ready fails on a Failed pod with no Job owner" {
+  pods_setup
+  echo '{"items":[{"metadata":{"name":"x"},"status":{"phase":"Failed"}}]}' > "$BATS_TEST_TMPDIR/pods.json"
+  echo "$complete_job" > "$BATS_TEST_TMPDIR/jobs.json"
+  run in_fixture 'load_env; pods_ready aiops'
+  [ "$status" -ne 0 ]
+}
+
+@test "pods_ready fails on a Running pod that is not Ready" {
+  pods_setup
+  echo '{"items":[{"metadata":{"name":"x"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}}]}' > "$BATS_TEST_TMPDIR/pods.json"
+  run in_fixture 'load_env; pods_ready aiops'
+  [ "$status" -ne 0 ]
+}

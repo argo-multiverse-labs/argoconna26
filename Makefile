@@ -314,7 +314,7 @@ dryrun-summary-restore: ## ConfigMap dryrun-summary from .dryruns/summary.json, 
 WAIT_PLATFORM_S ?= 600
 
 .PHONY: wait-platform
-wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and every pod is Ready
+wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and every pod is Ready (pods_ready)
 	@$(CTX)
 	apps_ok() {
 	  k get applications -n "$$NS_ARGOCD" -o json | jq -e '(.items | length) > 0 and
@@ -323,8 +323,7 @@ wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and
 	pods_ok() {
 	  local ns
 	  for ns in "$$NS_ARGOCD" "$$NS_ROLLOUTS" "$$NS_MONITORING" "$$NS_DEMO" "$$NS_AIOPS"; do
-	    k get pods -n "$$ns" -o json | jq -e 'all(.items[] | select(.status.phase != "Succeeded");
-	      any(.status.conditions[]?; .type == "Ready" and .status == "True"))' >/dev/null || return 1
+	    pods_ready "$$ns" || return 1
 	  done
 	}
 	if ! wait_for "every Application Synced and Healthy" "$(WAIT_PLATFORM_S)" apps_ok; then

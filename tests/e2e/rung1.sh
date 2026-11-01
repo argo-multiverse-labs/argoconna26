@@ -219,10 +219,12 @@ main() {
   printf '%s\n' "--- comment $url" "$body" "---" | tee -a "$RUN_LOG" >&2
   assert_rca_comment "$body" "$expected" "$expected_ref"
 
-  step "bridge logged a timeline tool call"
+  # The stage label is the path only and gets " (refused)" on an error, so a line that ends at
+  # /timeline is a successful timeline call; /incidents does not carry the change events.
+  step "bridge logged a successful timeline tool call"
   k logs -n "$NS_AIOPS" deploy/bridge --since-time="$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ)" \
-    | tee -a "$RUN_LOG" | grep -qE '▸ holmes: GET /(timeline|incidents)' \
-    || fail "no cdevents-timeline tool call in the bridge log since T0"
+    | tee -a "$RUN_LOG" | grep -E '▸ holmes: GET /timeline$' >/dev/null \
+    || fail "no successful GET /timeline tool call in the bridge log since T0"
 
   step "pods by start time (O15)"
   wait_for "pods started before the cause read $CONFIG_HEALTHY, after it $CONFIG_ARMED" 60 \

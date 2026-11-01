@@ -259,6 +259,20 @@ check_fleet_disarmed() {
   log_info "fleet disarmed: all Ready pods at ${CONFIG_HEALTHY}, success rate ${rate}% >= ${slo}%"
 }
 
+# pods_ready NS : every pod in NS is Ready, except Succeeded pods and the Failed attempts of a Job
+# that has since completed (a retried Job keeps its failed first pod until the Job's TTL removes
+# it). A Failed pod with no Job owner, or of a Job that has not completed, still fails.
+pods_ready() {
+  local ns="$1" done_jobs
+  done_jobs="$(k get jobs -n "$ns" -o json | jq -c '[.items[]
+    | select(any(.status.conditions[]?; .type == "Complete" and .status == "True")) | .metadata.name]')" || return 1
+  k get pods -n "$ns" -o json | jq -e --argjson completed "$done_jobs" '
+    def retried_job_attempt: .status.phase == "Failed"
+      and any(.metadata.ownerReferences[]?; .kind == "Job" and (.name as $n | $completed | index($n)) != null);
+    all(.items[] | select(.status.phase != "Succeeded") | select(retried_job_attempt | not);
+        any(.status.conditions[]?; .type == "Ready" and .status == "True"))' >/dev/null
+}
+
 # ----------------------------------------------------- idempotent helm install
 # helm_ensure RELEASE CHART VERSION NAMESPACE VALUES_FILE...
 # `helm upgrade --install` writes a new release Secret on every run even when nothing
