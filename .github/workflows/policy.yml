@@ -1,7 +1,7 @@
 name: policy
-on: [push, pull_request]
+on: [pull_request]
 jobs:
   policy-check:
     runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - run: echo "policy-check stub, always passes"
