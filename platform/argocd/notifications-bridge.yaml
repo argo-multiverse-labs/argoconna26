@@ -19,8 +19,10 @@ notifications:
       - name: Authorization
         value: Bearer $bridge-token
       retryMax: 3
-      retryWaitMin: 1s
-      retryWaitMax: 5s
+      # time.Duration fields take nanoseconds as numbers; a string such as 1s fails to unmarshal
+      # and breaks every notifier, the cdevents one included.
+      retryWaitMin: 1000000000
+      retryWaitMax: 5000000000
 
   templates:
     template.bridge-app-degraded: |
