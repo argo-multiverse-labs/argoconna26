@@ -66,7 +66,7 @@ rs() { jq -c "$2" "$(grep -l "\"name\": *\"$1\"" "$STATE"/rulesets/*.json | head
   [ "$(rs argoconna26-tracked '.rules[0].type')" = '"pull_request"' ]
   [ "$(rs argoconna26-tracked '.rules[0].parameters.require_code_owner_review')" = "false" ]
   [ "$(rs argoconna26-tracked '.rules[0].parameters.required_approving_review_count')" = "0" ]
-  [ "$(rs argoconna26-tracked '.rules[0].parameters.require_last_push_approval')" = "true" ]
+  [ "$(rs argoconna26-tracked '.rules[0].parameters.require_last_push_approval')" = "false" ]
   [ "$(rs argoconna26-tracked '.rules[0].parameters.dismiss_stale_reviews_on_push')" = "true" ]
   [ "$(rs argoconna26-tracked '.conditions.ref_name.include|length')" = "2" ]
 }
@@ -76,10 +76,10 @@ rs() { jq -c "$2" "$(grep -l "\"name\": *\"$1\"" "$STATE"/rulesets/*.json | head
   [ "$(rs argoconna26-tracked '.rules[0].parameters.require_code_owner_review')" = "true" ]
 }
 
-@test "promote: promote/* creation and update, admin role bypass only" {
+@test "promote: promote/* creation, update and deletion, admin role bypass only" {
   "$SCRIPT" apply --minimal
   [ "$(rs argoconna26-promote '.conditions.ref_name.include')" = '["refs/heads/promote/*"]' ]
-  [ "$(rs argoconna26-promote '[.rules[].type]|sort')" = '["creation","update"]' ]
+  [ "$(rs argoconna26-promote '[.rules[].type]|sort')" = '["creation","deletion","update"]' ]
   [ "$(rs argoconna26-promote '.bypass_actors|length')" = "1" ]
 }
 
@@ -115,6 +115,60 @@ rs() { jq -c "$2" "$(grep -l "\"name\": *\"$1\"" "$STATE"/rulesets/*.json | head
   [ "$(rs argoconna26-spike '[.rules[].type]|sort')" = '["pull_request","required_status_checks"]' ]
   [ "$(rs argoconna26-spike '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks')" = '[{"context":"policy-check","integration_id":15368}]' ]
   [ "$(rs argoconna26-spike '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "true" ]
+  # the merge spike showed require_last_push_approval blocks every App-authored PR; off by default
+  [ "$(rs argoconna26-spike '.rules[]|select(.type=="pull_request")|.parameters.require_last_push_approval')" = "false" ]
+}
+
+@test "RULESET_LAST_PUSH_APPROVAL=true turns the last-push rule back on in tracked and spike" {
+  RULESET_LAST_PUSH_APPROVAL=true "$SCRIPT" apply --minimal
+  RULESET_LAST_PUSH_APPROVAL=true "$SCRIPT" apply --spike rehearse/merge-spike
+  [ "$(rs argoconna26-tracked '.rules[0].parameters.require_last_push_approval')" = "true" ]
+  [ "$(rs argoconna26-spike '.rules[]|select(.type=="pull_request")|.parameters.require_last_push_approval')" = "true" ]
+}
+
+@test "RULESET_LAST_PUSH_APPROVAL accepts only true or false" {
+  RULESET_LAST_PUSH_APPROVAL=yes run "$SCRIPT" apply --minimal
+  [ "$status" -ne 0 ]
+  [ "$(count)" -eq 0 ]
+}
+
+@test "tracked: no required status check unless --with-policy-check" {
+  "$SCRIPT" apply
+  [ "$(rs argoconna26-tracked '[.rules[].type]')" = '["pull_request"]' ]
+}
+
+@test "apply --with-policy-check adds the required policy-check to tracked, code-owner review on" {
+  "$SCRIPT" apply --with-policy-check
+  [ "$(rs argoconna26-tracked '[.rules[].type]|sort')" = '["pull_request","required_status_checks"]' ]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks')" = '[{"context":"policy-check","integration_id":15368}]' ]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "true" ]
+}
+
+@test "live_mode reads the tracked ruleset back, so verify-integrity's cleanup keeps what is live" {
+  "$SCRIPT" apply --minimal
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; load_env; BRANCHES=\$RULESET_BRANCHES; live_mode"
+  [ "$output" = "minimal" ]
+  "$SCRIPT" apply
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; load_env; BRANCHES=\$RULESET_BRANCHES; live_mode"
+  [ "$output" = "full" ]
+  "$SCRIPT" apply --with-policy-check
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; load_env; BRANCHES=\$RULESET_BRANCHES; live_mode"
+  [ "$output" = "policy-check" ]
+}
+
+@test "force_push_refused_by_integrity needs GH013 and the non-fast-forward rule text" {
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; force_push_refused_by_integrity <<<'remote: error: GH013: Repository rule violations found for refs/heads/x.
+remote: - Cannot force-push to this branch'"
+  [ "$status" -eq 0 ]
+  # a pull-request-only refusal (tracked, if the admin bypass were lost) is not the integrity rule
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; force_push_refused_by_integrity <<<'remote: error: GH013: Repository rule violations found for refs/heads/x.
+remote: - Changes must be made through a pull request.'"
+  [ "$status" -ne 0 ]
+  # a generic non-fast-forward rejection (no ruleset) does not count
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; force_push_refused_by_integrity <<<' ! [remote rejected] x -> x (non-fast-forward)'"
+  [ "$status" -ne 0 ]
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; force_push_refused_by_integrity <<<' ! [remote rejected] x -> x (protected branch hook declined)'"
+  [ "$status" -ne 0 ]
 }
 
 @test "apply --spike refuses a listed or non-rehearse branch" {

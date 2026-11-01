@@ -47,8 +47,10 @@ more than that, whatever the installation allows.
 (your fork of this repo), not "All repositories".
 
 **Private key:** on the App's page, "Generate a private key". Save the `.pem` **outside the
-repo**, mode 0600, for example `~/.config/<project>/agent.pem`. `*.pem` is gitignored and the
-pre-commit hook refuses it, but the safest place is somewhere that is not inside a checkout.
+repo**, mode 0600, for example `~/.config/<project>/agent.pem`. `*.pem` is gitignored, but the
+safest place is somewhere that is not inside a checkout. This repo ships no Git hook (hooks live
+in `.git/hooks/`, which a clone doesn't copy), so we recommend adding a local `gitleaks`
+pre-commit hook yourself (section 3).
 
 **IDs and where they go.** Copy these into `.env` (mode 0600, gitignored; `.env.example` has the
 blank keys):
@@ -89,9 +91,10 @@ from `RULESET_BRANCHES` and re-apply; the script does that for you in `verify-in
 
 - **Target:** the same branches.
 - **Rules:** `pull_request` with `required_approving_review_count: 0`,
-  `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: true`,
+  `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: false`,
   `required_review_thread_resolution: false`, and `require_code_owner_review` set to `false`
   with `apply --minimal` (CODEOWNERS does not exist yet) and `true` with a plain `apply`.
+  `apply --with-policy-check` also adds the required `policy-check` status (section 4).
 - **Bypass actors:** exactly one: the built-in **Repository role "Admin"** (`actor_type:
   RepositoryRole`, `actor_id: 5`, `bypass_mode: always`).
 
@@ -109,19 +112,63 @@ request.` That line is expected for the operator scripts and for build-side push
 admin login; it is GitHub recording the bypass, not an error. An App push to the same branch
 gets a 422 with "Repository rule violations found" instead.
 
-`require_last_push_approval` means a commit pushed after an approval doesn't keep the approval.
-It must not block an act-level PR that touches no code-owned file; the merge-mechanics spike on
-a scratch branch is how to confirm that (section 4).
+#### Why `require_last_push_approval` is off
 
-### `argoconna26-promote`: only the operator creates promotion branches
+`require_last_push_approval: true` means the most recent push to a PR must be approved by
+someone other than the person (or App) who pushed it. We started with it on, then tested it in
+the merge-mechanics spike (section 4) on a scratch branch with the full rule set: an
+App-authored PR with a green `policy-check` and **zero** required approvals stayed `BLOCKED`,
+because the App is both the author and the last pusher, so nobody had approved its last push.
+With only that one setting turned off, the same kind of PR went `CLEAN` and auto-merged in 20 s.
+With it on, the act level could never auto-merge anything, so the script now writes `false`.
+
+We originally wanted it so that a commit pushed to an approved `promote/*` branch would not keep
+the approval. Two other rules cover that case: `dismiss_stale_reviews_on_push: true` drops an
+approval when a new commit lands, and the `argoconna26-promote` ruleset stops anyone but the
+admin role from pushing to a promotion branch at all.
+
+`RULESET_LAST_PUSH_APPROVAL=true scripts/github-ruleset.sh apply ...` turns it back on, for
+example to repeat the test on your fork. The default is `false`.
+
+#### What GitHub enforces, and what the bridge enforces
+
+With these settings GitHub does **not** require a human approval on an ordinary PR to the
+tracked branch. What stops the agent at each level:
+
+| Level | What the agent may do | Enforced by |
+|---|---|---|
+| suggest | Comment only | The bridge (it opens no PR at this level) |
+| propose | Open a PR; a human merges it | The bridge never calls merge or auto-merge on this path (unit-tested). GitHub only requires that the change arrives by PR. |
+| act | Open a PR and turn on auto-merge | GitHub merges only when `policy-check` passes (`required_status_checks`, slice 5) |
+| any | Raise its own level | GitHub: `aiops/autonomy.yaml` is code-owned by the promotion team, and `require_code_owner_review` (plain `apply`) blocks the merge until a team member approves. The second spike test (section 4) checks this on a scratch branch. |
+| any | Push to, rewrite or delete the tracked branch, or touch `promote/*` | GitHub: the three rulesets (the App is never a bypass actor) |
+
+#### Parameters GitHub adds on its own
+
+`show` prints a few `pull_request` parameters the script never sends. They are server defaults:
+`require_extra_approval_for_unattributed_changes: true`, `required_reviewers: []`,
+`dismissal_restriction: {enabled: false}` and `allowed_merge_methods: [merge, squash, rebase]`.
+In the spike, an App-authored PR auto-merged with them in place, so they don't block the act
+level. You can ignore them when you compare `show` with this page.
+
+#### The script is the only source of these rules
+
+`apply` replaces each ruleset in full (`PUT` by id). Anything you change by hand in the GitHub
+UI is lost on the next `apply` or `verify-integrity`. Change the script (or the environment
+knobs above) instead. `verify-integrity` reads the tracked ruleset's current mode (minimal, full,
+or with the policy check) and restores that same mode when it cleans up.
+
+### `argoconna26-promote`: only the operator creates, moves or deletes promotion branches
 
 - **Target:** `refs/heads/promote/*`
-- **Rules:** `creation` and `update`
+- **Rules:** `creation`, `update` and `deletion`
 - **Bypass actors:** the same single Admin repository role.
 
 Why: promoting the agent to a higher autonomy level is a pull request from a `promote/*` branch.
 If the App could create or push to such a branch it could open its own promotion, or alter one
-after a human approved it. Only an admin can.
+after a human approved it. If it could delete one, it could close a pending promotion PR (GitHub
+closes a PR whose head branch is deleted). `update` does not cover deletion in GitHub rulesets,
+so `deletion` is listed on its own. Only an admin can do any of the three.
 
 ### Labels
 
@@ -145,10 +192,18 @@ gh api repos/<owner>/<repo> --jq '{allow_auto_merge, security_and_analysis}'
 |---|---|---|
 | `allow_auto_merge` | `true` | The act level asks GitHub to merge a PR when its required checks pass (`enablePullRequestAutoMerge`). Without it the call fails. |
 | Secret scanning | enabled | The repo is public; this alerts on a committed credential. |
-| Secret scanning push protection | enabled | Blocks the push itself when it contains a recognised token. Belt and braces with the local pre-commit hook and `gitleaks`. |
+| Secret scanning push protection | enabled | Blocks the push itself when it contains a recognised token format. It does not catch a private key file or an unrecognised token, so also run `gitleaks` locally (below). |
 
 Secret scanning is free on public repositories. On a private fork you need GitHub Advanced
 Security for these two.
+
+**Recommended: a local `gitleaks` pre-commit hook.** The repo does not ship one, and a clone
+does not copy `.git/hooks/`, so add it yourself in your clone:
+
+```bash
+printf '#!/bin/sh\nexec gitleaks git --pre-commit --staged --redact\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
 
 ## 4. What later slices add
 
@@ -159,13 +214,33 @@ These are not applied yet; the script's full mode and the preflight grow as the 
   autonomy file (`aiops/autonomy.yaml`) and of the files that grant the agent more power. Raising
   the agent's level then always needs a human from that team. You create the team (visible,
   Write permission on the repo) in the organization first.
-- **The required `policy-check` status:** a `required_status_checks` rule on the tracked
-  branches naming the context `policy-check` from GitHub Actions (`integration_id: 15368`).
-  The workflow that produces it lives on the tracked branch.
+- **The required `policy-check` status** (`apply --with-policy-check`): a
+  `required_status_checks` rule on the tracked branches naming the context `policy-check` from
+  GitHub Actions (`integration_id: 15368`). The workflow that produces it lives on the tracked
+  branch. Don't apply it before that workflow exists there, or every PR waits for a check that
+  never runs.
 - **Merge-mechanics spike** (`apply --spike rehearse/<name>` and `apply --spike-remove`): a
   temporary fourth ruleset, `argoconna26-spike`, with those full rules on one scratch
   `rehearse/*` branch only, to test the App's auto-merge before the real branches carry them.
   The script refuses a branch that is in `RULESET_BRANCHES` or doesn't start with `rehearse/`.
+
+  What the spike found (2026-11-01): GraphQL `enablePullRequestAutoMerge` works with the App's
+  installation token; a `policy-check` from GitHub Actions (`integration_id: 15368`) satisfies
+  the required-check rule on a bot PR; and `require_last_push_approval: true` blocks every
+  App-authored PR (section 2), so it is off. Two practical notes: a rule change on a PR that is
+  already waiting does not wake auto-merge up, so change rules before opening the PR; and a
+  stub workflow with a bare `pull_request:` key under an `on:` mapping never started a job for
+  us, while `on: [pull_request]` did.
+
+  The second spike test opens an App PR that raises `aiops/autonomy.yaml`, and expects it to
+  stay `REVIEW_REQUIRED` and `BLOCKED` with the check green. Before running it, check that the
+  block can only come from code-owner review:
+  `scripts/github-ruleset.sh show | jq '.[]|select(.name=="argoconna26-spike")|.rules[]|select(.type=="pull_request")|.parameters.require_last_push_approval'`
+  must print `false`.
+
+  `bridge.cli spike-pr` deletes its `agent/spike-*` head branch once the PR is merged or
+  closed (the repo keeps head branches after a merge). When you finish the spike, also check
+  that `git ls-remote origin 'refs/heads/agent/spike-*'` prints nothing.
 
 ## 5. Apply and verify
 
@@ -183,24 +258,40 @@ scripts/github-ruleset.sh verify-integrity     # force-push to a listed scratch 
 
 `apply` is idempotent: it looks a ruleset up by name and updates it in place by id.
 
-`verify-integrity` lists a throwaway `rehearse/integrity-<timestamp>` branch in the rulesets,
-pushes it, tries `git push --force` of its parent over it and expects GitHub to refuse
-(`GH013: Repository rule violations found`). It then unlists the branch, re-applies the rulesets
-and deletes the branch, even if the check failed.
+`verify-integrity` lists a throwaway `rehearse/integrity-<timestamp>` branch in the rulesets and
+pushes it. As a control, it then pushes one more commit as a fast-forward, which must succeed
+(the admin role bypasses `argoconna26-tracked`). Then it tries `git push --force` of the parent
+over it. The check passes only when GitHub refuses with `GH013: Repository rule violations
+found` **and** `Cannot force-push to this branch`: that rule is in `argoconna26-integrity` only,
+and the control shows `argoconna26-tracked` isn't the one refusing. It then unlists the branch,
+re-applies the rulesets in their current mode and deletes the branch, even if the check failed.
 
-The proof that the App itself is boxed in, run with the App credentials from `.env`:
+The proof that the App itself is boxed in. `bridge.cli` reads its settings from the environment
+only, so load `demo.env` and `.env` first. As the operator, push a promotion branch for it to
+attack, run the check, then delete that branch:
 
 ```bash
-cd bridge
-uv run python -m bridge.cli try-direct-push --repo <owner>/<repo> \
-  --branches build/demo,main --operator-ref promote/op-test-<timestamp>
+ts=$(date +%s)
+git push origin "$(git rev-parse origin/build/demo):refs/heads/promote/op-test-${ts}"
+bash -c '. scripts/common.sh; load_env; cd bridge; uv run python -m bridge.cli try-direct-push --operator-ref promote/op-test-'"${ts}"
+git push origin --delete "promote/op-test-${ts}"
 ```
 
-For each listed branch it makes a commit whose parent is the branch head (unreachable, so
-harmless), tries to move the branch to it, then tries to delete the branch. It tries to create
-`promote/app-test-<timestamp>`, and tries to move `--operator-ref`, a promotion branch the
-operator pushed beforehand (delete it afterwards). Every attempt must be refused. If one ever
-succeeds, the check undoes it and fails.
+`--repo` and `--branches` default to `REPO_SLUG` and `RULESET_BRANCHES`. (In zsh, keep the braces
+in `${ts}`: `$x:r` is a zsh modifier.)
+
+For each listed branch it makes a commit whose parent is the branch head and whose tree is the
+head's tree (so it changes no file), tries to move the branch to it, then tries to delete the
+branch. It tries to create `promote/app-test-<timestamp>`, and tries to move and then delete
+`--operator-ref`. Every attempt must be refused. The last line says who refused what, for
+example `7/7 attempts refused: 6 by a ruleset, 1 by the default-branch guard`.
+
+If an attempt ever succeeds, the check fails and undoes what it can: a deleted branch is
+re-created at its old commit, and a stray `promote/*` branch is deleted. A successful *move* of
+a branch under `argoconna26-integrity` cannot be undone by anyone, because moving it back is a
+force-push and that ruleset has no bypass. The branch then carries one probe commit with the
+same tree as its parent, so no file changed. To remove it, take the branch out of
+`RULESET_BRANCHES`, `apply`, reset the branch, and put it back. The check prints this step.
 
 Two refusals don't carry a ruleset message, and the check handles them explicitly:
 
@@ -216,7 +307,8 @@ Two refusals don't carry a ruleset message, and the check handles them explicitl
 
 | Thing | Value |
 |---|---|
-| Script | `scripts/github-ruleset.sh apply [--minimal \| --spike BRANCH \| --spike-remove]`, `show`, `verify-integrity` |
+| Script | `scripts/github-ruleset.sh apply [--minimal \| --with-policy-check \| --spike BRANCH \| --spike-remove]`, `show`, `verify-integrity` |
+| Script knob | `RULESET_LAST_PUSH_APPROVAL` (environment, `true` or `false`, default `false`) |
 | Admin role id used as the only bypass | `5` (repository role "Admin") |
 | Names the scripts read | `demo.env`: `REPO_SLUG`, `BOT_LOGIN`, `PROMOTION_TEAM`, `RULESET_BRANCHES`, `RULESET_INTEGRITY`, `RULESET_TRACKED`, `RULESET_PROMOTE`, `POLICY_CHECK_CONTEXT`, `POLICY_CHECK_INTEGRATION_ID` |
 | Secrets the bridge needs | `.env`: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_KEY_PATH` (key file outside the repo) |
