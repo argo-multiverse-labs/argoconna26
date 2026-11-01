@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: checkout
+  namespace: argocd
+spec:
+  project: default
+  revisionHistoryLimit: 25
+  source:
+    repoURL: https://github.com/argo-multiverse-labs/argoconna26.git
+    targetRevision: build/demo
+    path: apps/checkout
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

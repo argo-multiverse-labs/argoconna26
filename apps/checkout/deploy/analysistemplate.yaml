@@ -1,0 +1,26 @@
+# Background gate for the canary: success rate of the canary pods against the SLO target.
+# The numerator falls back to 0 when the canary has no 2xx series at all (every request
+# failed), so total failure reads as 0%, not as "no data". With no traffic yet the whole
+# result is empty, which counts as a pass.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: checkout-success-rate
+spec:
+  args:
+    - name: canary-hash
+    - name: slo-target
+  metrics:
+    - name: success-rate
+      interval: 10s
+      initialDelay: 10s
+      failureLimit: 1
+      consecutiveErrorLimit: 4
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] >= {{args.slo-target}}
+      failureCondition: len(result) > 0 && !isNaN(result[0]) && result[0] < {{args.slo-target}}
+      provider:
+        prometheus:
+          address: http://kps-prometheus.monitoring.svc:9090
+          query: |
+            100 * (sum(rate(checkout_requests_total{namespace="demo",pod=~"checkout-{{args.canary-hash}}-.*",code!~"5.."}[30s])) or vector(0))
+            / sum(rate(checkout_requests_total{namespace="demo",pod=~"checkout-{{args.canary-hash}}-.*"}[30s]))

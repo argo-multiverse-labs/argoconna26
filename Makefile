@@ -177,11 +177,22 @@ redeploy-sim: images ## Rebuild the cdevents-sim image and restart its pods when
 	$(ROOT)/scripts/ensure-image.sh --redeploy cdevents-sim
 
 ################################################################################
+# GitOps                                                                       #
+################################################################################
+
+.PHONY: gitops-bootstrap
+gitops-bootstrap: ## Apply the root app-of-apps (Argo CD then creates checkout, pricing, loadgen)
+	@$(LOCKED)
+	# the images must be on the nodes first: imagePullPolicy is Never
+	k create namespace "$$NS_DEMO" --dry-run=client -o yaml | k apply -f -
+	k apply -f $(ROOT)/gitops/root.yaml
+
+################################################################################
 # Build, rebuild, info, verification                                           #
 ################################################################################
 
 # Later slices insert targets at fixed positions; the final order is written once in Task 3.16.
-BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install
+BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install images gitops-bootstrap
 SNAP_DIR    := $(MAIN_ROOT)/.kube/idempotency
 
 .PHONY: build-all
