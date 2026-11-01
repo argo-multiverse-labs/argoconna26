@@ -46,11 +46,14 @@ def build_prompt(
     steps = [
         (f"Read the Argo Rollout `{app}` in namespace `{ns}`: its status message, its canary "
         "steps, the RolloutAborted event and the failed AnalysisRun measurements."),
-        (f"In Prometheus, compare `{app}_config_upstream_timeout_ms` by pod over the incident "
-        f"window (from {start} to {end}): canary pods against stable pods. Also look at "
-        f"`{app}_requests_total` by code and pod over the same window."),
-        (f"Read the `{app}-config` ConfigMap in `{ns}` and compare its values with what the "
-        "stable and canary pods reported."),
+        (f"In Prometheus, read `{app}_config_upstream_timeout_ms` by pod over the incident "
+        f"window (from {start} to {end}), and read each pod's start time from the cluster. "
+        "Group the pods by when they started relative to when the config change was synced "
+        "(from the Argo CD history), not by canary versus stable: a pod reads the config only "
+        "when it starts, so stable pods recreated after the abort carry the new value too. "
+        f"Also look at `{app}_requests_total` by code and pod over the same window."),
+        (f"Read the `{app}-config` ConfigMap in `{ns}` and compare its values with what each "
+        "pod reported."),
         (f"Query the delivery timeline with the `cdevents-timeline` toolset: "
         f"GET {timeline_url}?app={app}&since={lookback} (the 72 hours before the window ends). "
         "Find the change event for the commit that introduced the config value the canary "

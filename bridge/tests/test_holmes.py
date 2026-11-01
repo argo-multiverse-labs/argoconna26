@@ -260,6 +260,21 @@ def test_prompt_names_the_app_and_runbook_sources() -> None:
         assert needle in prompt, needle
 
 
+def test_prompt_compares_pods_by_start_time_not_canary_vs_stable() -> None:
+    # O15: stable pods Rollouts recreates after the abort read the armed value too, so
+    # the split is each pod's start time against the config change's sync, not
+    # canary against stable.
+    prompt = build_prompt(_hook(), live_window(RECEIVED))
+    runbook = prompt.split("Runbook.", 1)[1].split("Answer with", 1)[0]
+    lowered = " ".join(runbook.lower().split())
+    assert "start time" in lowered
+    assert "checkout_config_upstream_timeout_ms" in runbook
+    assert "synced" in lowered
+    assert "recreated" in lowered
+    assert "canary pods against stable pods" not in lowered
+    assert "stable and canary pods reported" not in lowered
+
+
 def test_prompt_does_not_hand_over_the_answer() -> None:
     prompt = build_prompt(_hook(), live_window(RECEIVED))
     assert "2000" not in prompt
