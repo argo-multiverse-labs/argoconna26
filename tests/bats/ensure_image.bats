@@ -5,7 +5,7 @@
 #   local_<ref>        the local image's config id          (exists = the image exists locally)
 #   node_<node>_<ref>  the id a node reports for that ref   (exists = the node has the image)
 #   pod_id             the imageID the running pod reports  (sha256:... or a repo digest)
-#   pod_resolves_<x>   what a node's crictl resolves that imageID to
+#   images_<node>      that node's `crictl images -o json` output (repo digests live there)
 #   log                every state-changing call, in order
 
 load helpers
@@ -32,6 +32,7 @@ case "$1" in
         printf "[{\"Config\":\"blobs/sha256/%s\",\"RepoTags\":[\"%s\"]}]" "${id#sha256:}" "$2" > "$d/manifest.json"
         tar -C "$d" -cf - manifest.json; rm -rf "$d" ;;
   exec) node="$2"; ref="${@: -1}"
+        if [ "$4" = images ]; then cat "$DATA/images_$node"; exit 0; fi
         f="$DATA/node_${node}_$(k "$ref")"
         [ -f "$f" ] || { echo "no such image" >&2; exit 1; }
         printf "{\"status\":{\"id\":\"%s\"}}\n" "$(cat "$f")" ;;
@@ -133,13 +134,24 @@ ensure()     { run bash -c "cd '$FIXTURE' && '$REPO_ROOT/scripts/ensure-image.sh
   [ "$status" -eq 0 ]
 }
 
-@test "assert-running resolves a repo-digest imageID through the node" {
+@test "assert-running resolves a repo-digest imageID through the node's image list" {
+  # crictl inspecti does not accept a repo digest; only the image list carries it
   set_local bridge:v0.1.0 sha256:aaa
   both_nodes bridge:v0.1.0 sha256:aaa
   printf 'docker.io/library/import-x@sha256:ddd' > "$DATA/pod_id"
-  set_node argoconna26-worker docker.io/library/import-x@sha256:ddd sha256:aaa
+  echo '{"images":[{"id":"sha256:zzz","repoDigests":["docker.io/library/other@sha256:eee"]},{"id":"sha256:aaa","repoDigests":["docker.io/library/import-x@sha256:ddd"]}]}' > "$DATA/images_argoconna26-worker"
   ensure --assert-running bridge
   [ "$status" -eq 0 ]
+}
+
+@test "assert-running fails when the pod's repo digest matches no image on the node" {
+  set_local bridge:v0.1.0 sha256:aaa
+  both_nodes bridge:v0.1.0 sha256:aaa
+  printf 'docker.io/library/import-x@sha256:ddd' > "$DATA/pod_id"
+  echo '{"images":[{"id":"sha256:zzz","repoDigests":["docker.io/library/other@sha256:eee"]}]}' > "$DATA/images_argoconna26-worker"
+  ensure --assert-running bridge
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"stale"* ]]
 }
 
 @test "assert-running fails on a stale pod" {

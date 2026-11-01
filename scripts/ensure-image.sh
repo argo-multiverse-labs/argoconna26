@@ -38,6 +38,17 @@ node_id() {
   docker exec "$1" crictl inspecti -o json "$2" 2>/dev/null | jq -r '.status.id // empty' 2>/dev/null || true
 }
 
+# pod_image_id NODE IMAGEID: the config-digest id for a pod's status imageID. Kubernetes reports
+# either that id itself or a repo digest (name@sha256:...). crictl inspecti doesn't take a
+# repo digest, so look it up in the node's image list.
+pod_image_id() {
+  local node="$1" img="$2"
+  if [[ "$img" == sha256:* ]]; then printf '%s\n' "$img"; return 0; fi
+  [[ -n "$img" ]] || return 0
+  docker exec "$node" crictl images -o json 2>/dev/null \
+    | jq -r --arg d "$img" '[.images[] | select((.repoDigests // []) | index($d)) | .id][0] // empty' 2>/dev/null || true
+}
+
 ensure_one() {
   local name="$1" tag="$2" ref build_ref local_sum node have missing=0 differs=0
   ref="$name:$tag"
@@ -87,7 +98,7 @@ assert_running() {
     pod="$(jq -r '.metadata.name' <<<"$line")"
     node="$(jq -r '.spec.nodeName' <<<"$line")"
     img="$(jq -r '.status.containerStatuses[0].imageID // empty' <<<"$line")"
-    if [[ "$img" == sha256:* ]]; then have="$img"; else have="$(node_id "$node" "$img")"; fi
+    have="$(pod_image_id "$node" "$img")"
     if [[ "$have" != "$want" ]]; then
       log_error "stale: pod $pod runs ${have:-an unknown image}, local $ref is $want"
       bad=1
