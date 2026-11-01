@@ -1,0 +1,9 @@
+# Stub for the merge-mechanics spike. Lives only on rehearse/merge-spike, never on build/demo or main.
+name: policy-check
+on:
+  pull_request:
+jobs:
+  policy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "policy-check stub: always passes"
