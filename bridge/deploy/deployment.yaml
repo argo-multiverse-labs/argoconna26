@@ -56,9 +56,6 @@ spec:
             - {name: ARGO_UI_URL, value: "http://127.0.0.1:30080"}
             - {name: GITHUB_APP_KEY_PATH, value: /etc/bridge/github/github-app-key}
             - {name: DRYRUN_SUMMARY_PATH, value: /etc/bridge/dryrun/summary.json}
-            # Check-only switch: every Git write becomes a "▸ dry: would ..." line. Task 3.15
-            # removes it for the real rung-1 run.
-            - {name: DRY_FORGE, value: "1"}
             # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
             - name: BRIDGE_WEBHOOK_TOKEN
               valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}

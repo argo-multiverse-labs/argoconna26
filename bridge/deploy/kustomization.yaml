@@ -6,7 +6,6 @@ resources:
   - deployment.yaml
   - service.yaml
   - servicemonitor.yaml
-# bridge/deploy/dev/holmes-stub.yaml (Task 3.10 Step 4) is deliberately not listed.
 images:
   - name: bridge
     newTag: v0.1.0
