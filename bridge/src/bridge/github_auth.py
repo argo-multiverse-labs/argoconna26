@@ -102,6 +102,6 @@ class InstallationTokenProvider:
                 raise GitHubAuthError(f"installation token request returned {r.status_code}")
             data = r.json()
             self._token = str(data["token"])
-            self._expires_at = datetime.fromisoformat(str(data["expires_at"]).replace("Z", "+00:00"))
+            self._expires_at = datetime.fromisoformat(str(data["expires_at"]))
             log.info("installation token minted; expires %s", self._expires_at.isoformat())
             return self._token

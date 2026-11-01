@@ -44,26 +44,26 @@ def build_prompt(
     ) or "  - (none sent)"
 
     steps = [
-        f"Read the Argo Rollout `{app}` in namespace `{ns}`: its status message, its canary "
-        "steps, the RolloutAborted event and the failed AnalysisRun measurements.",
-        f"In Prometheus, compare `{app}_config_upstream_timeout_ms` by pod over the incident "
+        (f"Read the Argo Rollout `{app}` in namespace `{ns}`: its status message, its canary "
+        "steps, the RolloutAborted event and the failed AnalysisRun measurements."),
+        (f"In Prometheus, compare `{app}_config_upstream_timeout_ms` by pod over the incident "
         f"window (from {start} to {end}): canary pods against stable pods. Also look at "
-        f"`{app}_requests_total` by code and pod over the same window.",
-        f"Read the `{app}-config` ConfigMap in `{ns}` and compare its values with what the "
-        "stable and canary pods reported.",
-        f"Query the delivery timeline with the `cdevents-timeline` toolset: "
+        f"`{app}_requests_total` by code and pod over the same window."),
+        (f"Read the `{app}-config` ConfigMap in `{ns}` and compare its values with what the "
+        "stable and canary pods reported."),
+        (f"Query the delivery timeline with the `cdevents-timeline` toolset: "
         f"GET {timeline_url}?app={app}&since={lookback} (the 72 hours before the window ends). "
         "Find the change event for the commit that introduced the config value the canary "
         "pods ran with. Note its change reference (`change_ref` in customData), its commit "
-        "SHA and how long before the abort it landed.",
-        f"Check whether that change also bumped the `{config_version_annotation}` annotation "
+        "SHA and how long before the abort it landed."),
+        (f"Check whether that change also bumped the `{config_version_annotation}` annotation "
         "on the pod template: compare the annotation on the stable and canary ReplicaSets, and "
         "the application's manifests at the synced revision in Argo CD. The change event does "
-        "not say.",
+        "not say."),
     ]
     if owner_labels_hint:
         steps.append(
-            f"Read the owner and SLO labels on the Rollout (`example.dev/owner`, "
+            "Read the owner and SLO labels on the Rollout (`example.dev/owner`, "
             "`slo.example.dev/success-rate`) and say whose SLO was at risk."
         )
     runbook = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

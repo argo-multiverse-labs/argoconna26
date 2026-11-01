@@ -49,7 +49,7 @@ def normalize_value(value: Any) -> str:
 
 def normalize_path(path: str) -> str:
     text = path.strip().replace("\\", "/")
-    while text.startswith("./") or text.startswith("/"):
+    while text.startswith(("./", "/")):
         text = text[2:] if text.startswith("./") else text[1:]
     return text
 

@@ -52,7 +52,7 @@ async def read_autonomy(forge: Forge, ref: str, path: str = AUTONOMY_PATH) -> tu
         return _failed(f"missing {path}")
     except ForgeError as exc:
         return _failed(f"forge error: {exc}")
-    except Exception as exc:  # the fail-safe must hold for anything
+    except Exception as exc:  # noqa: BLE001  the fail-safe must hold for anything
         return _failed(f"forge error: {type(exc).__name__}")
 
     try:
