@@ -26,10 +26,11 @@ gapi_admin() {
     -K <(printf 'user = "admin:%s"\n' "$GRAFANA_ADMIN_PASSWORD") "${GRAFANA_HOST_URL}${path}"
 }
 
-# token_works TOKEN : true when Grafana accepts it
+# token_works TOKEN : true when Grafana accepts it. /api/user, not /api/org: this Grafana lets
+# anonymous Viewers read /api/org, so a rejected token would still pass there.
 token_works() {
   curl -sf --max-time 15 -o /dev/null \
-    -K <(printf 'header = "Authorization: Bearer %s"\n' "$1") "${GRAFANA_HOST_URL}/api/org"
+    -K <(printf 'header = "Authorization: Bearer %s"\n' "$1") "${GRAFANA_HOST_URL}/api/user"
 }
 
 stored_token() { # prints the token in the Secret, or nothing

@@ -22,7 +22,8 @@ setup() {
     [ -z "$cfg" ] || cp "$cfg" "'"$STATE"'/last-cfg" 2>/dev/null || true
     case "$method $path" in
       "GET /api/health") echo "{}" ;;
-      "GET /api/org")
+      "GET /api/org") echo "{}" ;;   # anonymous Viewer access answers whatever token is sent
+      "GET /api/user")
         tok="$(sed -n "s/^header = \"Authorization: Bearer \(.*\)\"$/\1/p" "'"$STATE"'/last-cfg")"
         [ -f "'"$STATE"'/valid" ] && [ "$tok" = "$(cat "'"$STATE"'/valid")" ] && echo "{}" || exit 22 ;;
       "GET /api/serviceaccounts/search"*)

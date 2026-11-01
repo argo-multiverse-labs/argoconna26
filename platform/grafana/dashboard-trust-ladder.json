@@ -278,7 +278,23 @@
         "footer": {
           "show": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "renameByName": {},
+            "indexByName": {
+              "time": 0,
+              "type": 1,
+              "app": 2,
+              "commit": 3,
+              "summary": 4
+            }
+          }
+        }
+      ]
     },
     {
       "id": 3,
