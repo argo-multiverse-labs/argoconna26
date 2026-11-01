@@ -256,3 +256,19 @@ def test_changed_files_without_one_app_gives_no_app(store, files):
     e["customData"]["changed_files"] = files
     store.add(e)
     assert store.query()[0]["app"] is None
+
+
+def test_operator_change_event_carries_its_sha_as_revision(store):
+    """emit_change_event puts the SHA only in subject.id; /timeline must still show it."""
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    store.add(operator_change_merged(sha=sha))
+    [row] = store.query(delivery_only=True)
+    assert row["revision"] == sha
+    assert sha[:7] in row["summary"].split()
+
+
+def test_change_event_subject_that_is_not_a_sha_gives_no_revision(store):
+    e = operator_change_merged()
+    e["subject"]["id"] = "not-a-sha"
+    store.add(e)
+    assert store.query()[0]["revision"] is None

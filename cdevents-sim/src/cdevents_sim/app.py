@@ -15,7 +15,7 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from .grafana import GrafanaAnnotator
 from .seed import DEFAULT_FIXTURE, check_revisions, fixture_ids, seed
-from .store import Store, parse_since, short_type
+from .store import Store, parse_since, short_commit, short_type
 from .validate import ValidationError, validate_event
 
 
@@ -156,6 +156,7 @@ def create_app(
                 "time": int(datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00")).timestamp() * 1000),
                 "title": short_type(r["type"]),
                 "text": r["summary"],
+                "commit": short_commit(r["revision"]),
                 "tags": [t for t in (short_type(r["type"]), r["app"]) if t],
             }
             for r in rows

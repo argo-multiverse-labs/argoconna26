@@ -177,7 +177,7 @@
             "method": "GET",
             "data": ""
           },
-          "root_selector": "$map($, function($r){ {\"time\": $r.time, \"type\": $r.title, \"app\": $r.tags[1], \"sha\": $split($r.text, \" \")[-1], \"summary\": $r.text} })",
+          "root_selector": "$map($, function($r){ {\"time\": $r.time, \"type\": $r.title, \"app\": $r.tags[1], \"sha\": $r.commit, \"summary\": $r.text} })",
           "columns": [
             {
               "selector": "time",

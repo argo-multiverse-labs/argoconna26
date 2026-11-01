@@ -126,3 +126,22 @@ def test_operator_change_payload_on_timeline(client):
     assert r.status_code == 202, r.text
     rows = client.get("/timeline", params={"app": "checkout"}).json()
     assert [row["customData"]["change_ref"] for row in rows] == ["PR-242"]
+
+
+def test_annotations_carry_a_short_commit_column(client):
+    from test_store import operator_change_merged
+
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    assert client.post("/events", json=operator_change_merged(sha=sha)).status_code == 202
+    [row] = client.get("/annotations").json()
+    assert row["commit"] == sha[:7]
+
+
+def test_annotations_commit_is_empty_without_a_revision(client):
+    from test_store import operator_change_merged
+
+    e = operator_change_merged()
+    e["subject"]["id"] = "not-a-sha"
+    client.post("/events", json=e)
+    [row] = client.get("/annotations").json()
+    assert row["commit"] == ""

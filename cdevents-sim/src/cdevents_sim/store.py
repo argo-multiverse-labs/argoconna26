@@ -17,6 +17,7 @@ from .validate import CUSTOM_PREFIX, parse_timestamp
 _REL_RE = re.compile(r"^-(\d+)([smhd])$")
 _UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _WORD_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,31}$")
 _LEVELS = {"suggest", "propose", "act"}
 _APP_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -110,7 +111,19 @@ def extract_revision(event: dict) -> str | None:
     sid = _str(subj.get("id"))
     if sid and "/incident/" in sid:
         return sid.split("/incident/", 1)[1] or None
+    # A change event from a forge or the operator scripts (Δ28) names its commit only in
+    # subject.id. Accept a full SHA there and nothing else.
+    ctx = event.get("context") or {}
+    if sid and short_type(str(ctx.get("type", ""))).startswith("change.") and _FULL_SHA_RE.match(sid):
+        return sid
     return None
+
+
+def short_commit(revision: str | None) -> str:
+    """The 7-character commit for a panel column, or "" when the revision is not a SHA."""
+    if isinstance(revision, str) and _SHA_RE.match(revision):
+        return revision[:7].lower()
+    return ""
 
 
 @dataclass
