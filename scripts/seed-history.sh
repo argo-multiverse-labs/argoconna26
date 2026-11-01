@@ -3,8 +3,10 @@
 # (Review Focus 1), then makes two commits:
 #   PR-242  tune the upstream timeout 2000 -> 200, config-version untouched (the canary is pre-armed)
 #   docs    one harmless commit that touches only apps/pricing/README.md
-# It stops before the bump. Prints (or, under STAGE=1, writes to .operator/last-seed):
+# It stops before the bump. Prints (or, under STAGE=1, writes to .operator/last-rearm, the
+# file rearm uses, so a reader always finds the latest cause there):
 #   cause: <PR-242 sha>   change_ref: CHG-XXXXXX
+# The bump that follows (make bump) writes its own line to .operator/last-bump.
 # STAGE=1: one short line per beat, no raw SHAs on the terminal.
 set -euo pipefail
 # shellcheck source=scripts/git-ops.sh
@@ -32,7 +34,7 @@ main() {
   load_env
   require_context
   cluster_lock
-  machine_init last-seed
+  machine_init last-rearm
   op_sync
   op_disarm
   op_sync

@@ -9,6 +9,9 @@
 # Everything works in $OPERATOR_DIR, a separate HTTPS clone of the tracked branch, never in
 # the main checkout. Its credential helper is `gh auth git-credential`, which uses Luke's gh
 # login or GH_TOKEN when that is set, so a push never depends on an unlocked SSH agent (P13).
+# Operator git runs without the user's global and system git config, so a global
+# `url.<ssh>.insteadOf https://github.com/` can't turn the HTTPS remote back into SSH;
+# op_sync also checks the fetch and push URLs it resolves to.
 # Argo CD is driven with kubectl only: no argocd CLI session (it expires after 24 h).
 #
 # Overrides for tests and forks: OPERATOR_REMOTE (clone URL), ENSURE_IMAGE (default
@@ -25,8 +28,41 @@ ENSURE_IMAGE="${ENSURE_IMAGE:-$GIT_OPS_DIR/ensure-image.sh}"
 PUSH_ATTEMPTS=3
 
 # ---------------------------------------------------------------- plumbing
-_og() { git -C "$OPERATOR_DIR" "$@"; }
-_ogq() { quiet git -C "$OPERATOR_DIR" "$@"; } # silent unless it fails
+# git for the operator clone: no global or system config (no insteadOf rewrites, no global
+# hooksPath or credential helpers). The clone's own config carries the identity and helper.
+_opgit() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 git "$@"; }
+_og() { _opgit -C "$OPERATOR_DIR" "$@"; }
+_ogq() { quiet _opgit -C "$OPERATOR_DIR" "$@"; } # silent unless it fails
+
+op_expected_remote() { printf '%s' "${OPERATOR_REMOTE:-https://github.com/${REPO_SLUG}.git}"; }
+
+# The user's commit identity, copied into the clone, since operator git ignores the global config.
+_op_identity() {
+  local key val
+  for key in user.name user.email; do
+    [[ -n "$(_og config --local --get "$key" 2>/dev/null || true)" ]] && continue
+    val="$(git config --global --get "$key" 2>/dev/null || true)"
+    [[ -n "$val" ]] || die "operator clone: no $key in the clone or the global git config"
+    _og config --local "$key" "$val"
+  done
+}
+
+# Both URLs git will really use for origin must be the expected remote (HTTPS on GitHub).
+op_check_remote() {
+  local want fetch push
+  want="$(op_expected_remote)"
+  fetch="$(_og ls-remote --get-url origin 2>/dev/null || true)"
+  push="$(_og remote get-url --push origin 2>/dev/null || true)"
+  [[ "$fetch" == "$want" && "$push" == "$want" ]] \
+    || die "operator clone: origin resolves to '$fetch' (fetch) and '$push' (push), expected $want"
+}
+
+# Throw away local commits that never reached origin (a failed or interrupted push), so
+# the next script doesn't push them along with its own.
+op_reset_to_origin() {
+  _ogq fetch --quiet origin "$TRACKED_BRANCH" || return 1
+  _ogq reset --quiet --hard "refs/remotes/origin/$TRACKED_BRANCH"
+}
 
 # A path relative to the operator clone, unless it is already absolute.
 op_path() {
@@ -52,12 +88,14 @@ op_require_configured() {
 # pre-commit hook from PRECOMMIT_HOOK_SRC (warn and skip when it is unset or missing).
 op_clone() {
   [[ -n "${OPERATOR_DIR:-}" ]] || die "OPERATOR_DIR is not set"
-  local remote="${OPERATOR_REMOTE:-https://github.com/${REPO_SLUG}.git}" hook
+  local remote hook
+  remote="$(op_expected_remote)"
   if [[ ! -d "$OPERATOR_DIR/.git" ]]; then
     mkdir -p "$(dirname "$OPERATOR_DIR")"
-    quiet git clone --quiet --branch "$TRACKED_BRANCH" "$remote" "$OPERATOR_DIR"
+    quiet _opgit clone --quiet --branch "$TRACKED_BRANCH" "$remote" "$OPERATOR_DIR"
   fi
   op_require_configured
+  _op_identity
   # An empty first value resets any helper inherited from the global config.
   _og config --local --unset-all credential.https://github.com.helper 2>/dev/null || true
   _og config --local --add credential.https://github.com.helper ''
@@ -72,15 +110,25 @@ op_clone() {
   fi
 }
 
-# op_sync : clone if missing; refuse a dirty tree, the wrong branch or a missing hook; pull --ff-only.
+# op_sync : clone if missing; refuse a dirty tree, the wrong branch, a missing hook or a
+# non-HTTPS remote; drop unpushed local commits; fast-forward to origin.
 op_sync() {
+  local ahead
   [[ -d "${OPERATOR_DIR:-}/.git" ]] || op_clone
   op_require_configured
   (cd "$OPERATOR_DIR" && require_branch "$TRACKED_BRANCH") || return 1
   (cd "$OPERATOR_DIR" && require_clean_tree) || return 1
   [[ -x "$OPERATOR_DIR/.git/hooks/pre-commit" ]] \
     || die "pre-commit hook is missing in the operator clone; set PRECOMMIT_HOOK_SRC and run: make operator-clone"
-  _ogq pull --ff-only --quiet origin "$TRACKED_BRANCH"
+  op_check_remote
+  _op_identity
+  _ogq fetch --quiet origin "$TRACKED_BRANCH"
+  ahead="$(_og rev-list --count "refs/remotes/origin/$TRACKED_BRANCH..HEAD")"
+  if ((ahead > 0)); then
+    log_warn "dropped unpushed commit(s): $ahead"
+    _ogq reset --quiet --hard "refs/remotes/origin/$TRACKED_BRANCH"
+  fi
+  _ogq merge --ff-only --quiet "refs/remotes/origin/$TRACKED_BRANCH"
 }
 
 # ------------------------------------------------------------ commit and push
@@ -95,10 +143,13 @@ op_push() {
     ((attempt < PUSH_ATTEMPTS)) || break
     if ! _ogq pull --rebase --quiet origin "$TRACKED_BRANCH"; then
       _og rebase --abort >/dev/null 2>&1 || true
+      op_reset_to_origin || true
       die "could not rebase onto origin/$TRACKED_BRANCH"
     fi
   done
-  printf '%s\n' "$out" >&2
+  # Git's own output (remote URL, ref lines) stays off the stage terminal.
+  if stage_on; then _stage_keep "$out"; else printf '%s\n' "$out" >&2; fi
+  op_reset_to_origin || true
   die "push to $TRACKED_BRANCH failed after $PUSH_ATTEMPTS attempts"
 }
 
@@ -145,6 +196,19 @@ _app_health_is() { # APP STATE
 # op_wait_health APP STATE [TIMEOUT_S]
 op_wait_health() {
   stage_wait "$1 $2" "${3:-${HEALTH_WAIT_S:-300}}" _app_health_is "$1" "$2"
+}
+
+# op_wait_fleet_disarmed [TIMEOUT_S] : wait until check_fleet_disarmed passes (every Ready
+# pod reads CONFIG_HEALTHY and the 1 m success rate meets the SLO; the rate can hold an
+# earlier incident's errors for up to a minute). On timeout, print the reason and exit 4.
+op_wait_fleet_disarmed() {
+  local rc=0
+  FLEET_WAIT_S="${FLEET_WAIT_S:-10}" stage_wait "fleet disarmed" "${1:-${FLEET_DISARMED_WAIT_S:-150}}" \
+    check_fleet_disarmed || rc=$?
+  if ((rc != 0)); then
+    FLEET_WAIT_S=1 check_fleet_disarmed >/dev/null || true
+    exit "$rc"
+  fi
 }
 
 # ------------------------------------------------------------ YAML values
@@ -214,6 +278,12 @@ op_disarm() {
     beats+=("pushed: image $image")
   fi
   if ((${#files[@]} == 0)); then
+    # Git is disarmed, but an earlier disarm or fix may not have finished rolling out
+    # (Review Focus 1): wait until the cluster is Healthy and no Ready pod reads the armed value.
+    if ((!git_only)); then
+      op_wait_health checkout Healthy
+      op_wait_fleet_disarmed
+    fi
     beat "already disarmed"
     return 0
   fi
@@ -258,7 +328,7 @@ _git_ops_main() {
       for arg in "$@"; do [[ "$arg" == "--git-only" ]] && git_only=1; done
       ((git_only)) || require_context
       cluster_lock
-      machine_init last-run
+      machine_init last-disarm
       op_disarm "$@"
       [[ -z "${DISARM_SHA:-}" ]] || machine_line disarm "$DISARM_SHA"
       ;;

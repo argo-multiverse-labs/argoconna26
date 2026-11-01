@@ -250,10 +250,12 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
 }
 
 @test "STAGE=1 output: every line <= STAGE_COLS and no cause: line" {
-  export STAGE=1 ENSURE_IMAGE="$STUBS/ensure-image.sh"
+  export STAGE=1 STAGE_STRICT=1 ENSURE_IMAGE="$STUBS/ensure-image.sh"
   run_stage() {
+    local want=0
+    if [[ "$1" == --status ]]; then want="$2"; shift 2; fi
     run --separate-stderr ops_run "$@"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq "$want" ]
     local line
     for line in "${lines[@]}" ; do
       [ "${#line}" -le "$STAGE_COLS" ] || { echo "stdout too long (${#line}): $line" >&2; return 1; }
@@ -271,8 +273,15 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   [ "${#lines[@]}" -ge 3 ]
   run_stage "$REPO_ROOT/scripts/naive-revert.sh"
   [[ "$output" == *"green: image back to v1.4.1"* ]]
+  # the refusals have short stage forms too
+  run_stage --status 7 "$REPO_ROOT/scripts/rearm.sh"
+  [ "$stderr" = "refused: already armed" ]
   run_stage "$REPO_ROOT/scripts/fix.sh"
   [[ "$output" == *"pushed: config 2000, cv 8"* ]]
+  run_stage --status 1 "$REPO_ROOT/scripts/naive-revert.sh"
+  [ "$stderr" = "refused: not an image bump" ]
+  run_stage --status 1 "$REPO_ROOT/scripts/fix.sh"
+  [ "$stderr" = "refused: already fixed" ]
   run_stage "$REPO_ROOT/scripts/git-ops.sh" bump
   [[ "$output" == *"pushed: image v1.4.3"* ]]
   run_stage "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
@@ -301,4 +310,110 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   grep -qE '^change_ref: CHG-[A-Z2-7]{6}$' "$f"
   [ "$(sed -n 's/^bump: //p' "$f")" = "$(origin_tip)" ]
   [[ "$output" != *cause* && "$output" != *CHG-* ]]
+}
+
+@test "seed waits for Healthy even when the tip is already disarmed" {
+  # An earlier disarm or fix pushed its commit but never saw the rollout finish.
+  echo Degraded > "$STUBS/FORCE_HEALTH"
+  export HEALTH_WAIT_S=2
+  tip="$(origin_tip)"
+  run ops_run "$REPO_ROOT/scripts/seed-history.sh"
+  [ "$status" -eq 4 ]
+  [ "$(origin_tip)" = "$tip" ]
+  [[ "$(origin_log)" != *"PR-242"* ]]
+}
+
+@test "seed refuses while a Ready pod still reads the armed value on a disarmed tip" {
+  echo 200 > "$STUBS/FORCE_GAUGE"
+  tip="$(origin_tip)"
+  run ops_run "$REPO_ROOT/scripts/seed-history.sh"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"reports UPSTREAM_TIMEOUT_MS=200"* ]]
+  [ "$(origin_tip)" = "$tip" ]
+}
+
+@test "disarm on a disarmed tip checks health and the fleet, and pushes nothing" {
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm
+  [ "$status" -eq 0 ]
+  grep -q '^HEALTH checkout' "$CALLS"
+  grep -q '^FLEET' "$CALLS"
+  ! grep -q '^PUSH' "$CALLS"
+}
+
+@test "STAGE=1 fix, disarm and naive-revert leave .operator/last-run alone" {
+  export STAGE=1
+  mkdir -p "$FIXTURE/.operator"
+  printf 'RUN_TS=20261101T000000Z\nRUN_MONO=123\n' > "$FIXTURE/.operator/last-run"
+  cp "$FIXTURE/.operator/last-run" "$BATS_TEST_TMPDIR/last-run.orig"
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null 2>&1
+  ops_run "$REPO_ROOT/scripts/naive-revert.sh" >/dev/null 2>&1
+  ops_run "$REPO_ROOT/scripts/fix.sh" >/dev/null 2>&1
+  ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1 >/dev/null 2>&1
+  cmp "$FIXTURE/.operator/last-run" "$BATS_TEST_TMPDIR/last-run.orig"
+  grep -qE '^revert: [0-9a-f]{40}$' "$FIXTURE/.operator/last-revert"
+  grep -qE '^fix: [0-9a-f]{40}$' "$FIXTURE/.operator/last-fix"
+  grep -qE '^disarm: [0-9a-f]{40}$' "$FIXTURE/.operator/last-disarm"
+}
+
+@test "STAGE=1 seed writes cause and change_ref to .operator/last-rearm" {
+  export STAGE=1
+  run --separate-stderr ops_run "$REPO_ROOT/scripts/seed-history.sh"
+  [ "$status" -eq 0 ]
+  f="$FIXTURE/.operator/last-rearm"
+  grep -qE '^cause: [0-9a-f]{40}$' "$f"
+  grep -qE '^change_ref: CHG-[A-Z2-7]{6}$' "$f"
+  "$REAL_GIT" --git-dir="$ORIGIN" log -1 --format=%s "$(sed -n 's/^cause: //p' "$f")" | grep -q '^PR-242'
+}
+
+@test "naive-revert refuses when HEAD is its own revert" {
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null
+  NAIVE_STOP_AT_GREEN=1 ops_run "$REPO_ROOT/scripts/naive-revert.sh" >/dev/null
+  tip="$(origin_tip)"
+  run ops_run "$REPO_ROOT/scripts/naive-revert.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HEAD is not an image bump"* ]]
+  [ "$(origin_tip)" = "$tip" ]
+}
+
+@test "naive-revert refuses when HEAD is a disarm that only pins the image" {
+  ops_run "$REPO_ROOT/scripts/git-ops.sh" bump >/dev/null
+  ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1 >/dev/null
+  [ "$(commit_files refs/heads/build/demo)" = "$KUST " ]
+  tip="$(origin_tip)"
+  run ops_run "$REPO_ROOT/scripts/naive-revert.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HEAD is not an image bump"* ]]
+  [ "$(origin_tip)" = "$tip" ]
+}
+
+@test "naive-revert refuses when the revert would land on a tag that has the CVE fix" {
+  arm_origin
+  ops_run "$REPO_ROOT/scripts/git-ops.sh" bump >/dev/null     # v1.4.2, the CVE release
+  ops_run "$REPO_ROOT/scripts/git-ops.sh" bump >/dev/null     # v1.4.3
+  tip="$(origin_tip)"
+  run ops_run "$REPO_ROOT/scripts/naive-revert.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"lands on v1.4.2, which already has the CVE fix"* ]]
+  [[ "$output" != *"security fix is gone"* ]]
+  [ "$(origin_tip)" = "$tip" ]
+}
+
+@test "naive-revert's revert commit goes through the pre-commit hook" {
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null
+  printf '#!/bin/sh\necho HOOK >> "%s"\n' "$CALLS" > "$OP/.git/hooks/pre-commit"
+  : > "$CALLS"
+  export NAIVE_STOP_AT_GREEN=1
+  run ops_run "$REPO_ROOT/scripts/naive-revert.sh"
+  [ "$status" -eq 0 ]
+  [ "$(grep -E '^(HOOK|PUSH)$' "$CALLS" | head -2 | tr '\n' ' ')" = "HOOK PUSH " ]
+  "$REAL_GIT" --git-dir="$ORIGIN" log -1 --format=%B refs/heads/build/demo | grep -q '^This reverts commit [0-9a-f]\{40\}\.$'
+}
+
+@test "STAGE_STRICT=1 makes an over-long beat fail instead of being cut" {
+  run --separate-stderr in_ops "STAGE=1 STAGE_STRICT=1 beat '$(printf 'x%.0s' $(seq 1 $((STAGE_COLS + 1))))'; echo after"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *after* ]]
+  run --separate-stderr in_ops "STAGE=1 beat '$(printf 'x%.0s' $(seq 1 $((STAGE_COLS + 1))))'"
+  [ "$status" -eq 0 ]
+  [ "${#output}" -eq "$STAGE_COLS" ]
 }

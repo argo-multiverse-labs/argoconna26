@@ -17,9 +17,12 @@ COMMON_ROOT="$(dirname "$COMMON_SH_DIR")"
 CLUSTER_LOCK_FD=200
 
 # ---------------------------------------------------------------- logging
-log_info()  { printf '%s\n' "$*" >&2; }
-log_warn()  { printf 'warn: %s\n' "$*" >&2; }
-log_error() { printf 'error: %s\n' "$*" >&2; }
+# Under STAGE=1 (P19) a log line longer than STAGE_COLS is cut to fit the stage pane, and
+# the full line goes to <main checkout>/.operator/stage.log, so nothing is lost.
+_log()      { _stage_fit "$1$2" >&2; }
+log_info()  { _log '' "$*"; }
+log_warn()  { _log 'warn: ' "$*"; }
+log_error() { _log 'error: ' "$*"; }
 die()       { log_error "$*"; exit 1; }
 
 # ------------------------------------------------------------- repo paths
@@ -31,14 +34,15 @@ main_root() {
 # ---------------------------------------------------------------- load_env
 # Order of precedence for TOOLS_BIN: caller's environment, then .env, then demo.env.
 # An empty value counts as unset, so a blank `TOOLS_BIN=` never puts "" (the cwd) on PATH.
-# Everything else: .env over demo.env over versions.env, except the cluster guard
-# (CLUSTER_NAME, CLUSTER_CONTEXT, KUBECONFIG_REL): those come from demo.env only, and
-# load_env returns 3 when .env changes them.
+# Everything else: .env over demo.env over versions.env, except the guard variables: the
+# cluster guard (CLUSTER_NAME, CLUSTER_CONTEXT, KUBECONFIG_REL) and the push target
+# (TRACKED_BRANCH, REPO_SLUG, and OPERATOR_REMOTE, which only a caller's environment may
+# set, for tests). .env can't change them: load_env returns 3 when it tries.
 # Never echoes values.
 load_env() {
   local caller_tools_bin="${TOOLS_BIN:-}" root envfile demo_tools_bin guard_vars guard_var
   local -A guard=()
-  guard_vars=(CLUSTER_NAME CLUSTER_CONTEXT KUBECONFIG_REL)
+  guard_vars=(CLUSTER_NAME CLUSTER_CONTEXT KUBECONFIG_REL TRACKED_BRANCH REPO_SLUG OPERATOR_REMOTE)
   set -a
   # shellcheck disable=SC1091
   . "$COMMON_ROOT/versions.env"
@@ -57,7 +61,7 @@ load_env() {
   fi
   for guard_var in "${guard_vars[@]}"; do
     if [[ "${!guard_var:-}" != "${guard[$guard_var]}" ]]; then
-      log_error "refusing: .env sets $guard_var; the cluster guard comes from demo.env only"
+      log_error "refusing: .env sets $guard_var; it comes from demo.env (or the caller) only"
       return 3
     fi
   done
@@ -294,11 +298,49 @@ helm_ensure() {
 # the terminal. Those go to <main checkout>/.operator/<file> for the e2e scripts instead.
 stage_on() { [[ "${STAGE:-0}" == "1" ]]; }
 
-# beat TEXT... : one line on stdout, clipped to STAGE_COLS under STAGE=1.
+# _stage_fit LINE : print LINE; under STAGE=1, cut to STAGE_COLS, keeping the full line in
+# .operator/stage.log when it had to be cut.
+_stage_fit() {
+  local line="$1" cols="${STAGE_COLS:-30}"
+  if stage_on && ((${#line} > cols)); then
+    _stage_keep "$line"
+    line="${line:0:cols}"
+  fi
+  printf '%s\n' "$line"
+}
+
+_stage_keep() { # TEXT : append to <main checkout>/.operator/stage.log, best effort
+  local root
+  root="$(main_root 2>/dev/null)" || return 0
+  mkdir -p "$root/.operator" 2>/dev/null || return 0
+  printf '%s\n' "$1" >>"$root/.operator/stage.log" 2>/dev/null || true
+}
+
+# beat TEXT... : one line on stdout. A beat is stage text written on purpose, so under
+# STAGE=1 a beat longer than STAGE_COLS is a bug: with STAGE_STRICT=1 (the tests) it fails;
+# otherwise it is cut to fit and the full line kept in .operator/stage.log.
 beat() {
   local text="$*"
-  if stage_on; then text="${text:0:${STAGE_COLS:-30}}"; fi
-  printf '%s\n' "$text"
+  if stage_on && ((${#text} > ${STAGE_COLS:-30})) && [[ "${STAGE_STRICT:-0}" == "1" ]]; then
+    printf 'beat over %s columns: %s\n' "${STAGE_COLS:-30}" "$text" >&2
+    return 1
+  fi
+  _stage_fit "$text"
+}
+
+# refuse CODE SHORT FULL... : exit CODE with a reason. Under STAGE=1 the reason is the
+# one line "refused: SHORT" (SHORT is at most STAGE_COLS - 9 characters); otherwise
+# "error: FULL".
+refuse() {
+  local code="$1" short="$2"
+  shift 2
+  if stage_on; then
+    _stage_keep "refused: $*"
+    _stage_fit "refused: $short" >&2
+  else
+    log_error "$*"
+  fi
+  exit "$code"
 }
 
 # machine_init NAME : choose where machine lines go. Under STAGE=1 the file

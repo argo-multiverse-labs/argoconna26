@@ -10,10 +10,10 @@ main() {
   load_env
   require_context
   cluster_lock
-  machine_init last-run
+  machine_init last-fix
   op_sync
   if [[ "$(config_value_get)" == "$CONFIG_HEALTHY" ]]; then
-    die "fix: ${CONFIG_KEY} is already ${CONFIG_HEALTHY}; nothing to fix"
+    refuse 1 "already fixed" "fix: ${CONFIG_KEY} is already ${CONFIG_HEALTHY}; nothing to fix"
   fi
   config_value_set "$CONFIG_HEALTHY"
   cv="$(config_version_bump)"

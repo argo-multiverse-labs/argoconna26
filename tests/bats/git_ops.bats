@@ -191,3 +191,56 @@ SCRIPT
   [ "$status" -eq 0 ]
   [ "$("$REAL_GIT" -C "$OP" config --local --get-all credential.https://github.com.helper | wc -l)" -eq 2 ]
 }
+
+@test "operator git ignores a global insteadOf, so pushes keep the clone's own remote" {
+  # Luke's ~/.gitconfig rewrites https://github.com/ to SSH; here a global rule rewrites the
+  # fixture's origin to a path that does not exist.
+  export HOME="$BATS_TEST_TMPDIR/home" XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/home/.config"
+  mkdir -p "$HOME"
+  printf '[url "%s"]\n\tinsteadOf = %s\n[user]\n\tname = t\n\temail = t@example.invalid\n' \
+    "$BATS_TEST_TMPDIR/nowhere.git" "$ORIGIN" > "$HOME/.gitconfig"
+  # the rule is live for plain git
+  [ "$("$REAL_GIT" -C "$OP" remote get-url --push origin)" = "$BATS_TEST_TMPDIR/nowhere.git" ]
+  run in_ops 'op_sync && _og remote get-url --push origin && config_value_set 200 && op_commit_push "via own remote" apps/checkout/config/checkout-config.yaml'
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$ORIGIN" ]
+  [ "$(origin_log | head -1)" = "via own remote" ]
+}
+
+@test "op_sync refuses an origin whose push URL is not the expected remote" {
+  "$REAL_GIT" -C "$OP" config remote.origin.pushurl git@github.com:someone/else.git
+  run in_ops 'op_sync'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"expected $ORIGIN"* ]]
+}
+
+@test "op_sync drops a local commit that never reached origin" {
+  echo stale > "$OP/stale.txt"
+  "$REAL_GIT" -C "$OP" add stale.txt
+  "$REAL_GIT" -C "$OP" commit -q -m "unpushed bump"
+  run in_ops 'op_sync && config_value_set 200 && op_commit_push "fresh" apps/checkout/config/checkout-config.yaml'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dropped unpushed commit"* ]]
+  run origin_log
+  [ "${lines[0]}" = "fresh" ]
+  [ "${lines[1]}" = "seed apps" ]
+}
+
+@test "a push that fails for good leaves the clone at origin's tip" {
+  printf '#!/bin/sh\nexit 1\n' > "$ORIGIN/hooks/pre-receive"
+  chmod +x "$ORIGIN/hooks/pre-receive"
+  run in_ops 'config_value_set 200; op_commit_push "set 200" apps/checkout/config/checkout-config.yaml'
+  [ "$status" -ne 0 ]
+  [ "$(op_head)" = "$(origin_tip)" ]
+  [ -z "$("$REAL_GIT" -C "$OP" status --porcelain)" ]
+}
+
+@test "load_env refuses an .env that changes the push target" {
+  local var
+  for var in "TRACKED_BRANCH=main" "REPO_SLUG=someone/else" "OPERATOR_REMOTE=https://example.invalid/x.git"; do
+    printf 'OPERATOR_DIR=%s\n%s\n' "$OP" "$var" > "$FIXTURE/.env"
+    run in_ops 'echo loaded'
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"refusing: .env sets ${var%%=*}"* ]]
+  done
+}

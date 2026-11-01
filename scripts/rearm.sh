@@ -17,8 +17,7 @@ main() {
   machine_init last-rearm
   op_sync
   if [[ "$(config_value_get)" == "$CONFIG_ARMED" ]]; then
-    log_error "rearm: already armed; run make disarm first"
-    return 7
+    refuse 7 "already armed" "rearm: already armed; run make disarm first"
   fi
 
   n="$(( $(_og log --format=%H --grep='^Demo-Rearm: ' | wc -l) + 1 ))"

@@ -9,7 +9,9 @@
 # The kubectl stub plays Argo CD for the tracked branch's tip: sync revision is the tip,
 # health is Degraded when the tip is armed (200), is not a revert and touched the
 # kustomization (an image bump on an armed config), otherwise Healthy. FORCE_HEALTH=<state>
-# in the stub dir overrides it.
+# in the stub dir overrides it. It also lists one Ready checkout pod, and a curl stub plays
+# Prometheus for check_fleet_disarmed: the pod reads 2000 (FORCE_GAUGE=<value> overrides),
+# the success rate is 100 and the SLO 99.
 
 make_ops_fixture() {
   REAL_GIT="$(command -v git)"
@@ -77,7 +79,10 @@ YAML
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
   export ENSURE_IMAGE="$STUBS/ensure-image.sh"
   export ARGO_WAIT_S=6 HEALTH_WAIT_S=6 DEGRADED_WAIT_S=6
-  unset STAGE NAIVE_STOP_AT_GREEN PRECOMMIT_HOOK_SRC OPERATOR_REMOTE GH_TOKEN
+  unset STAGE STAGE_STRICT NAIVE_STOP_AT_GREEN PRECOMMIT_HOOK_SRC GH_TOKEN
+  # The operator clone's origin is the local bare repo (op_sync checks the URL it resolves to).
+  export OPERATOR_REMOTE="$ORIGIN"
+  export FLEET_WAIT_S=1 FLEET_DISARMED_WAIT_S=4
 }
 
 _ops_git_identity() {
@@ -134,7 +139,23 @@ case "\$*" in
     if grep -q '"200"' <<<"\$cfg" && [[ "\$subj" != Revert* ]] && grep -q kustomization.yaml <<<"\$files"; then
       echo Degraded
     else echo Healthy; fi ;;
+  *"get pods"*)
+    echo "PODS" >> "$CALLS"
+    echo '{"items":[{"metadata":{"name":"checkout-abc-1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
   *) echo "kubectl stub: unexpected \$*" >&2; exit 1 ;;
+esac
+STUB
+  # curl: a tiny Prometheus for check_fleet_disarmed.
+  cat > "$STUBS/curl" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+  *checkout_config_upstream_timeout_ms*)
+    echo FLEET >> "$CALLS"
+    v=2000; [ -s "$STUBS/FORCE_GAUGE" ] && v=\$(cat "$STUBS/FORCE_GAUGE")
+    echo "{\"data\":{\"result\":[{\"metric\":{\"pod\":\"checkout-abc-1\"},\"value\":[0,\"\$v\"]}]}}" ;;
+  *checkout_slo_target_percent*) echo '{"data":{"result":[{"metric":{},"value":[0,"99"]}]}}' ;;
+  *checkout_requests_total*) echo '{"data":{"result":[{"metric":{},"value":[0,"100"]}]}}' ;;
+  *) echo "curl stub: unexpected \$*" >&2; exit 1 ;;
 esac
 STUB
   # argocd: must never be called.

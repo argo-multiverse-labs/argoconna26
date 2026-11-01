@@ -211,7 +211,9 @@ gitops-bootstrap: ## Apply the root app-of-apps (Argo CD then creates checkout, 
 ################################################################################
 
 # Later slices insert targets at fixed positions; the final order is written once in Task 3.16.
-BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install images gitops-bootstrap
+# disarm-git-only comes before gitops-bootstrap, so an armed branch never meets a fresh
+# cluster (Review Focus 1): Argo's first sync already reads the disarmed config.
+BUILD_STEPS := vendor kind-cluster argocd-install rollouts-install secrets-base kps-install images disarm-git-only gitops-bootstrap
 SNAP_DIR    := $(MAIN_ROOT)/.kube/idempotency
 
 .PHONY: build-all
@@ -270,6 +272,10 @@ naive-revert: ## Revert the last image bump: green but wrong
 .PHONY: disarm
 disarm: ## Timeout back to 2000 (IMAGE=vX.Y.Z also pins the tag; GIT_ONLY=1 skips the wait)
 	@$(ROOT)/scripts/git-ops.sh disarm $(if $(IMAGE),--image $(IMAGE)) $(if $(GIT_ONLY),--git-only)
+
+.PHONY: disarm-git-only
+disarm-git-only: ## (build-all) Push the disarm before Argo's first sync; skips without an operator clone
+	@$(ROOT)/scripts/git-ops.sh disarm --git-only
 
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts
