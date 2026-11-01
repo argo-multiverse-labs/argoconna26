@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge
+  labels:
+    app: bridge
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+spec:
+  # PARKED: slice 3 part 1 commits the bridge with replicas: 0 so no pod starts with the GitHub
+  # App credentials before the GitHub rulesets exist (L5a). Part 2 (Task 3.10 Step 4) sets this
+  # to 1 in a commit on the tracked branch; Argo applies it. Nothing else changes.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bridge
+  template:
+    metadata:
+      labels:
+        app: bridge
+        example.dev/owner: payments-team
+        example.dev/tier: "1"
+        slo.example.dev/success-rate: "99"
+    spec:
+      serviceAccountName: bridge
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bridge
+          image: bridge
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          env:
+            # Values from demo.env (the consistency check compares them).
+            - {name: REPO_SLUG, value: argo-multiverse-labs/argoconna26}
+            - {name: TRACKED_BRANCH, value: build/demo}
+            - {name: HOLMES_URL, value: "http://holmes-holmes.aiops.svc"}
+            - {name: HOLMES_TIMEOUT_S, value: "115"}
+            - {name: STAGE_COLS, value: "30"}
+            - {name: CDEVENTS_URL, value: "http://cdevents-sim.aiops.svc:8080/events"}
+            - {name: BRIDGE_EVENT_SOURCE, value: /argoconna26/bridge}
+            - {name: ARGO_UI_URL, value: "http://127.0.0.1:30080"}
+            - {name: GITHUB_APP_KEY_PATH, value: /etc/bridge/github/github-app-key}
+            - {name: DRYRUN_SUMMARY_PATH, value: /etc/bridge/dryrun/summary.json}
+            # Check-only switch: every Git write becomes a "▸ dry: would ..." line. Task 3.15
+            # removes it for the real rung-1 run.
+            - {name: DRY_FORGE, value: "1"}
+            # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
+            - name: BRIDGE_WEBHOOK_TOKEN
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}
+            - name: HOLMES_API_KEY
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: holmes-api-key, optional: true}}
+            - name: GITHUB_APP_ID
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: github-app-id, optional: true}}
+            - name: GITHUB_INSTALLATION_ID
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: github-installation-id, optional: true}}
+          volumeMounts:
+            - {name: github-key, mountPath: /etc/bridge/github, readOnly: true}
+            - {name: dryrun-summary, mountPath: /etc/bridge/dryrun, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 384Mi}
+      volumes:
+        - name: github-key
+          secret:
+            secretName: bridge-secrets
+            defaultMode: 0400
+            items:
+              - {key: github-app-key, path: github-app-key}
+        - name: dryrun-summary
+          configMap:
+            name: dryrun-summary
+            optional: true

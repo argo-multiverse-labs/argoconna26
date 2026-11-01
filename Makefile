@@ -111,7 +111,8 @@ helm-repos: ## Add the Helm repos to the isolated Helm config
 argocd-install: helm-repos ## Install Argo CD (skips when unchanged)
 	@$(LOCKED)
 	helm_ensure "$$ARGOCD_RELEASE" argo/argo-cd "$$ARGOCD_CHART_VERSION" "$$NS_ARGOCD" \
-	  $(ROOT)/platform/argocd/values.yaml $(ROOT)/platform/argocd/notifications-cdevents.yaml
+	  $(ROOT)/platform/argocd/values.yaml $(ROOT)/platform/argocd/notifications-cdevents.yaml \
+	  $(ROOT)/platform/argocd/notifications-bridge.yaml
 	k rollout status statefulset/argocd-application-controller -n "$$NS_ARGOCD" --timeout=300s
 
 .PHONY: argocd-password
@@ -223,6 +224,11 @@ images: ## Build the demo images and load them into the kind nodes (skips what i
 
 .PHONY: image-load
 image-load: images ## Alias of images
+
+.PHONY: bridge-log
+bridge-log: ## Follow the bridge's stage lines (the short lines for the projector)
+	@$(CTX)
+	k logs -n "$$NS_AIOPS" deploy/bridge -f | grep --line-buffered '▸'
 
 .PHONY: redeploy-bridge redeploy-sim
 redeploy-bridge: images ## Rebuild the bridge image and restart its pods when they run a stale one

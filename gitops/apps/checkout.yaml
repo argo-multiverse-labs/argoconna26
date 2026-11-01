@@ -9,6 +9,8 @@ metadata:
     notifications.argoproj.io/subscribe.on-health-degraded-cdevents.cdevents: ""
     notifications.argoproj.io/subscribe.on-sync-failed-cdevents.cdevents: ""
     notifications.argoproj.io/subscribe.on-health-recovered-cdevents.cdevents: ""
+    # Degraded -> the bridge (platform/argocd/notifications-bridge.yaml)
+    notifications.argoproj.io/subscribe.on-health-degraded-bridge.bridge: ""
 spec:
   project: default
   revisionHistoryLimit: 25
