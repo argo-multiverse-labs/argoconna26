@@ -145,3 +145,81 @@ async def test_default_branch_delete_guard_is_accepted_and_labelled(_no_unmocked
     results = await _run(r, branches=["main"])
     d = next(x for x in results if x.action == "delete")
     assert d.ok and "default-branch guard" in d.detail
+
+
+def _mock_operator_ref(r, ref="promote/op-test-T1") -> None:
+    r.get(f"{R}/git/ref/heads/{ref}").mock(return_value=httpx.Response(200, json={"object": {"sha": "9" * 40}}))
+    r.get(f"{R}/git/commits/{'9' * 40}").mock(return_value=httpx.Response(200, json={"tree": {"sha": "t" * 40}}))
+
+
+async def test_operator_ref_delete_is_tried_and_refused(_no_unmocked_http) -> None:
+    r = _no_unmocked_http
+    _mock_reads(r, ["main"])
+    _mock_operator_ref(r)
+    r.patch(url__regex=rf"{R}/git/refs/heads/.*").mock(return_value=httpx.Response(422, json=VIOLATION))
+    dele = r.delete(url__regex=rf"{R}/git/refs/heads/.*").mock(return_value=httpx.Response(422, json=VIOLATION))
+    r.post(f"{R}/git/refs").mock(return_value=httpx.Response(422, json=VIOLATION))
+    results = await _run(r, branches=["main"], operator_ref="promote/op-test-T1")
+    assert ("promote/op-test-T1", "delete") in [(x.target, x.action) for x in results]
+    assert any(c.request.url.path.endswith("/git/refs/heads/promote/op-test-T1") for c in dele.calls)
+    assert all(x.ok for x in results)
+
+
+async def test_operator_ref_delete_that_succeeds_fails_and_recreates_it(_no_unmocked_http) -> None:
+    r = _no_unmocked_http
+    _mock_reads(r, ["main"])
+    _mock_operator_ref(r)
+    r.patch(url__regex=rf"{R}/git/refs/heads/.*").mock(return_value=httpx.Response(422, json=VIOLATION))
+    r.delete(url__regex=rf"{R}/git/refs/heads/main").mock(return_value=httpx.Response(422, json=VIOLATION))
+    r.delete(url__regex=rf"{R}/git/refs/heads/promote/op-test-T1").mock(return_value=httpx.Response(204))
+    posts = r.post(f"{R}/git/refs").mock(
+        side_effect=[httpx.Response(422, json=VIOLATION), httpx.Response(201, json={})]
+    )
+    results = await _run(r, branches=["main"], operator_ref="promote/op-test-T1")
+    d = next(x for x in results if x.target == "promote/op-test-T1" and x.action == "delete")
+    assert not d.ok and "restored=True" in d.detail
+    import json as _json
+
+    assert _json.loads(posts.calls.last.request.content) == {"ref": "refs/heads/promote/op-test-T1", "sha": "9" * 40}
+
+
+async def test_failed_restore_of_a_protected_branch_names_the_operator_recovery(_no_unmocked_http) -> None:
+    r = _no_unmocked_http
+    _mock_reads(r, ["main"])
+    # the move succeeds (the failure this check exists to catch); the force restore is refused
+    r.patch(url__regex=rf"{R}/git/refs/heads/main").mock(
+        side_effect=[httpx.Response(200, json={}), httpx.Response(422, json=VIOLATION)]
+    )
+    r.delete(url__regex=rf"{R}/git/refs/heads/.*").mock(return_value=httpx.Response(422, json=VIOLATION))
+    r.post(f"{R}/git/refs").mock(return_value=httpx.Response(422, json=VIOLATION))
+    results = await _run(r, branches=["main"])
+    m = next(x for x in results if x.action == "move")
+    assert not m.ok and "restored=False" in m.detail
+    assert "empty-tree probe commit" in m.detail and "integrity" in m.detail
+
+
+def test_summary_counts_the_default_branch_guard_separately() -> None:
+    from bridge.cli import summarize
+
+    rs = [
+        AttemptResult("build/demo", "move", 422, True, "refused: x", "ruleset"),
+        AttemptResult("main", "delete", 422, True, "refused by the default-branch guard", "default-branch guard"),
+        AttemptResult("promote/x", "create", 422, True, "refused", "ruleset"),
+    ]
+    assert summarize(rs) == "3/3 attempts refused: 2 by a ruleset, 1 by the default-branch guard"
+    rs.append(AttemptResult("main", "move", 200, False, "SUCCEEDED"))
+    assert summarize(rs) == "3/4 attempts refused: 2 by a ruleset, 1 by the default-branch guard; 1 FAILED"
+
+
+async def test_refusals_record_who_refused(_no_unmocked_http) -> None:
+    r = _no_unmocked_http
+    _mock_reads(r, ["main"])
+    r.patch(url__regex=rf"{R}/git/refs/heads/.*").mock(return_value=httpx.Response(422, json=VIOLATION))
+    r.delete(url__regex=rf"{R}/git/refs/heads/main").mock(
+        return_value=httpx.Response(422, json={"message": "Cannot delete the default branch"})
+    )
+    r.post(f"{R}/git/refs").mock(return_value=httpx.Response(422, json=VIOLATION))
+    results = await _run(r, branches=["main"])
+    assert {(x.action, x.refused_by) for x in results} == {
+        ("move", "ruleset"), ("delete", "default-branch guard"), ("create", "ruleset")
+    }

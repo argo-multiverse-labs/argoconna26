@@ -42,6 +42,7 @@ def _mock_happy(r, *, states=("OPEN", "MERGED"), graphql=None):
         return httpx.Response(200, json={"number": 7, "state": "CLOSED" if s == "MERGED" else s, "merged": s == "MERGED",
                                          "mergeable_state": "blocked" if s == "OPEN" else "clean"})
     r.get(f"{R}/pulls/7").mock(side_effect=view)
+    r.delete(f"{R}/git/refs/heads/agent/spike-T1").mock(return_value=httpx.Response(204))
     return refs, put, pr, gql
 
 
@@ -99,3 +100,24 @@ async def test_token_never_in_result(_no_unmocked_http) -> None:
     _mock_happy(_no_unmocked_http)
     res = await _run(scenario="two-line")
     assert "installation-token" not in repr(res)
+
+
+async def test_head_branch_deleted_after_merge(_no_unmocked_http) -> None:
+    _mock_happy(_no_unmocked_http)
+    res = await _run(scenario="two-line")
+    dele = [c for c in _no_unmocked_http.calls if c.request.method == "DELETE"]
+    assert [c.request.url.path for c in dele] == [f"/repos/{REPO}/git/refs/heads/agent/spike-T1"]
+    assert res.merged and res.branch_deleted
+
+
+async def test_head_branch_deleted_after_close(_no_unmocked_http) -> None:
+    _mock_happy(_no_unmocked_http, states=("OPEN", "CLOSED"))
+    res = await _run(scenario="two-line")
+    assert res.final_state == "CLOSED" and res.branch_deleted
+
+
+async def test_head_branch_kept_while_pr_still_open(_no_unmocked_http) -> None:
+    _mock_happy(_no_unmocked_http, states=("OPEN",))
+    res = await _run(scenario="two-line")
+    assert not [c for c in _no_unmocked_http.calls if c.request.method == "DELETE"]
+    assert res.final_state == "OPEN" and not res.branch_deleted

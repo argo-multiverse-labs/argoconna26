@@ -7,9 +7,16 @@
 for each protected branch it creates (through the Git Data API) a commit whose parent is the
 branch head and whose tree is the head's tree, tries to move the branch ref to it, then tries to
 delete the ref. It also tries to create `promote/app-test-<stamp>` and, when the operator has
-pushed a promotion branch, to move that. Every attempt must get a 4xx whose message names a
-repository rule violation. A success, or a 4xx for any other reason, fails the check; a success
-is undone on the spot (ref restored, stray ref deleted) so the check never leaves damage.
+pushed a promotion branch, to move and then delete that. Every attempt must get a 4xx whose
+message names a repository rule violation (or, for a delete of the default branch, GitHub's own
+default-branch guard, counted separately). A success, or a 4xx for any other reason, fails the
+check.
+
+A success is undone where the App can undo it: a deleted ref is re-created at its old sha and a
+stray `promote/*` ref is deleted. A *move* of a branch under the integrity ruleset cannot be undone
+by anyone (moving it back is a force-push, and that ruleset has no bypass), so it leaves one probe
+commit on the branch. The probe has the same tree as its parent, so it changes no file; removing
+it means unlisting the branch from the integrity ruleset first. The check prints that step.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ class AttemptResult:
     status: int | None
     ok: bool
     detail: str
+    refused_by: str = ""  # "ruleset" | "default-branch guard" | "" (not refused)
 
 
 class _Gh:
@@ -87,9 +95,11 @@ def _verdict(target: str, action: str, r: httpx.Response) -> AttemptResult:
     refused = 400 <= r.status_code < 500
     named = bool(_RULESET_MSG.search(msg))
     if refused and named:
-        return AttemptResult(target, action, r.status_code, True, f"refused: {msg}")
+        return AttemptResult(target, action, r.status_code, True, f"refused: {msg}", "ruleset")
     if refused and action == "delete" and _DEFAULT_GUARD.search(msg):
-        return AttemptResult(target, action, r.status_code, True, f"refused by the default-branch guard (not a ruleset message): {msg}")
+        return AttemptResult(target, action, r.status_code, True,
+                             f"refused by the default-branch guard (not a ruleset message): {msg}",
+                             "default-branch guard")
     if refused:
         return AttemptResult(target, action, r.status_code, False, f"4xx for another reason: {msg}")
     return AttemptResult(target, action, r.status_code, False, "SUCCEEDED (should have been refused)")
@@ -109,26 +119,34 @@ async def run_try_direct_push(
     stamp = stamp or str(int(time.time()))
     results: list[AttemptResult] = []
 
-    async def move(target: str, old: str, new: str, restore: bool) -> None:
+    async def move(target: str, old: str, new: str) -> None:
         ref = f"/git/refs/heads/{quote(target, safe='/')}"
         r = await gh.call("PATCH", ref, json={"sha": new, "force": False})
         v = _verdict(target, "move", r)
-        if not v.ok and r.status_code < 300 and restore:
+        if not v.ok and r.status_code < 300:
             back = await gh.call("PATCH", ref, json={"sha": old, "force": True})
+            v.detail += f"; restored={back.status_code < 300}"
+            if back.status_code >= 300:
+                v.detail += (
+                    f"; {target} now carries an empty-tree probe commit (same tree as {old[:12]}, no file"
+                    " changed). To remove it, unlist the branch from the integrity ruleset"
+                    " (RULESET_BRANCHES, then github-ruleset.sh apply), reset it, and re-list it"
+                )
+        results.append(v)
+
+    async def delete(target: str, old: str) -> None:
+        r = await gh.call("DELETE", f"/git/refs/heads/{quote(target, safe='/')}")
+        v = _verdict(target, "delete", r)
+        if not v.ok and r.status_code < 300:
+            back = await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{target}", "sha": old})
             v.detail += f"; restored={back.status_code < 300}"
         results.append(v)
 
     for b in branches:
         old = await gh.head(b)
         new = await gh.unreachable_child(old)
-        await move(b, old, new, restore=True)
-        ref = f"/git/refs/heads/{quote(b, safe='/')}"
-        r = await gh.call("DELETE", ref)
-        v = _verdict(b, "delete", r)
-        if not v.ok and r.status_code < 300:
-            back = await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{b}", "sha": old})
-            v.detail += f"; restored={back.status_code < 300}"
-        results.append(v)
+        await move(b, old, new)
+        await delete(b, old)
 
     base = await gh.head(branches[0])
     name = f"promote/app-test-{stamp}"
@@ -145,7 +163,8 @@ async def run_try_direct_push(
         if c.status_code < 300:
             await gh.call("DELETE", f"/git/refs/heads/{quote(ctl, safe='/')}")
             v = AttemptResult(name, "create", r.status_code, True,
-                              f"refused ('{_message(r)}'); control ref at an unprotected name was created and removed")
+                              f"refused ('{_message(r)}'); control ref at an unprotected name was created and removed",
+                              "ruleset")
         else:
             v.detail += f"; control create also failed ({c.status_code}), so this is not proven to be the ruleset"
     results.append(v)
@@ -153,8 +172,22 @@ async def run_try_direct_push(
     if operator_ref:
         old = await gh.head(operator_ref)
         new = await gh.unreachable_child(old)
-        await move(operator_ref, old, new, restore=True)
+        await move(operator_ref, old, new)
+        await delete(operator_ref, old)
     return results
+
+
+def summarize(results: list[AttemptResult]) -> str:
+    """One line that says who refused what, so a guard refusal is never counted as a ruleset's."""
+    by_rule = sum(1 for x in results if x.ok and x.refused_by == "ruleset")
+    by_guard = sum(1 for x in results if x.ok and x.refused_by == "default-branch guard")
+    bad = sum(1 for x in results if not x.ok)
+    line = f"{by_rule + by_guard}/{len(results)} attempts refused: {by_rule} by a ruleset"
+    if by_guard:
+        line += f", {by_guard} by the default-branch guard"
+    if bad:
+        line += f"; {bad} FAILED"
+    return line
 
 
 # --- spike-pr: GitHub merge mechanics (Task 4.5a) ---------------------------------------------
@@ -184,6 +217,7 @@ class SpikeResult:
     final_state: str
     mergeable_state: str
     waited_s: float
+    branch_deleted: bool = False
 
 
 async def run_spike_pr(
@@ -266,7 +300,13 @@ async def run_spike_pr(
             break
         await sleep(poll_s)
         waited += poll_s
-    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited)
+    # The repo keeps head branches after a merge (delete_branch_on_merge is off), so remove ours
+    # once the PR is done; a still-open PR keeps its branch.
+    deleted = False
+    if state in ("MERGED", "CLOSED"):
+        d = await gh.call("DELETE", f"/git/refs/heads/{quote(branch, safe='/')}")
+        deleted = d.status_code < 300
+    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited, deleted)
 
 
 def _print(results: list[AttemptResult]) -> None:
@@ -295,9 +335,8 @@ async def _try_direct_push(args: argparse.Namespace) -> int:
             http, provider, repo=args.repo, branches=branches, operator_ref=args.operator_ref
         )
     _print(results)
-    bad = sum(1 for x in results if not x.ok)
-    print(f"{len(results) - bad}/{len(results)} attempts refused")
-    return 1 if bad else 0
+    print(summarize(results))
+    return 1 if any(not x.ok for x in results) else 0
 
 
 async def _spike_pr(args: argparse.Namespace) -> int:
@@ -322,6 +361,7 @@ async def _spike_pr(args: argparse.Namespace) -> int:
     print(f"pr={res.number} branch={res.branch} url={res.url}")
     print(f"auto_merge_enabled={res.auto_merge_enabled} error={res.auto_merge_error or '-'}")
     print(f"final_state={res.final_state} merged={res.merged} mergeable_state={res.mergeable_state or '-'} waited_s={res.waited_s:.0f}")
+    print(f"head_branch_deleted={res.branch_deleted}")
     return 0 if res.merged or args.no_wait else 1
 
 
@@ -331,7 +371,8 @@ def main(argv: list[str] | None = None) -> int:
     t = sub.add_parser("try-direct-push", help="prove the App cannot write to protected refs")
     t.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
     t.add_argument("--branches", default=os.environ.get("RULESET_BRANCHES", ""), help="comma list (default: $RULESET_BRANCHES)")
-    t.add_argument("--operator-ref", default=None, help="a promote/* branch the operator pushed; the App tries to move it")
+    t.add_argument("--operator-ref", default=None,
+                   help="a promote/* branch the operator pushed; the App tries to move and delete it")
     sp = sub.add_parser("spike-pr", help="open an App-authored PR on the scratch branch and enable auto-merge")
     sp.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
     sp.add_argument("--base", required=True, help=f"must be {SPIKE_BASE}")
