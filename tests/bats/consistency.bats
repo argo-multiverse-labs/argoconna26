@@ -163,3 +163,31 @@ sim_files() { # SOURCE TAG : a cdevents-sim deploy dir and the demo.env values t
   [ "$status" -ne 0 ]
   [[ "$output" == *"SIM_TAG"* ]]
 }
+
+litellm_files() { # TAG PGIMAGE : LiteLLM platform files and the pins to compare with
+  mkdir -p "$WORK/platform/litellm"
+  printf 'LITELLM_IMAGE_TAG=v1.106.4\nPOSTGRES_IMAGE=postgres:16.11-alpine@sha256:abc\n' >> "$WORK/versions.env"
+  printf 'image:\n  tag: %s\n' "$1" > "$WORK/platform/litellm/values.yaml"
+  printf '          image: %s\n' "$2" > "$WORK/platform/litellm/postgres.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m litellm
+}
+
+@test "litellm tag and postgres image equal to the pins pass" {
+  litellm_files v1.106.4 postgres:16.11-alpine@sha256:abc
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+}
+
+@test "flags a litellm image tag that differs from LITELLM_IMAGE_TAG" {
+  litellm_files v1.100.0 postgres:16.11-alpine@sha256:abc
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"LITELLM_IMAGE_TAG"* ]]
+}
+
+@test "flags a postgres image that differs from POSTGRES_IMAGE" {
+  litellm_files v1.106.4 postgres:15@sha256:def
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"POSTGRES_IMAGE"* ]]
+}

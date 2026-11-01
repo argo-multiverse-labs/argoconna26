@@ -88,6 +88,10 @@ kind-cluster: ## Create the kind cluster (skips when it exists)
 rm-kind: ## Delete the kind cluster and its isolated kubeconfig
 	@$(PRE)
 	[[ "$$CLUSTER_NAME" == "argoconna26" ]] || die "refusing to delete cluster '$$CLUSTER_NAME'"
+	# the Postgres PVC dies with the cluster, so keep LiteLLM's spend first (Task 3.11 Step 5)
+	if k get --raw=/readyz >/dev/null 2>&1; then
+	  $(ROOT)/scripts/litellm.sh spend-export || log_warn "llm-spend-export failed; LiteLLM spend of this cluster is not kept"
+	fi
 	kind delete cluster --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG"
 	rm -f "$$KUBECONFIG"
 
@@ -140,6 +144,36 @@ kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admi
 	sts="prometheus-$${KPS_RELEASE}-prometheus"
 	wait_for "statefulset $$sts to exist" 300 k get statefulset "$$sts" -n "$$NS_MONITORING"
 	k rollout status statefulset/"$$sts" -n "$$NS_MONITORING" --timeout=300s
+
+.PHONY: litellm-install
+litellm-install: ## Install LiteLLM and its Postgres (needs the litellm Secrets from secrets-base)
+	@$(LOCKED)
+	for s in litellm-masterkey litellm-db litellm-env; do
+	  k get secret "$$s" -n "$$NS_AIOPS" >/dev/null 2>&1 || die "Secret $$s missing: run 'make secrets-base' first"
+	done
+	[[ -n "$${LLM_BUDGET_USD:-}" ]] || die "LLM_BUDGET_USD is missing in .env"
+	k apply -f $(ROOT)/platform/litellm/postgres.yaml
+	k rollout status statefulset/litellm-postgres -n "$$NS_AIOPS" --timeout=180s
+	cfg="$$(mktemp)"
+	envsubst '$${LLM_BUDGET_USD}' < $(ROOT)/platform/litellm/config.yaml > "$$cfg"
+	rc=0
+	helm_ensure litellm oci://ghcr.io/berriai/litellm-helm "$$LITELLM_CHART_VERSION" "$$NS_AIOPS" \
+	  $(ROOT)/platform/litellm/values.yaml "$$cfg" || rc=$$?
+	rm -f "$$cfg"
+	(( rc == 0 )) || exit "$$rc"
+	k rollout status deployment/litellm -n "$$NS_AIOPS" --timeout=300s
+
+.PHONY: litellm-keys
+litellm-keys: ## Virtual keys holmes and judge -> Secrets holmes-llm and judge-llm
+	@$(ROOT)/scripts/litellm.sh keys
+
+.PHONY: llm-spend-export
+llm-spend-export: ## Write LiteLLM spend to .dryruns/llm-spend/ (rm-kind runs it; by hand it double counts until rebuilt)
+	@$(ROOT)/scripts/litellm.sh spend-export
+
+.PHONY: llm-spend
+llm-spend: ## Live and cumulative LLM spend against the budget
+	@$(ROOT)/scripts/litellm.sh spend
 
 ################################################################################
 # Images                                                                       #

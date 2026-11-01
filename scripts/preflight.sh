@@ -105,6 +105,49 @@ section_endpoints() {
   fi
 }
 
+# llm: the proxy answers on the rca alias, the holmes key has budget left, and the build's
+# cumulative spend (exports of earlier clusters plus the live proxy) is under LLM_BUDGET_USD.
+section_llm() {
+  local key code info left live cum
+  # shellcheck source=scripts/litellm.sh
+  . "$COMMON_SH_DIR/litellm.sh"
+  if ! _have LITELLM_MASTER_KEY LLM_BUDGET_USD; then
+    check_fail "llm: LITELLM_MASTER_KEY or LLM_BUDGET_USD is missing in .env"; return 0
+  fi
+  if ! curl -sf --max-time 5 "${LITELLM_HOST_URL}/health/readiness" >/dev/null; then
+    check_fail "llm: LiteLLM does not answer on $LITELLM_HOST_URL"; return 0
+  fi
+  key="$(stored_key holmes-llm)"
+  if [[ -z "$key" ]]; then
+    check_fail "llm: Secret holmes-llm is missing (make litellm-keys)"; return 0
+  fi
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg m "$LLM_ALIAS_RCA" '{model: $m, max_tokens: 5, messages: [{role: "user", content: "Reply ok."}]}')" \
+    -K <(printf 'header = "Authorization: Bearer %s"\n' "$key") "${LITELLM_HOST_URL}/v1/chat/completions" || true)"
+  if [[ "$code" == 200 ]]; then
+    check_pass "llm: a max_tokens 5 completion on alias $LLM_ALIAS_RCA returns 200"
+  else
+    check_fail "llm: completion on alias $LLM_ALIAS_RCA returned HTTP ${code:-none}"
+  fi
+  if info="$(llm_call "$key" GET /key/info 2>/dev/null)"; then
+    left="$(jq -r '((.info.max_budget // 0) - (.info.spend // 0))' <<<"$info")"
+    if awk -v l="$left" 'BEGIN { exit !(l > 5) }'; then
+      check_pass "llm: the holmes key has \$$(printf '%.2f' "$left") left"
+    else
+      check_fail "llm: the holmes key has only \$$(printf '%.2f' "$left") left (need more than \$5)"
+    fi
+  else
+    check_fail "llm: GET /key/info failed for the holmes key"
+  fi
+  live="$(live_spend 2>/dev/null || echo 0)"
+  cum="$(spend_total "$(spend_dir)" "$live")"
+  if awk -v c="$cum" -v b="$LLM_BUDGET_USD" 'BEGIN { exit !(c <= b) }'; then
+    check_pass "$(awk -v l="$live" -v c="$cum" -v b="$LLM_BUDGET_USD" 'BEGIN { printf "llm: this cluster has $%.2f of $%.2f left; the build has spent $%.2f in all", b - l, b, c }')"
+  else
+    check_fail "llm: the build has spent \$$cum, over LLM_BUDGET_USD (\$$LLM_BUDGET_USD)"
+  fi
+}
+
 main() {
   local rung="${1:-}" s extra
   load_env

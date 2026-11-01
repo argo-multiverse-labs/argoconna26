@@ -110,6 +110,18 @@ if [[ -n "${SIM_TAG:-}" && -f cdevents-sim/deploy/kustomization.yaml ]]; then
     || report "cdevents-sim/deploy/kustomization.yaml: newTag '$got' differs from demo.env SIM_TAG ($SIM_TAG)"
 fi
 
+# 7. LiteLLM: the chart values' image tag and the Postgres StatefulSet image must equal the pins.
+if [[ -n "${LITELLM_IMAGE_TAG:-}" && -f platform/litellm/values.yaml ]]; then
+  got="$(awk '/^image:/ {f=1; next} f && /^[[:space:]]+tag:/ {sub(/^[[:space:]]*tag:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' platform/litellm/values.yaml)"
+  [[ "$got" == "$LITELLM_IMAGE_TAG" ]] \
+    || report "platform/litellm/values.yaml: image tag '$got' differs from versions.env LITELLM_IMAGE_TAG ($LITELLM_IMAGE_TAG)"
+fi
+if [[ -n "${POSTGRES_IMAGE:-}" && -f platform/litellm/postgres.yaml ]]; then
+  got="$(awk '/^[[:space:]]*image:/ {sub(/^[[:space:]]*image:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' platform/litellm/postgres.yaml)"
+  [[ "$got" == "$POSTGRES_IMAGE" ]] \
+    || report "platform/litellm/postgres.yaml: image '$got' differs from versions.env POSTGRES_IMAGE ($POSTGRES_IMAGE)"
+fi
+
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2
   exit 1
