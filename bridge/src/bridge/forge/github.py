@@ -113,6 +113,15 @@ class GitHubForge:
             return []
         return [int(pr["number"]) for pr in r.json()]
 
+    async def commit_title(self, sha: str) -> str | None:
+        """The first line of the commit message, or None for an unknown commit."""
+        try:
+            r = await self._request("GET", f"/commits/{self._q(sha)}")
+        except ForgeNotFound:
+            return None
+        message = str((r.json().get("commit") or {}).get("message") or "")
+        return message.splitlines()[0].strip() if message.strip() else None
+
     async def comment_on_commit(self, sha: str, body: str) -> str:
         r = await self._request("POST", f"/commits/{self._q(sha)}/comments", json={"body": body})
         return str(r.json().get("html_url", ""))

@@ -13,12 +13,16 @@ dependencies = [
     "httpx>=0.28",
     "pyjwt[crypto]>=2.10",
     "pyyaml>=6.0.3",
+    "jinja2>=3.1",
+    "prometheus-client>=0.23",
 ]
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4.25",
     "pytest>=8.4",
     "pytest-asyncio>=1.2",
+    "pytest-socket>=0.7",
     "respx>=0.22",
 ]
 
@@ -33,7 +37,7 @@ packages = ["src/bridge"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-ra"
+addopts = "-ra --disable-socket --allow-unix-socket"
 filterwarnings = [
     # starlette's TestClient warns that it will move to httpx2; harmless here.
     "ignore:Using `httpx` with `starlette.testclient`",

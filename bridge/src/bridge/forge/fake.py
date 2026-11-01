@@ -13,7 +13,7 @@ class FakeForge:
 
     `ancestors` maps a ref to the SHAs reachable from it. `changed_keys` maps
     (sha, path) to the keys that commit changed in that file. `prs` maps a SHA to
-    PR numbers. Writes are recorded in `commit_comments` and `pr_comments`.
+    PR numbers. `titles` maps a SHA to its commit title. Writes are recorded in `commit_comments` and `pr_comments`.
     Set `fail_reads` to an exception to make every read raise it.
     """
 
@@ -22,6 +22,7 @@ class FakeForge:
     ancestors: dict[str, set[str]] = field(default_factory=dict)
     changed_keys: dict[tuple[str, str], set[str]] = field(default_factory=dict)
     prs: dict[str, list[int]] = field(default_factory=dict)
+    titles: dict[str, str] = field(default_factory=dict)
     fail_reads: BaseException | None = None
     commit_comments: list[tuple[str, str]] = field(default_factory=list)
     pr_comments: list[tuple[int, str]] = field(default_factory=list)
@@ -56,6 +57,10 @@ class FakeForge:
     async def prs_for_commit(self, sha: str) -> list[int]:
         self._read("prs_for_commit", sha)
         return list(self.prs.get(sha, []))
+
+    async def commit_title(self, sha: str) -> str | None:
+        self._read("commit_title", sha)
+        return self.titles.get(sha)
 
     async def comment_on_commit(self, sha: str, body: str) -> str:
         self.calls.append(("comment_on_commit", sha))

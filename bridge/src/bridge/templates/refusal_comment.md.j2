@@ -1,0 +1,7 @@
+## Agent refused
+
+The investigation finished, but its answer did not pass the guardrails, so the agent is not suggesting a fix.
+
+{% for refusal in refusals %}- {{ refusal.reason }}: {{ refusal.detail | plain }}
+{% endfor %}
+A human should take this one. [Argo CD history]({{ argo_url }}) · autonomy: {{ level }}

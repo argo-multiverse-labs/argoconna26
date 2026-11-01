@@ -189,3 +189,26 @@ async def test_dry_forge_reads_through_and_never_writes(respx_mock, caplog: pyte
     assert writes.call_count == 0
     assert url1.startswith("dry-run:") and url2.startswith("dry-run:")
     assert "▸ dry: would comment" in caplog.text
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_commit_title_is_first_message_line(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/commits/{SHA}").mock(
+        return_value=httpx.Response(
+            200, json={"sha": SHA, "commit": {"message": "PR-242: tune upstream timeout\n\nDemo-Rearm: 3\n"}}
+        )
+    )
+    assert await forge.commit_title(SHA) == "PR-242: tune upstream timeout"
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_commit_title_unknown_is_none(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/commits/{SHA}").mock(return_value=httpx.Response(404))
+    assert await forge.commit_title(SHA) is None
+
+
+async def test_fake_and_dry_forge_commit_title() -> None:
+    fake = FakeForge(titles={SHA: "a title"})
+    assert await fake.commit_title(SHA) == "a title"
+    assert await fake.commit_title(OTHER) is None
+    assert await DryForge(fake).commit_title(SHA) == "a title"

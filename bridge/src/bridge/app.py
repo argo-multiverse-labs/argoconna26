@@ -11,14 +11,23 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import ValidationError
 
 from . import stagelog
 from .config import Settings
+from .events import CDEventsEmitter
+from .forge import DryForge
+from .forge.github import GitHubForge
+from .github_auth import InstallationTokenProvider
+from .holmes import HolmesClient
 from .incidents import IncidentRegistry
+from .metrics import Metrics
 from .models import ArgoDegradedHook
+from .pipeline import Deps, Outcome, handle_incident, outcome_for_status
 
 log = logging.getLogger("bridge")
 
@@ -26,8 +35,49 @@ Handler = Callable[[ArgoDegradedHook], Awaitable[Any]]
 
 
 async def _log_only_handler(hook: ArgoDegradedHook) -> None:
-    """Placeholder until the pipeline exists (Task 3.9)."""
-    log.info("incident %s received; no pipeline configured", hook.key)
+    """Used when the settings can't build the pipeline (for example `/healthz` alone)."""
+    log.warning("incident %s received; the pipeline is not configured", hook.key)
+
+
+_REQUIRED = ("github_repo", "github_app_id", "github_installation_id", "github_app_key_path", "holmes_url")
+
+
+def build_handler(
+    settings: Settings, registry: IncidentRegistry, metrics: Metrics, http: httpx.AsyncClient
+) -> Handler:
+    """The real pipeline over GitHub and HolmesGPT, or the log-only handler when unconfigured."""
+    missing = [name for name in _REQUIRED if not getattr(settings, name)]
+    if missing:
+        log.warning("pipeline not configured (missing %s); incidents are only logged", ", ".join(missing))
+        return _log_only_handler
+    tokens = InstallationTokenProvider(
+        settings.github_app_id,
+        settings.github_installation_id,
+        settings.github_app_key_path,
+        repo=settings.github_repo,
+        api_url=settings.github_api_url,
+        http=http,
+    )
+    forge = GitHubForge(settings.github_repo, tokens, api_url=settings.github_api_url, http=http)
+    deps = Deps(
+        forge=DryForge(forge, settings.stage_cols) if settings.dry_forge else forge,
+        holmes=HolmesClient(
+            settings.holmes_url,
+            settings.holmes_api_key.get_secret_value(),
+            settings.holmes_model,
+            settings.holmes_timeout_s,
+            http=http,
+        ),
+        emitter=CDEventsEmitter(settings.cdevents_url, http=http),
+        settings=settings,
+        registry=registry,
+        metrics=metrics,
+    )
+
+    async def handler(hook: ArgoDegradedHook) -> Outcome:
+        return await handle_incident(hook, deps)
+
+    return handler
 
 
 @dataclass
@@ -50,8 +100,11 @@ class BridgeState:
                     "received_at": hook.received_at.isoformat() if hook.received_at else None,
                     "state": "running",
                 }
-                await self.handler(hook)
+                result = await self.handler(hook)
                 self.last_incident["state"] = "done"
+                if isinstance(result, Outcome):
+                    self.last_incident.update(outcome_for_status(result))
+                    self.level_last_seen = result.level
             except asyncio.CancelledError:
                 raise
             except Exception:  # one bad incident must not stop the worker
@@ -76,12 +129,16 @@ def create_app(
     settings: Settings | None = None,
     handler: Handler | None = None,
     registry: IncidentRegistry | None = None,
+    metrics: Metrics | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    registry = registry or IncidentRegistry()
+    metrics = metrics or Metrics(dryrun_summary_path=settings.dryrun_summary_path)
+    http = httpx.AsyncClient(timeout=20.0)
     state = BridgeState(
         settings=settings,
-        handler=handler or _log_only_handler,
-        registry=registry or IncidentRegistry(),
+        handler=handler or build_handler(settings, registry, metrics, http),
+        registry=registry,
     )
 
     @contextlib.asynccontextmanager
@@ -96,6 +153,7 @@ def create_app(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            await http.aclose()
 
     app = FastAPI(title="aiops bridge", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.bridge = state
@@ -127,6 +185,10 @@ def create_app(
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:
         return "ok"
+
+    @app.get("/metrics")
+    async def metrics_endpoint() -> Response:
+        return Response(metrics.render(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/status")
     async def status() -> dict[str, Any]:

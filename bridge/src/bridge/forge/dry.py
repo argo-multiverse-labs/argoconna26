@@ -39,6 +39,9 @@ class DryForge:
     async def prs_for_commit(self, sha: str) -> list[int]:
         return await self.inner.prs_for_commit(sha)
 
+    async def commit_title(self, sha: str) -> str | None:
+        return await self.inner.commit_title(sha)
+
     async def comment_on_commit(self, sha: str, body: str) -> str:
         return self._skip("comment", f"commit {sha[:7]}")
 

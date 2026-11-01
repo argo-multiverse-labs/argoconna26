@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     holmes_timeout_s: float = Field(default=115, gt=0, validation_alias=_env("HOLMES_TIMEOUT_S"))
     stage_cols: int = Field(default=30, ge=8, validation_alias=_env("STAGE_COLS"))
     cdevents_url: str = Field(default="", validation_alias=_env("CDEVENTS_URL"))
+    # The CloudEvents source on every bridge event; cdevents-sim keeps these off /timeline (P16).
+    # Empty means no event is sent (an unmarked bridge event would reach HolmesGPT).
+    bridge_event_source: str = Field(default="", validation_alias=_env("BRIDGE_EVENT_SOURCE"))
+    # The optional ConfigMap `dryrun-summary`, mounted by the Deployment (Task 3.10).
+    dryrun_summary_path: str = Field(
+        default="/etc/bridge/dryrun/summary.json", validation_alias=_env("DRYRUN_SUMMARY_PATH")
+    )
     # No upper bound: a value above 1 refuses every answer (the Task 4.6 forced-refusal hook).
     confidence_threshold: float = Field(default=0.7, ge=0, validation_alias=_env("CONFIDENCE_THRESHOLD"))
     config_allowlist: list[str] = Field(
