@@ -11,7 +11,10 @@
 # kustomization (an image bump on an armed config), otherwise Healthy. FORCE_HEALTH=<state>
 # in the stub dir overrides it. It also lists one Ready checkout pod, and a curl stub plays
 # Prometheus for check_fleet_disarmed: the pod reads 2000 (FORCE_GAUGE=<value> overrides),
-# the success rate is 100 and the SLO 99.
+# the success rate is 100 and the SLO 99. It also plays cdevents-sim: bodies POSTed to
+# 127.0.0.1:30082/events land in $STUBS/sim-events.jsonl (one per line) and /seed bodies in
+# $STUBS/sim-seed.log; the calls log has SIM_events / SIM_seed lines in order. A file named SIM_DOWN
+# in the stub dir makes the sim refuse connections.
 
 make_ops_fixture() {
   REAL_GIT="$(command -v git)"
@@ -149,6 +152,13 @@ STUB
   cat > "$STUBS/curl" <<STUB
 #!/usr/bin/env bash
 case "\$*" in
+  *127.0.0.1:30082/events*|*127.0.0.1:30082/seed*)
+    # cdevents-sim: each request body (stdin) goes on its own line; CALLS gets the order.
+    case "\$*" in *30082/seed*) kind=seed; f="$STUBS/sim-seed.log" ;; *) kind=events; f="$STUBS/sim-events.jsonl" ;; esac
+    echo "SIM_\$kind" >> "$CALLS"
+    [ -e "$STUBS/SIM_DOWN" ] && { echo "curl: (7) connection refused" >&2; exit 7; }
+    { tr -d '\\n'; echo; } >> "\$f"
+    echo '{"added":0}' ;;
   *checkout_config_upstream_timeout_ms*)
     echo FLEET >> "$CALLS"
     v=2000; [ -s "$STUBS/FORCE_GAUGE" ] && v=\$(cat "$STUBS/FORCE_GAUGE")

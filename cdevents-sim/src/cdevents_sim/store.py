@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -210,6 +211,29 @@ class Store:
                     if inc["level"] is None:
                         inc["level"] = level
                     break
+
+    def reset(self, drop_ids: set[str], keep_live_after: datetime | None) -> int:
+        """Drop the seed events (`drop_ids`) and every other event older than
+        `keep_live_after` (None drops all of them), then rebuild the incident state
+        and rewrite the file. Returns how many events were dropped."""
+        with self._lock:
+            kept = []
+            for ev in self._events:
+                ctx = ev["context"]
+                if ctx["id"] in drop_ids:
+                    continue
+                if keep_live_after is None or parse_timestamp(ctx["timestamp"]) < keep_live_after:
+                    continue
+                kept.append(ev)
+            dropped = len(self._events) - len(kept)
+            self._events, self._ids, self._incidents = [], set(), []
+            for ev in kept:
+                self._apply(ev)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in kept))
+            os.replace(tmp, self.path)
+            return dropped
 
     # -- public API ------------------------------------------------------
     def add(self, event: dict) -> AddResult:

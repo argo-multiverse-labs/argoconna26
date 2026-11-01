@@ -15,6 +15,7 @@ set -euo pipefail
 PR242_SUBJECT="PR-242: tune upstream timeout for faster failover"
 DOCS_SUBJECT="docs: pricing service notes"
 PRICING_README="apps/pricing/README.md"
+SEED_CHECKOUT_REVISIONS=2
 
 # The README gets a revision line, so a repeated seed still has something to commit.
 write_pricing_readme() {
@@ -29,6 +30,15 @@ write_pricing_readme() {
     "$((10#$rev + 1))" > "$file"
 }
 
+# The newest real commits that touched apps/checkout, oldest first (O6). The sim's seeded
+# checkout deployments inside HolmesGPT's 72 h lookback point at these, never at made-up SHAs.
+recent_checkout_revisions() {
+  local -a revs
+  mapfile -t revs < <(_og log --format=%H -n "$SEED_CHECKOUT_REVISIONS" -- apps/checkout)
+  local i
+  for ((i = ${#revs[@]} - 1; i >= 0; i--)); do printf '%s\n' "${revs[i]}"; done
+}
+
 main() {
   local pr_sha docs_sha change_ref
   load_env
@@ -38,6 +48,11 @@ main() {
   op_sync
   op_disarm
   op_sync
+
+  # The history before PR-242: load it onto the timeline (idempotent; no reset here).
+  local -a history
+  mapfile -t history < <(recent_checkout_revisions)
+  sim_seed false "${history[@]}"
 
   change_ref="$(new_change_ref)"
   config_value_set "$CONFIG_ARMED"

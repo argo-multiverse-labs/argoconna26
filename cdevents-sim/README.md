@@ -13,3 +13,7 @@ Run the tests with `uv run pytest`.
 | `SEED_FIXTURE` | Fixture loaded at startup, timestamps relative to now. |
 
 An operator change event names no app. The sim takes the app from `customData.changed_files` when every path is under the same `apps/<app>/`.
+
+## POST /seed
+
+Loads the fixture again with timestamps relative to now (idempotent on event id). Query: `reset=true` first drops the fixture's events and every live event older than `keep_live_hours` (default `0`: all of them), so each rehearsal starts from the same timeline. Optional body `{"checkout_revisions": [sha, ...]}` (oldest first) gives the fixture's recent checkout deployments real commits to point at; without it those events are skipped, so nothing inside the 72 h lookback names a revision that does not exist. Answers `{"added": n, "dropped": n}`.

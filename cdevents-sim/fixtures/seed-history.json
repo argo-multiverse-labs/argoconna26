@@ -5,7 +5,7 @@
       "id": "seed-deploy-01",
       "source": "/argocd/argocd",
       "type": "dev.cdevents.service.deployed.0.3.0",
-      "timestamp": "-71h"
+      "timestamp": "-96h"
     },
     "subject": {
       "id": "demo/checkout",
@@ -59,7 +59,7 @@
       "id": "seed-deploy-03",
       "source": "/argocd/argocd",
       "type": "dev.cdevents.service.deployed.0.3.0",
-      "timestamp": "-52h"
+      "timestamp": "-80h"
     },
     "subject": {
       "id": "demo/checkout",
@@ -232,13 +232,13 @@
         "environment": {
           "id": "demo"
         },
-        "artifactId": "pkg:generic/checkout@7777777777777777777777777777777777777777"
+        "artifactId": "pkg:generic/checkout@@@CHECKOUT_REV_PREV@@"
       }
     },
     "customData": {
       "argocd": {
         "application": "checkout",
-        "revision": "7777777777777777777777777777777777777777",
+        "revision": "@@CHECKOUT_REV_PREV@@",
         "syncStatus": "Synced",
         "healthStatus": "Healthy"
       }
@@ -259,13 +259,13 @@
         "environment": {
           "id": "demo"
         },
-        "artifactId": "pkg:generic/checkout@8888888888888888888888888888888888888888"
+        "artifactId": "pkg:generic/checkout@@@CHECKOUT_REV_LATEST@@"
       }
     },
     "customData": {
       "argocd": {
         "application": "checkout",
-        "revision": "8888888888888888888888888888888888888888",
+        "revision": "@@CHECKOUT_REV_LATEST@@",
         "syncStatus": "Synced",
         "healthStatus": "Healthy"
       }

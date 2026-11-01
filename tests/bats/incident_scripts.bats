@@ -466,3 +466,92 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   [ "$status" -eq 0 ]
   [ "${#output}" -eq "$STAGE_COLS" ]
 }
+
+# ---- Task 3.14: change events for the timeline (Δ28) ------------------------------------
+
+sim_events() { cat "$STUBS/sim-events.jsonl"; }
+# event_for SHA : the captured change event whose subject is SHA
+event_for() { sim_events | jq -c --arg s "$1" 'select(.subject.id == $s)'; }
+
+@test "rearm emits change event with real sha" {
+  run ops_run "$REPO_ROOT/scripts/rearm.sh"
+  [ "$status" -eq 0 ]
+  cause="$(sed -n 's/^cause: //p' <<<"$output")"
+  ref="$(sed -n 's/^change_ref: //p' <<<"$output")"
+  [[ "$cause" =~ ^[0-9a-f]{40}$ ]]
+  ev="$(event_for "$cause")"
+  [ -n "$ev" ]
+  [ "$(jq -r .context.type <<<"$ev")" = "dev.cdevents.change.merged.0.3.0" ]
+  [ "$(jq -r .context.specversion <<<"$ev")" = "0.5.1" ]
+  [ "$(jq -r .customData.change_ref <<<"$ev")" = "$ref" ]
+  [ "$(jq -r '.customData.changed_files | join(" ")' <<<"$ev")" = "$CFG" ]
+  [ "$(jq -r .subject.content.repository.id <<<"$ev")" = "$(sed -n 's/^REPO_SLUG=//p' "$REPO_ROOT/demo.env")" ]
+  [ "$(jq -r .customData.title <<<"$ev")" = "PR-242 replay: tune upstream timeout" ]
+  [ -n "$(jq -r .customData.author <<<"$ev")" ]
+  [ "$(jq -r .context.source <<<"$ev")" != "$(sed -n 's/^BRIDGE_EVENT_SOURCE=//p' "$REPO_ROOT/demo.env")" ]
+  # the bump after it is a change too, with its own SHA
+  bump="$(sed -n 's/^bump: //p' <<<"$output")"
+  [ -n "$(event_for "$bump")" ]
+}
+
+@test "change event carries no diagnosis fields" {
+  arm_origin
+  run ops_run "$REPO_ROOT/scripts/fix.sh"
+  [ "$status" -eq 0 ]
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null
+  [ -s "$STUBS/sim-events.jsonl" ]
+  ! grep -qE 'config_version_bumped|UPSTREAM_TIMEOUT_MS|config-version' "$STUBS/sim-events.jsonl"
+  run jq -e 'any(paths; .[-1] == "from" or .[-1] == "to" or .[-1] == "key" or .[-1] == "config_version_bumped")' "$STUBS/sim-events.jsonl"
+  [ "$status" -ne 0 ]
+  # exactly the customData a forge would send
+  run jq -r '.customData | keys | join(",")' "$STUBS/sim-events.jsonl"
+  [ "$status" -eq 0 ]
+  while IFS= read -r line; do [ "$line" = "author,change_ref,changed_files,title" ]; done <<<"$output"
+}
+
+@test "fix posts a change event listing both files it changed" {
+  arm_origin
+  run ops_run "$REPO_ROOT/scripts/fix.sh"
+  [ "$status" -eq 0 ]
+  fix="$(sed -n 's/^fix: //p' <<<"$output")"
+  ev="$(event_for "$fix")"
+  [ "$(jq -r '.customData.changed_files | sort | join(" ")' <<<"$ev")" = "$CFG $ROLL" ]
+  [[ "$(jq -r .customData.change_ref <<<"$ev")" =~ ^CHG-[A-Z2-7]{6}$ ]]
+}
+
+@test "seed-history posts the fixture before the PR-242 change event, with real checkout commits" {
+  run ops_run "$REPO_ROOT/scripts/seed-history.sh"
+  [ "$status" -eq 0 ]
+  pr="$(sed -n 's/^cause: //p' <<<"$output")"
+  ref="$(sed -n 's/^change_ref: //p' <<<"$output")"
+  # /seed first, then the PR-242 event
+  seed_line="$(grep -n '^SIM_seed' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$seed_line" ]
+  first_ev="$(grep -n '^SIM_events' "$CALLS" | head -1 | cut -d: -f1)"
+  [ "$seed_line" -lt "$first_ev" ]
+  [ "$(jq -r '.checkout_revisions | length' "$STUBS/sim-seed.log")" -ge 1 ]
+  # every revision handed over is a real commit on the tracked branch that touched apps/checkout
+  while IFS= read -r rev; do
+    [[ "$rev" =~ ^[0-9a-f]{40}$ ]]
+    "$REAL_GIT" --git-dir="$ORIGIN" cat-file -e "$rev^{commit}"
+    [ -n "$("$REAL_GIT" --git-dir="$ORIGIN" diff-tree --root --no-commit-id --name-only -r "$rev" -- apps/checkout)" ]
+  done < <(jq -r '.checkout_revisions[]' "$STUBS/sim-seed.log")
+  # PR-242 itself is not among them (it is its own change event, later); the ref matches
+  ! jq -e --arg p "$pr" '.checkout_revisions | index($p)' "$STUBS/sim-seed.log" >/dev/null
+  [ "$(jq -r .customData.change_ref <<<"$(event_for "$pr")")" = "$ref" ]
+}
+
+@test "a missing sim only warns, and the script still succeeds" {
+  : > "$STUBS/SIM_DOWN"
+  run ops_run "$REPO_ROOT/scripts/rearm.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warn:"* ]]
+  [[ "$output" =~ cause:\ [0-9a-f]{40} ]]
+}
+
+@test "STAGE=1 keeps the sim warning short" {
+  : > "$STUBS/SIM_DOWN"
+  STAGE=1 run ops_run "$REPO_ROOT/scripts/rearm.sh"
+  [ "$status" -eq 0 ]
+  while IFS= read -r line; do [ "${#line}" -le "$STAGE_COLS" ]; done <<<"$output"
+}

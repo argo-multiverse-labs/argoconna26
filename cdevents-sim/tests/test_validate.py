@@ -68,3 +68,18 @@ def test_change_merged_040_is_rejected_because_v051_has_it_at_030():
     e["context"]["type"] = "dev.cdevents.change.merged.0.4.0"
     with pytest.raises(ValidationError, match="schema violation"):
         validate_event(e)
+
+
+def test_operator_change_event_type_matches_vendored_schema():
+    """O1: the operator scripts emit change.merged 0.3.0, the version v0.5.1 defines."""
+    import json
+    from pathlib import Path
+
+    from test_store import operator_change_merged
+    from cdevents_sim.validate import SCHEMA_DIR
+
+    event = operator_change_merged()
+    validate_event(event)
+    schema = json.loads((SCHEMA_DIR / "changemerged.json").read_text())
+    assert event["context"]["type"] in schema["properties"]["context"]["properties"]["type"]["enum"]
+    assert event["context"]["type"] == "dev.cdevents.change.merged.0.3.0"

@@ -391,5 +391,53 @@ new_change_ref() {
   printf '%s' "$out"
 }
 
-# emit_change_event SHA KIND TITLE CHANGE_REF : a no-op until Task 3.14 posts the CDEvent.
-emit_change_event() { :; }
+# ------------------------------------------------- timeline events (Task 3.14, D28)
+# The sim the operator scripts post to. Reachable on the host through the kind port mapping.
+_sim_url() { printf '%s' "${SIM_HOST_URL:-http://${HOST_BIND:-127.0.0.1}:${PORT_SIM:-30082}}"; }
+
+# _sim_post PATH_AND_QUERY : POST the JSON on stdin. Warns (never fails) when the sim is
+# down or answers with an error, so a missing sim can't break an incident script.
+_sim_post() {
+  local target="$1" err
+  if ! err="$(curl -sS --fail --max-time 5 -X POST -H 'Content-Type: application/json' \
+        --data-binary @- -o /dev/null "$(_sim_url)$target" 2>&1)"; then
+    log_warn "timeline: ${err:-sim unreachable}"
+    return 0
+  fi
+}
+
+# emit_change_event SHA KIND TITLE [CHANGE_REF] : tell the timeline about a change, the way
+# a forge or change system would (Δ28): a dev.cdevents.change.merged.0.3.0 (O1) carrying the
+# SHA, title, author, time and customData {change_ref, changed_files}. Nothing about the
+# diagnosis: no key, from, to or config-version. KIND is for the caller's own log only.
+# An empty CHANGE_REF gets a fresh CHG- reference (every real change has one).
+emit_change_event() {
+  local sha="$1" title="${3:-}" ref="${4:-}" author="" files="" now
+  local -a flist=()
+  [[ -n "$ref" ]] || ref="$(new_change_ref)"
+  if [[ -n "${OPERATOR_DIR:-}" && -d "$OPERATOR_DIR" ]]; then
+    author="$(git -C "$OPERATOR_DIR" log -1 --format=%an "$sha" 2>/dev/null || true)"
+    files="$(git -C "$OPERATOR_DIR" diff-tree --no-commit-id --name-only -r "$sha" 2>/dev/null || true)"
+  fi
+  [[ -n "$files" ]] && mapfile -t flist <<<"$files"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg sha "$sha" --arg title "$title" --arg ref "$ref" --arg author "${author:-operator}" \
+      --arg now "$now" --arg repo "${REPO_SLUG:-argo-multiverse-labs/argoconna26}" \
+      --args '{
+        context: {specversion: "0.5.1", id: ("chg-" + $sha[0:12]), source: "/argoconna26/operator",
+                  type: "dev.cdevents.change.merged.0.3.0", timestamp: $now},
+        subject: {id: $sha, content: {repository: {id: $repo}}},
+        customData: {title: $title, author: $author, change_ref: $ref, changed_files: $ARGS.positional}
+      }' "${flist[@]}" | _sim_post /events
+}
+
+# sim_seed RESET REV... : POST /seed. RESET is true or false; with true the sim drops the
+# fixture's events and every live event first (keep_live_hours=0, Δ25), so the timeline
+# starts the same every time. REV... are real recent checkout commits, oldest first (O6).
+sim_seed() {
+  local reset="$1"
+  shift
+  local -a revs=("$@")
+  jq -n --args '{checkout_revisions: $ARGS.positional}' "${revs[@]}" \
+    | _sim_post "/seed?reset=${reset}&keep_live_hours=0"
+}

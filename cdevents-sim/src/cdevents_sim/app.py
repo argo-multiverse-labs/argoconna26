@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Query, Request
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 from .grafana import GrafanaAnnotator
-from .seed import seed
+from .seed import DEFAULT_FIXTURE, check_revisions, fixture_ids, seed
 from .store import Store, parse_since, short_type
 from .validate import ValidationError, validate_event
 
@@ -65,7 +66,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if seed_fixture:
-            seed(Path(seed_fixture), datetime.now(timezone.utc), store)
+            seed(Path(seed_fixture), datetime.now(timezone.utc), store)  # real revisions arrive via POST /seed
         yield
 
     app = FastAPI(title="cdevents-sim", lifespan=lifespan)
@@ -95,6 +96,31 @@ def create_app(
         if annotator is not None:
             background.add_task(annotate, store.row(event))
         return JSONResponse({"id": res.id}, status_code=202)
+
+    @app.post("/seed")
+    async def post_seed(request: Request, reset: bool = False, keep_live_hours: float = Query(0, ge=0)):
+        """Load the fixture (idempotent). With reset=true, first drop the fixture's events and
+        every live event older than keep_live_hours (default 0: all of them), so the fixture
+        comes back relative to now. Body (optional): {"checkout_revisions": [sha, ...]}, the
+        operator's real recent checkout commits, oldest first (O6)."""
+        revisions: list[str] = []
+        raw = await request.body()
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+                if not isinstance(body, dict):
+                    raise ValueError("body must be a JSON object")
+                revisions = check_revisions(body.get("checkout_revisions", []))
+            except ValueError as exc:
+                return _bad(str(exc))
+        fixture = Path(seed_fixture or DEFAULT_FIXTURE)
+        now = datetime.now(timezone.utc)
+        dropped = 0
+        if reset:
+            cutoff = now - timedelta(hours=keep_live_hours) if keep_live_hours > 0 else None
+            dropped = store.reset(fixture_ids(fixture), cutoff)
+        added = seed(fixture, now, store, revisions)
+        return {"added": added, "dropped": dropped}
 
     def _query(app_name, type_, since, limit, delivery_only):
         try:
