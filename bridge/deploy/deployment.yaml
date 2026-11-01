@@ -8,10 +8,9 @@ metadata:
     example.dev/tier: "1"
     slo.example.dev/success-rate: "99"
 spec:
-  # PARKED: slice 3 part 1 commits the bridge with replicas: 0 so no pod starts with the GitHub
-  # App credentials before the GitHub rulesets exist (L5a). Part 2 (Task 3.10 Step 4) sets this
-  # to 1 in a commit on the tracked branch; Argo applies it. Nothing else changes.
-  replicas: 0
+  # One replica: the bridge keeps its incident set in memory, and one worker handles one
+  # incident at a time. (It ran at 0 until the GitHub rulesets existed, L5a.)
+  replicas: 1
   strategy:
     type: Recreate
   selector:
