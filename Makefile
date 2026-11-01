@@ -177,6 +177,25 @@ redeploy-sim: images ## Rebuild the cdevents-sim image and restart its pods when
 	$(ROOT)/scripts/ensure-image.sh --redeploy cdevents-sim
 
 ################################################################################
+# Policy                                                                       #
+################################################################################
+
+.PHONY: policy-verify
+policy-verify: ## Run the Rego unit tests
+	@cd $(ROOT) && conftest verify --policy policy
+
+.PHONY: policy-check
+policy-check: ## Golden-path labels on every app's rendered manifests (conftest, no cluster needed)
+	@cd $(ROOT)
+	rc=0
+	for d in apps/*/; do
+	  [[ -f "$$d/kustomization.yaml" ]] || continue
+	  echo "policy-check: $$d"
+	  kubectl kustomize "$$d" | conftest test --policy policy --namespace goldenpath --parser yaml - || rc=1
+	done
+	exit $$rc
+
+################################################################################
 # GitOps                                                                       #
 ################################################################################
 

@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Rollout
+metadata:
+  name: demo
+  labels:
+    app: demo
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+spec:
+  selector:
+    matchLabels:
+      app: demo
+  template:
+    metadata:
+      labels:
+        app: demo
+        example.dev/owner: payments-team
+        example.dev/tier: "1"
+        slo.example.dev/success-rate: "99"
