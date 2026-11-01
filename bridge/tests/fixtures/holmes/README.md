@@ -6,14 +6,20 @@ else disabled). Keys, IPs and request IDs are scrubbed.
 
 ## Read this first: what is real
 
-The model never answered. The Anthropic account behind the build key returned
-`Your credit balance is too low to access the Anthropic API` on every call, through LiteLLM
-v1.106.4. So the model turns in these files come from a scripted OpenAI-compatible stub, not
-Claude. What is real: the HolmesGPT response envelope, how tool calls are reported, the
-http-toolset allow-list behaviour, the request HolmesGPT sends to the LLM endpoint, and
-`X-API-Key` auth. What is not yet recorded: Claude's strict `response_format` output through
-LiteLLM, which host form Claude chooses, and real latency. Re-record `rca_ok.json` against
-Claude once the account has credit.
+`rca_ok.json` and `rca_toolcall_timeline.json` were re-recorded on 2026-10-31 against real
+Claude (`claude-sonnet-5-5`, through LiteLLM v1.106.4): the model turns, the strict `response_format`
+output and the tool calls are real model output. Each is one call with one successful
+`cdevents_timeline_request`; the stub behind the toolset serves two fixed timeline rows, so the
+facts the model reads are scripted, its reasoning is not. `rca_toolcall_refused_events.json` and the two
+`chat_request_*` files are unchanged and still come from the earlier run with a scripted model
+(the refused-path behaviour is the toolset's, not the model's). Keys, IPs and request IDs are
+scrubbed.
+
+Measured on the real run: strict mode works through LiteLLM to Claude; the model used the
+`cdevents-sim.aiops.svc:8080` host form; one call takes about 9 to 10 s end to end. In one of
+three runs Claude's first two timeline calls failed on bad tool parameters (`max_depth`, then a
+type error inside the toolset) before the third succeeded, so the client must not assume exactly
+one tool call.
 
 ## Files
 
@@ -36,7 +42,7 @@ Claude once the account has credit.
   `url`, `params`, `elapsed_seconds`.
 - Use `tool_calls[].toolset_name`/`tool_name`/`url` for the stage log. The `_fixture` key was
   added to each file by hand and is not part of the API.
-- `metadata.usage`/`costs` come from the stub and are not meaningful.
+- `metadata.usage` is real token usage in the two re-recorded files (the other file still has stub numbers).
 
 ## Contract findings
 
@@ -45,7 +51,7 @@ Claude once the account has credit.
    `max_tokens: 64000`, `response_format` = the strict json_schema unchanged, and
    `strict: true` on **every** tool, including its built-in `TodoWrite`, even with
    `behavior_controls.todowrite_*` false.
-3. **`temperature: 0` is rejected for `claude-sonnet-5-5`** by LiteLLM
+3. (Recheck 2026-10-31: omitting `temperature` from `modelList.rca` is NOT enough; HolmesGPT then sends `temperature: 1e-08`, which is rejected the same way. `temperature: 1` in the entry works and is what Claude applies.) **`temperature: 0` is rejected for `claude-sonnet-5-5`** by LiteLLM
    (`UnsupportedParamsError: ... Only temperature=1 is supported`). Either omit `temperature`
    from the Holmes `modelList.rca` entry or set `litellm_settings.drop_params: true` (with it,
    the request reaches Anthropic).
