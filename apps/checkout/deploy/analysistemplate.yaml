@@ -1,7 +1,11 @@
 # Background gate for the canary: success rate of the canary pods against the SLO target.
 # The numerator falls back to 0 when the canary has no 2xx series at all (every request
-# failed), so total failure reads as 0%, not as "no data". With no traffic yet the whole
-# result is empty, which counts as a pass.
+# failed), so total failure reads as 0%, not as "no data". No data at all (an empty result,
+# or NaN when the canary got no requests) is neither success nor failure: the measurement
+# is Inconclusive. The first measurement is often empty (the canary pod has not been
+# scraped twice yet), so two are allowed; a third pauses the Rollout visibly instead of
+# promoting a canary nobody measured. Measurements come at 10 s intervals, so that pause
+# lands at about 30 s, before the steps (about 40 s of pauses) can promote.
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:
@@ -15,8 +19,9 @@ spec:
       interval: 10s
       initialDelay: 10s
       failureLimit: 1
+      inconclusiveLimit: 2
       consecutiveErrorLimit: 4
-      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] >= {{args.slo-target}}
+      successCondition: len(result) > 0 && !isNaN(result[0]) && result[0] >= {{args.slo-target}}
       failureCondition: len(result) > 0 && !isNaN(result[0]) && result[0] < {{args.slo-target}}
       provider:
         prometheus:
