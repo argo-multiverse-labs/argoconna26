@@ -137,6 +137,46 @@ kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admi
 	k rollout status statefulset/"$$sts" -n "$$NS_MONITORING" --timeout=300s
 
 ################################################################################
+# Images                                                                       #
+################################################################################
+
+# build_image NAME DIR: docker build NAME:latest-build with the pinned base images.
+IMG_BUILD = build_image() { \
+	  docker build -q -t "$$1:latest-build" --build-arg PYTHON_IMAGE="$$PYTHON_IMAGE" --build-arg UV_IMAGE="$$UV_IMAGE" "$$2" >/dev/null; \
+	  log_info "built $$1:latest-build"; }
+
+.PHONY: images
+images: ## Build the demo images and load them into the kind nodes (skips what is present)
+	@$(LOCKED)
+	$(IMG_BUILD)
+	cd $(ROOT)
+	build_image checkout apps/checkout
+	build_image pricing apps/pricing
+	build_image loadgen apps/loadgen
+	# bridge and cdevents-sim join once their directories hold a Dockerfile
+	have_bridge=0; have_sim=0
+	[[ -f bridge/Dockerfile ]] && { build_image bridge bridge; have_bridge=1; }
+	[[ -f cdevents-sim/Dockerfile ]] && { build_image cdevents-sim cdevents-sim; have_sim=1; }
+	IFS=, read -ra tags <<<"$$CHECKOUT_PRELOAD_TAGS"
+	for t in "$${tags[@]}"; do $(ROOT)/scripts/ensure-image.sh checkout "$$t"; done
+	$(ROOT)/scripts/ensure-image.sh pricing "$$PRICING_TAG"
+	$(ROOT)/scripts/ensure-image.sh loadgen "$$LOADGEN_TAG"
+	(( have_bridge )) && $(ROOT)/scripts/ensure-image.sh bridge "$$BRIDGE_TAG"
+	(( have_sim )) && $(ROOT)/scripts/ensure-image.sh cdevents-sim "$$SIM_TAG"
+	true
+
+.PHONY: image-load
+image-load: images ## Alias of images
+
+.PHONY: redeploy-bridge redeploy-sim
+redeploy-bridge: images ## Rebuild the bridge image and restart its pods when they run a stale one
+	@$(LOCKED)
+	$(ROOT)/scripts/ensure-image.sh --redeploy bridge
+redeploy-sim: images ## Rebuild the cdevents-sim image and restart its pods when they run a stale one
+	@$(LOCKED)
+	$(ROOT)/scripts/ensure-image.sh --redeploy cdevents-sim
+
+################################################################################
 # Build, rebuild, info, verification                                           #
 ################################################################################
 
