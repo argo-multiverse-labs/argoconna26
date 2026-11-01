@@ -125,6 +125,10 @@ secrets-late: ## Load Secrets that need running services (slice 3)
 	@$(ROOT)/scripts/secrets.sh late
 secrets: secrets-base secrets-late ## Load all Secrets
 
+.PHONY: grafana-token
+grafana-token: ## Service account + token for cdevents-sim's Grafana annotations (needs Grafana up)
+	@$(ROOT)/scripts/grafana-token.sh
+
 .PHONY: kps-install
 kps-install: helm-repos ## Install kube-prometheus-stack (needs the grafana-admin Secret)
 	@$(LOCKED)

@@ -88,7 +88,9 @@ secret_holmes() {
 }
 
 secret_cdevents_grafana() {
-  log_info "skipped: cdevents-grafana (added in slice 3)"
+  # Needs the Grafana API, so it is made by `make grafana-token` (scripts/grafana-token.sh)
+  # after kps-install, not here.
+  log_info "skipped: cdevents-grafana (made by make grafana-token once Grafana is up)"
 }
 
 secret_bridge() {

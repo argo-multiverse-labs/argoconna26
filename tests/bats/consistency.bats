@@ -135,3 +135,31 @@ plant_file() { # FILE CONTENT : add a new tracked file
   run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
   [ "$status" -ne 0 ]
 }
+
+sim_files() { # SOURCE TAG : a cdevents-sim deploy dir and the demo.env values to compare with
+  mkdir -p "$WORK/cdevents-sim/deploy"
+  printf 'BRIDGE_EVENT_SOURCE=/argoconna26/bridge\nSIM_TAG=v0.1.0\n' >> "$WORK/demo.env"
+  printf '          env:\n            - name: BRIDGE_EVENT_SOURCE\n              value: %s\n' "$1" > "$WORK/cdevents-sim/deploy/deployment.yaml"
+  printf 'images:\n  - name: cdevents-sim\n    newTag: %s\n' "$2" > "$WORK/cdevents-sim/deploy/kustomization.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m sim
+}
+
+@test "cdevents-sim source and tag equal to demo.env pass" {
+  sim_files /argoconna26/bridge v0.1.0
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+}
+
+@test "flags a cdevents-sim BRIDGE_EVENT_SOURCE that differs from demo.env" {
+  sim_files /argoconna26/other v0.1.0
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BRIDGE_EVENT_SOURCE"* ]]
+}
+
+@test "flags a cdevents-sim image tag that differs from SIM_TAG" {
+  sim_files /argoconna26/bridge v0.2.0
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SIM_TAG"* ]]
+}

@@ -2,24 +2,43 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
+from .grafana import GrafanaAnnotator
 from .seed import seed
 from .store import Store, parse_since, short_type
 from .validate import ValidationError, validate_event
+
+
+log = logging.getLogger("cdevents_sim.app")
+
+
+def annotator_from_env() -> GrafanaAnnotator | None:
+    """GRAFANA_URL turns annotations on. The token is a mounted Secret file read per call."""
+    url = os.environ.get("GRAFANA_URL", "").strip()
+    if not url:
+        return None
+    return GrafanaAnnotator(
+        url,
+        token_file=os.environ.get("GRAFANA_TOKEN_FILE", "/var/run/grafana/token"),
+        dashboard_uid=os.environ.get("GRAFANA_DASHBOARD_UID", "trust-ladder"),
+        panel_id=int(os.environ.get("GRAFANA_PANEL_ID", "1")),
+    )
 
 
 def create_app(
     store_path: Path | str | None = None,
     bridge_source: str | None = None,
     seed_fixture: Path | str | None = None,
+    annotator: GrafanaAnnotator | None = None,
 ) -> FastAPI:
     store_path = Path(store_path or os.environ.get("CDEVENTS_STORE", "/data/events.jsonl"))
     bridge_source = bridge_source if bridge_source is not None else os.environ.get("BRIDGE_EVENT_SOURCE", "")
@@ -28,6 +47,13 @@ def create_app(
         raise ValueError("BRIDGE_EVENT_SOURCE must be set (the bridge's CloudEvents source)")
     seed_fixture = seed_fixture or os.environ.get("SEED_FIXTURE")
     store = Store(store_path, bridge_source=bridge_source)
+    annotator = annotator if annotator is not None else annotator_from_env()
+
+    async def annotate(row: dict) -> None:
+        try:
+            await annotator.annotate(row)
+        except Exception:  # annotations must never affect ingest
+            log.exception("grafana annotation failed")
 
     registry = CollectorRegistry()
     events_total = Counter("cdevents_sim_events_total", "Events by ingest result", ["result"], registry=registry)
@@ -49,7 +75,7 @@ def create_app(
         return JSONResponse({"error": msg}, status_code=400)
 
     @app.post("/events")
-    async def post_event(request: Request):
+    async def post_event(request: Request, background: BackgroundTasks):
         try:
             event = await request.json()
         except ValueError:
@@ -66,6 +92,8 @@ def create_app(
             return JSONResponse({"duplicate": True}, status_code=200)
         if res.status == "dropped":
             return JSONResponse({"dropped": res.reason}, status_code=200)
+        if annotator is not None:
+            background.add_task(annotate, store.row(event))
         return JSONResponse({"id": res.id}, status_code=202)
 
     def _query(app_name, type_, since, limit, delivery_only):

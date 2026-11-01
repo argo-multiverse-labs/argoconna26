@@ -59,7 +59,8 @@ while IFS=: read -r file line text; do
   if [[ "$text" =~ ^[[:space:]-]*namespace:[[:space:]]*([^[:space:]#]+) ]]; then
     check_ns "$file" "$line" "${BASH_REMATCH[1]}"
   fi
-done < <(git grep -nI -E '^[[:space:]-]*namespace:[[:space:]]*[^[:space:]#]+' -- "${FILES[@]}" 2>/dev/null || true)
+done < <(git grep -nI -E '^[[:space:]-]*namespace:[[:space:]]*[^[:space:]#]+' -- "${FILES[@]}" 2>/dev/null \
+  | grep -E '^[^:]+\.(ya?ml|md|tpl|j2):' || true)  # manifests only: a Python field 'namespace: str' is not one
 
 # 4. a kind context literal must be the demo's
 while IFS=: read -r file line text; do
@@ -94,6 +95,20 @@ while IFS= read -r file; do
     fi
   done < "$file"
 done < <(printf '%s\n' "${FILES[@]}" | grep -E '(^|/)(Dockerfile|Containerfile)[^/]*$' || true)
+
+# 6. cdevents-sim (O4): the Deployment's BRIDGE_EVENT_SOURCE and the kustomize image tag
+#    must equal demo.env's BRIDGE_EVENT_SOURCE and SIM_TAG. The sim refuses to start without
+#    the source, and a mismatch would let the bridge's events into /timeline (P16).
+if [[ -n "${BRIDGE_EVENT_SOURCE:-}" && -f cdevents-sim/deploy/deployment.yaml ]]; then
+  got="$(awk '/name: BRIDGE_EVENT_SOURCE/ {getline; sub(/^[[:space:]]*value:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' cdevents-sim/deploy/deployment.yaml)"
+  [[ "$got" == "$BRIDGE_EVENT_SOURCE" ]] \
+    || report "cdevents-sim/deploy/deployment.yaml: BRIDGE_EVENT_SOURCE '$got' differs from demo.env ($BRIDGE_EVENT_SOURCE)"
+fi
+if [[ -n "${SIM_TAG:-}" && -f cdevents-sim/deploy/kustomization.yaml ]]; then
+  got="$(awk '/name: cdevents-sim/ {getline; sub(/^[[:space:]]*newTag:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' cdevents-sim/deploy/kustomization.yaml)"
+  [[ "$got" == "$SIM_TAG" ]] \
+    || report "cdevents-sim/deploy/kustomization.yaml: newTag '$got' differs from demo.env SIM_TAG ($SIM_TAG)"
+fi
 
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2

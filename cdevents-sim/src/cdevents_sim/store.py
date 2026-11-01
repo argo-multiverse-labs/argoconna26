@@ -270,6 +270,10 @@ class Store:
             "customData": event.get("customData"),
         }
 
+    def row(self, event: dict) -> dict:
+        """The query-API row for one event (what the Grafana annotator posts)."""
+        return self._row(event)
+
     def query(
         self,
         app: str | None = None,

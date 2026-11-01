@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdevents-sim
+  labels:
+    app: cdevents-sim
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # one ReadWriteOnce volume, one writer
+  selector:
+    matchLabels:
+      app: cdevents-sim
+  template:
+    metadata:
+      labels:
+        app: cdevents-sim
+        example.dev/owner: payments-team
+        example.dev/tier: "1"
+        slo.example.dev/success-rate: "99"
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: cdevents-sim
+          image: cdevents-sim
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # The bridge's CloudEvents source (demo.env BRIDGE_EVENT_SOURCE). /timeline drops
+            # every event with this source; the sim refuses to start without it (P16, O4).
+            - name: BRIDGE_EVENT_SOURCE
+              value: /argoconna26/bridge
+            - name: GRAFANA_URL
+              value: http://kps-grafana.monitoring.svc:80
+            - name: GRAFANA_TOKEN_FILE
+              value: /var/run/grafana/token
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            # Optional: the Secret is written by `make grafana-token` after Grafana is up, and
+            # the file is read on every annotation, so no restart is needed.
+            - {name: grafana-token, mountPath: /var/run/grafana, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cdevents-sim-data
+        - name: grafana-token
+          secret:
+            secretName: cdevents-grafana
+            optional: true
