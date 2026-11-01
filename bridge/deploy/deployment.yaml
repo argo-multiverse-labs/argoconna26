@@ -31,6 +31,9 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
+        # Secret volume files belong to root. fsGroup gives them group 10001, so the
+        # bridge user can read the GitHub App key (mode 0440 below).
+        fsGroup: 10001
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: bridge
@@ -82,7 +85,7 @@ spec:
         - name: github-key
           secret:
             secretName: bridge-secrets
-            defaultMode: 0400
+            defaultMode: 0440
             items:
               - {key: github-app-key, path: github-app-key}
         - name: dryrun-summary
