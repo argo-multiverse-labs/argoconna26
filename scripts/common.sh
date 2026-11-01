@@ -287,3 +287,67 @@ helm_ensure() {
   h upgrade --install "$rel" "$chart" --version "$ver" -n "$ns" --create-namespace \
     "${fargs[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}"
 }
+
+# ---------------------------------------------------- stage output (P19)
+# The operator scripts run with STAGE=1 on stage: one short line per beat, none longer
+# than STAGE_COLS, no git chatter, and no machine lines (cause:, bump:, change_ref:) on
+# the terminal. Those go to <main checkout>/.operator/<file> for the e2e scripts instead.
+stage_on() { [[ "${STAGE:-0}" == "1" ]]; }
+
+# beat TEXT... : one line on stdout, clipped to STAGE_COLS under STAGE=1.
+beat() {
+  local text="$*"
+  if stage_on; then text="${text:0:${STAGE_COLS:-30}}"; fi
+  printf '%s\n' "$text"
+}
+
+# machine_init NAME : choose where machine lines go. Under STAGE=1 the file
+# <main checkout>/.operator/NAME is truncated and used; otherwise they go to stdout.
+MACHINE_FILE=""
+machine_init() {
+  MACHINE_FILE=""
+  if stage_on; then
+    local dir
+    dir="$(main_root)/.operator"
+    mkdir -p "$dir"
+    MACHINE_FILE="$dir/$1"
+    : > "$MACHINE_FILE"
+  fi
+}
+
+# machine_line KEY VALUE : "KEY: VALUE" on stdout, or in the machine file under STAGE=1.
+machine_line() {
+  if [[ -n "$MACHINE_FILE" ]]; then
+    printf '%s: %s\n' "$1" "$2" >> "$MACHINE_FILE"
+  else
+    printf '%s: %s\n' "$1" "$2"
+  fi
+}
+
+# stage_wait DESC TIMEOUT_S CMD... : wait_for, without its stderr chatter under STAGE=1.
+# On timeout it still prints one short line (exit 4).
+stage_wait() {
+  local rc=0
+  if ! stage_on; then wait_for "$@"; return; fi
+  wait_for "$@" 2>/dev/null || rc=$?
+  if (( rc != 0 )); then printf 'timeout: %s\n' "${1:0:21}" >&2; fi
+  return "$rc"
+}
+
+# quiet CMD... : run CMD with its output held back; print it only when CMD fails.
+quiet() {
+  local out rc=0
+  out="$("$@" 2>&1)" || rc=$?
+  if (( rc != 0 )); then printf '%s\n' "$out" >&2; fi
+  return "$rc"
+}
+
+# new_change_ref : CHG- plus six characters of [A-Z2-7] (Δ28). Never written to Git or the cluster.
+new_change_ref() {
+  local alphabet=ABCDEFGHIJKLMNOPQRSTUVWXYZ234567 out="CHG-"
+  for _ in 1 2 3 4 5 6; do out+="${alphabet:RANDOM%32:1}"; done
+  printf '%s' "$out"
+}
+
+# emit_change_event SHA KIND TITLE CHANGE_REF : a no-op until Task 3.14 posts the CDEvent.
+emit_change_event() { :; }

@@ -239,6 +239,14 @@ info: ## Print URLs and how to get credentials (never the passwords)
 	Context     $$CLUSTER_CONTEXT (isolated kubeconfig: $$KUBECONFIG)
 	INFO
 
+################################################################################
+# Operator scripts (Git pushes that drive the incident; see scripts/git-ops.sh) #
+################################################################################
+
+.PHONY: operator-clone
+operator-clone: ## Clone the repo for the operator scripts and install the pre-commit hook
+	@$(ROOT)/scripts/git-ops.sh operator-clone
+
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts
 	@mkdir -p $(SNAP_DIR)
