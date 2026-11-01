@@ -23,7 +23,7 @@ log = logging.getLogger("bridge.metrics")
 
 LEVELS = ("suggest", "propose", "act")
 ACTIONS = ("commented", "refused", "pii_blocked", "holmes_failed", "pr_opened", "auto_merge_enabled", "merged",
-           "policy_failed")
+           "policy_failed", "post_failed")
 DRYRUN_RELOAD_S = 60.0
 
 

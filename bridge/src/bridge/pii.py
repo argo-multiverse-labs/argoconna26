@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
@@ -55,6 +56,18 @@ def _ip_hits(text: str) -> list[PiiHit]:
                 continue
             hits.append(PiiHit(kind, m.span()))  # type: ignore[arg-type]
     return hits
+
+
+def strip_format(text: str) -> str:
+    """Drop Unicode format characters (category Cf: zero-width spaces and joiners,
+    bidi controls). They render as nothing, so they can hide an address from a regex."""
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+def normalize(text: str) -> str:
+    """What the scan should see: format characters dropped and compatibility forms
+    (fullwidth @, ligatures) folded to their plain equivalents."""
+    return unicodedata.normalize("NFKC", strip_format(text))
 
 
 def scan(text: str) -> list[PiiHit]:

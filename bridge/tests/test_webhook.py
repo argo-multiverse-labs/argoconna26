@@ -210,3 +210,18 @@ def test_status_shape(client: TestClient) -> None:
 
 def test_status_never_shows_token(client: TestClient) -> None:
     assert WEBHOOK_TOKEN not in client.get("/status").text
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"revision": "x/../../issues/1"},
+        {"sync_revision": "a" * 39 + "/"},
+        {"sync_revision": "A" * 40},
+        {"history": [{"id": 1, "revision": "../issues/1", "deployedAt": "2026-11-01T10:00:00Z"}]},
+    ],
+)
+def test_non_sha_revisions_rejected_422(client: TestClient, handler: RecordingHandler, overrides: dict) -> None:
+    r = client.post("/hooks/argocd", json=hook_body(**overrides), headers=AUTH)
+    assert r.status_code == 422
+    assert handler.calls == []

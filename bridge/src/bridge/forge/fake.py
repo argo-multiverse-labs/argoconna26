@@ -14,7 +14,8 @@ class FakeForge:
     `ancestors` maps a ref to the SHAs reachable from it. `changed_keys` maps
     (sha, path) to the keys that commit changed in that file. `prs` maps a SHA to
     PR numbers. `titles` maps a SHA to its commit title. Writes are recorded in `commit_comments` and `pr_comments`.
-    Set `fail_reads` to an exception to make every read raise it.
+    Set `fail_reads` to an exception to make every read raise it, and `fail_writes`
+    to make every comment raise it.
     """
 
     files: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -24,6 +25,7 @@ class FakeForge:
     prs: dict[str, list[int]] = field(default_factory=dict)
     titles: dict[str, str] = field(default_factory=dict)
     fail_reads: BaseException | None = None
+    fail_writes: BaseException | None = None
     commit_comments: list[tuple[str, str]] = field(default_factory=list)
     pr_comments: list[tuple[int, str]] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
@@ -64,10 +66,14 @@ class FakeForge:
 
     async def comment_on_commit(self, sha: str, body: str) -> str:
         self.calls.append(("comment_on_commit", sha))
+        if self.fail_writes is not None:
+            raise self.fail_writes
         self.commit_comments.append((sha, body))
         return f"https://forge.test/commit/{sha}#comment-{len(self.commit_comments)}"
 
     async def comment_on_pr(self, number: int, body: str) -> str:
         self.calls.append(("comment_on_pr", number))
+        if self.fail_writes is not None:
+            raise self.fail_writes
         self.pr_comments.append((number, body))
         return f"https://forge.test/pull/{number}#comment-{len(self.pr_comments)}"

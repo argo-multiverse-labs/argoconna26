@@ -65,21 +65,38 @@ class Deps:
 
 @dataclass(frozen=True)
 class Outcome:
+    """`action` is what the bridge set out to do. `post_failed` says the forge refused
+    the write, so `url` is None and nothing reached GitHub."""
+
     action: Action
     url: str | None = None
     level: Level | None = None
+    post_failed: bool = False
 
 
 # -- rendering ---------------------------------------------------------------
 
 # An @ that starts a word (`@team`), not one inside an address: the PII scan must still see emails.
 _MENTION = re.compile(r"(?<![\w.+-])@(?=[A-Za-z0-9_-])")
+# Link, image, autolink and code syntax: escaped so model text renders as text.
+_MARKDOWN = re.compile(r"([\[\]()!<>`\\])")
+# `#123` and `owner/repo#123` would write a cross-reference into that issue.
+_ISSUE_REF = re.compile(r"#(?=[A-Za-z0-9])")
 
 
 def plain(value: object) -> str:
-    """One line of model text for a comment: whitespace collapsed (so it can't start a
-    new Markdown block) and @-mentions broken (so it can't notify anyone)."""
-    return _MENTION.sub("@\u200b", " ".join(str(value).split()))
+    """One line of model text for a public comment.
+
+    Format characters are dropped (they can hide text from the PII scan), whitespace is
+    collapsed (so it can't start a new Markdown block), link, image, autolink and code
+    syntax is backslash-escaped (so it can't link, embed a tracking image or break out of
+    the line), and @-mentions and issue references are broken with a zero-width space
+    (so they notify no one and write nothing into another issue).
+    """
+    text = " ".join(pii.strip_format(str(value)).split())
+    text = _MARKDOWN.sub(r"\\\1", text)
+    text = _ISSUE_REF.sub("#\u200b", text)
+    return _MENTION.sub("@\u200b", text)
 
 
 _env = Environment(
@@ -109,6 +126,7 @@ class _Run:
         self.deps = deps
         self.level = level
         self.s = deps.settings
+        self.post_failed = False
 
     def stage(self, step: str, detail: str) -> None:
         stagelog.emit(step, detail, self.s.stage_cols)
@@ -125,15 +143,33 @@ class _Run:
             level=self.level, revision=self.hook.revision, now=self.deps.clock(),
         )
 
+    async def post(self, write: Awaitable[str]) -> str | None:
+        """Run one forge write. A ForgeError is recorded, not raised, so the incident still
+        gets its outcome, event and metric; the caller gets None for the URL."""
+        try:
+            return await write
+        except ForgeError as exc:
+            # ForgeError messages carry a method, a path and a status code, never a token.
+            log.warning("incident %s: forge write failed: %s", self.hook.key, exc)
+            self.stage("forge", "post failed")
+            self.post_failed = True
+            return None
+
     async def finish(self, action: Action, url: str | None, reason: str | None, *extra: dict) -> Outcome:
-        self.deps.metrics.action(action)
-        for event in (*extra, self.action_event(action, url, reason)):
-            await self.emit(event)
-        log.info("incident %s: %s (%s)", self.hook.key, action, url)
-        return Outcome(action, url, self.level)
+        if self.post_failed:
+            # Nothing reached GitHub: count and report the failure, naming what was intended.
+            self.deps.metrics.action("post_failed")
+            event = self.action_event("post_failed", None, action)
+        else:
+            self.deps.metrics.action(action)
+            event = self.action_event(action, url, reason)
+        for e in (*extra, event):
+            await self.emit(e)
+        log.info("incident %s: %s (%s)%s", self.hook.key, action, url, " post failed" if self.post_failed else "")
+        return Outcome(action, url, self.level, post_failed=self.post_failed)
 
     async def handoff(self, text: str, reason: str) -> Outcome:
-        url = await self.deps.forge.comment_on_commit(self.hook.sync_revision, text)
+        url = await self.post(self.deps.forge.comment_on_commit(self.hook.sync_revision, text))
         return await self.finish("holmes_failed", url, reason)
 
     async def investigate(self) -> HolmesResult | Outcome:
@@ -170,7 +206,7 @@ class _Run:
         return sha, (prs[0] if prs else None)
 
     async def pii_gate(self, body: str, rca_event: dict) -> Outcome | None:
-        payloads = (body, json.dumps(rca_event["customData"], ensure_ascii=False))
+        payloads = tuple(pii.normalize(t) for t in (body, json.dumps(rca_event["customData"], ensure_ascii=False)))
         found = {(h.kind, text[h.span[0]:h.span[1]]) for text in payloads for h in pii.scan(text)}
         if not found:
             self.stage("pii", "clean")
@@ -182,7 +218,7 @@ class _Run:
         self.stage("pii", "blocked")
         blocked = render("pii_blocked_comment.md.j2", kinds=kinds, argo_url=argo_url(self.s, self.hook),
                          level=self.level)
-        url = await self.deps.forge.comment_on_commit(self.hook.sync_revision, blocked)
+        url = await self.post(self.deps.forge.comment_on_commit(self.hook.sync_revision, blocked))
         return await self.finish("pii_blocked", url, ",".join(kinds))
 
     async def suggest(self) -> Outcome:
@@ -222,18 +258,21 @@ class _Run:
             # so a wrong answer never lands on an innocent commit.
             unverified = any(r.reason == "cause_not_in_history" for r in refusals)
             target = self.hook.sync_revision if unverified else rca.cause_commit_sha
-            url = await forge.comment_on_commit(target, body)
-            self.stage("suggest", "refusal posted")
+            url = await self.post(forge.comment_on_commit(target, body))
+            if url:
+                self.stage("suggest", "refusal posted")
             reason = ",".join(dict.fromkeys(r.reason for r in refusals))
             return await self.finish("refused", url, reason, rca_event)
 
         sha, pr = await self.suggest_target(rca.cause_commit_sha)
         if pr is not None:
-            url = await forge.comment_on_pr(pr, body)
-            self.stage("suggest", "commented on PR")
+            url = await self.post(forge.comment_on_pr(pr, body))
+            if url:
+                self.stage("suggest", "commented on PR")
         else:
-            url = await forge.comment_on_commit(sha, body)
-            self.stage("suggest", "commented")
+            url = await self.post(forge.comment_on_commit(sha, body))
+            if url:
+                self.stage("suggest", "commented")
         return await self.finish("commented", url, None, rca_event)
 
 
@@ -257,7 +296,12 @@ async def handle_incident(hook: ArgoDegradedHook, deps: Deps) -> Outcome:
 
 
 def outcome_for_status(outcome: Outcome) -> dict[str, object]:
-    return {"action": outcome.action, "url": outcome.url, "holmes_failed": outcome.action == "holmes_failed"}
+    return {
+        "action": outcome.action,
+        "url": outcome.url,
+        "holmes_failed": outcome.action == "holmes_failed",
+        "post_failed": outcome.post_failed,
+    }
 
 
 __all__ = ["Deps", "Outcome", "handle_incident", "outcome_for_status", "plain", "render"]
