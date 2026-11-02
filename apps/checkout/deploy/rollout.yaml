@@ -9,6 +9,8 @@ metadata:
     slo.example.dev/success-rate: "99"
 spec:
   replicas: 4
+  # Keep the Argo CD tree short: old ReplicaSets from rehearsals are pruned.
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: checkout
