@@ -31,7 +31,7 @@ _HEX = re.compile(r"^[0-9a-f]{7,40}$")
 # GitHub Actions' app id (demo.env POLICY_CHECK_INTEGRATION_ID): the required check is pinned to
 # it, and so is the bridge's own read, so a same-named check from another app never counts.
 DEFAULT_CHECK_APP_ID = 15368
-_ENABLE_AUTO_MERGE = (
+ENABLE_AUTO_MERGE = (
     "mutation($id: ID!, $method: PullRequestMergeMethod!) {"
     " enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {"
     " pullRequest { autoMergeRequest { enabledAt mergeMethod } } } }"
@@ -92,10 +92,10 @@ class GitHubForge:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         delays = self.read_retry_delays_s if method == "GET" else ()
+        url = f"{self._api}/repos/{self.repo}{path}"
         for attempt in range(len(delays) + 1):
             last = attempt == len(delays)
             headers = await self._headers(f"{method} {path}")
-            url = f"{self._api}/repos/{self.repo}{path}"
             try:
                 response = await self._http.request(method, url, headers=headers, **kwargs)
             except httpx.HTTPError as exc:
@@ -342,7 +342,7 @@ class GitHubForge:
         """GraphQL `enablePullRequestAutoMerge` with the installation token."""
         what = "enablePullRequestAutoMerge"
         headers = await self._headers(what)
-        payload = {"query": _ENABLE_AUTO_MERGE, "variables": {"id": pr.node_id, "method": method.upper()}}
+        payload = {"query": ENABLE_AUTO_MERGE, "variables": {"id": pr.node_id, "method": method.upper()}}
         try:
             response = await self._http.post(f"{self._api}/graphql", headers=headers, json=payload)
         except httpx.HTTPError as exc:

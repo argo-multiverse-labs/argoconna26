@@ -33,7 +33,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined
 from . import events, guardrails, pii, stagelog
 from .autonomy import Level, read_autonomy
 from .config import Settings
-from .events import Emitter
+from .events import CHANGE_REF, Emitter
 from .forge import (
     CheckStatus,
     Forge,
@@ -177,9 +177,8 @@ def _cap(text: str, limit: int) -> str:
     return cut.rstrip(" ,;:-") + "…"
 
 
-# The operator's change reference (scripts/common.sh new_change_ref). tests/e2e/rung1.sh
-# greps the Timeline line for it, so capping must never drop it.
-CHANGE_REF = re.compile(r"\bCHG-[A-Z2-7]{6}\b")
+# tests/e2e/rung1.sh greps the Timeline line for the change reference (events.CHANGE_REF), so
+# capping must never drop it.
 KEPT_REFS_MAX = 1  # without the cause's ref: only the first in the text, never a later one
 
 
@@ -436,11 +435,14 @@ class _Run:
         try:
             return await write
         except ForgeError as exc:
-            # ForgeError messages carry a method, a path and a status code, never a token.
-            log.warning("incident %s: forge write failed: %s", self.hook.key, exc)
-            self.stage("forge", "post failed")
-            self.post_failed = True
+            self.write_failed(exc)
             return None
+
+    def write_failed(self, exc: ForgeError) -> None:
+        # ForgeError messages carry a method, a path and a status code, never a token.
+        log.warning("incident %s: forge write failed: %s", self.hook.key, exc)
+        self.stage("forge", "post failed")
+        self.post_failed = True
 
     async def record(self, action: Action, url: str | None, reason: str | None, *extra: dict) -> None:
         """Count one action and emit its event, after `extra` events."""
@@ -606,7 +608,6 @@ class _Run:
                 self.stage("suggest", "commented")
         return await self.finish("commented", url, None, rca_event)
 
-
     # -- propose (Task 4.3) ----------------------------------------------------
 
     async def open_pr_guard(self) -> Outcome | None:
@@ -745,9 +746,7 @@ class _Run:
             self.stage(self.level, "pr already open")
             return await self.finish("duplicate", None, "branch_exists", rca_event)
         except ForgeError as exc:
-            log.warning("incident %s: forge write failed: %s", self.hook.key, exc)
-            self.stage("forge", "post failed")
-            self.post_failed = True
+            self.write_failed(exc)
             return await self.finish("pr_opened", None, None, rca_event)
         self.stage(self.level, "pr opened")
         created = events.change_created(
@@ -828,12 +827,7 @@ class _Run:
             # GitHub merging first is the expected race, not a failure.
             log.info("incident %s: catch-up merge not made: %s", self.hook.key, exc)
             return enabled
-        self.stage("act", "merged")
-        merged = events.change_merged(
-            pr.url, sha, self.s.bot_login, source=self.s.bridge_event_source, repo=self.s.github_repo,
-            app=self.hook.app, now=self.deps.clock(),
-        )
-        return await self.finish("merged", pr.url, None, merged)
+        return await self.merged(pr, sha)
 
     async def merge_method(self) -> MergeMethod:
         """The repo's allowed method, preferring `merge`; `merge` when the settings can't be read."""
@@ -873,6 +867,10 @@ class _Run:
             self.stage("forge", "merge failed")
             self.post_failed = True
             return await self.finish("merged", pr.url, None)
+        return await self.merged(pr, sha)
+
+    async def merged(self, pr: PullRequest, sha: str) -> Outcome:
+        """The bridge's own merge landed: say so and emit its `change.merged`."""
         self.stage("act", "merged")
         merged = events.change_merged(
             pr.url, sha, self.s.bot_login, source=self.s.bridge_event_source, repo=self.s.github_repo,

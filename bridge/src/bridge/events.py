@@ -167,7 +167,9 @@ class CDEventsEmitter:
             log.warning("event not delivered (%s): HTTP %s", etype, r.status_code)
 
 
-_CHANGE_REF = re.compile(r"CHG-[A-Z2-7]{6}")
+#: The operator's change reference (scripts/common.sh new_change_ref). `fullmatch` checks one
+#: value; `findall`/`search` find it inside text.
+CHANGE_REF = re.compile(r"\bCHG-[A-Z2-7]{6}\b")
 _CHANGE_MERGED = "dev.cdevents.change.merged"
 
 
@@ -197,6 +199,6 @@ class SimChangeRefs:
             if not isinstance(row, dict) or str(row.get("revision", "")).lower() != sha.lower():
                 continue
             ref = (row.get("customData") or {}).get("change_ref") if isinstance(row.get("customData"), dict) else None
-            if isinstance(ref, str) and _CHANGE_REF.fullmatch(ref):
+            if isinstance(ref, str) and CHANGE_REF.fullmatch(ref):
                 return ref
         return None

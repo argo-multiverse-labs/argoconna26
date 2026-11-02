@@ -52,7 +52,7 @@ import yaml
 
 from .autonomy import read_autonomy
 from .config import Settings
-from .events import Emitter, NullEmitter, SimChangeRefs
+from .events import CHANGE_REF, Emitter, NullEmitter, SimChangeRefs
 from .forge import AutoMergeResult, CheckStatus, Forge, MergeMethod, PullRequest, PullRequestInfo
 from .forge.base import POLICY_CHECK
 from .forge.github import GitHubForge
@@ -78,7 +78,6 @@ EXIT_USAGE = 2
 
 TRAILER = re.compile(r"^Demo-(?:Rearm|Seed): \S", re.MULTILINE)
 SHA = re.compile(r"^[0-9a-f]{40}$")
-CHANGE_REF = re.compile(r"^CHG-[A-Z2-7]{6}$")
 
 
 def _utcnow() -> datetime:
@@ -220,7 +219,7 @@ def expected_from_git(repo: Path, ref: str, change_ref: str) -> Expected:
     """The incident's answer from Git: the newest commit on `ref` with a `Demo-Rearm:` or
     `Demo-Seed:` trailer is the cause; its one changed file, its one changed ConfigMap key,
     and the key's value before (`to_value`, what a fix restores) and after (`from_value`)."""
-    if not CHANGE_REF.match(change_ref):
+    if not CHANGE_REF.fullmatch(change_ref):
         raise ExpectedError(f"change_ref {change_ref!r} is not a CHG- reference")
     try:
         log_out = _git(repo, "log", "--first-parent", "--format=%H%x1f%B%x1e", ref)
@@ -552,14 +551,18 @@ class SummaryError(Exception):
     pass
 
 
+def _refuse_aborted(batches: Sequence[dict[str, Any]]) -> None:
+    for b in batches:
+        if b.get("aborted"):
+            raise SummaryError(f"batch {b.get('batch')} aborted ({b['aborted']}); no summary")
+
+
 def summarize(batches: Sequence[dict[str, Any]], *, model_temperature: float | None, model_id: str,
               now: datetime | None = None) -> dict[str, Any]:
     """The summary the slide and panel 4 use (Δ27). Refuses aborted or empty batches."""
     if not batches:
         raise SummaryError("no batches")
-    for b in batches:
-        if b.get("aborted"):
-            raise SummaryError(f"batch {b.get('batch')} aborted ({b['aborted']}); no summary")
+    _refuse_aborted(batches)
     runs = [r for b in batches for r in b.get("results", [])]
     if any(len(b.get("results", [])) != b.get("n") for b in batches):
         raise SummaryError("a batch has fewer results than runs")
@@ -615,9 +618,7 @@ def write_outputs(run_dir: Path, expected_batches: int, *, results_out: Path, su
     An ablation run (Δ28: the timeline toolset disabled) never writes a summary, so it can't
     reach the slide or panel 4. Its check is that no run cited the change reference."""
     batches = load_batches(run_dir, expected_batches)
-    for b in batches:
-        if b.get("aborted"):
-            raise SummaryError(f"batch {b.get('batch')} aborted ({b['aborted']}); no summary")
+    _refuse_aborted(batches)
     runs = [r for b in batches for r in b.get("results", [])]
     results_out.parent.mkdir(parents=True, exist_ok=True)
     results_out.write_text(json.dumps({"ablation": ablation, "runs": runs}, indent=2) + "\n")

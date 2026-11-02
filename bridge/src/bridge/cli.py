@@ -38,6 +38,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .forge.github import ENABLE_AUTO_MERGE
 from .github_auth import GitHubAuthError, InstallationTokenProvider
 
 _RULESET_MSG = re.compile(r"repository rule violation|argoconna26-", re.IGNORECASE)
@@ -69,6 +70,16 @@ class _Gh:
             "X-GitHub-Api-Version": "2022-11-28",
         }
         return await self.http.request(method, f"{self.api}/repos/{self.repo}{path}", headers=headers, **kw)
+
+    async def enable_auto_merge(self, node_id: str) -> tuple[int, list[dict[str, Any]]]:
+        """GraphQL `enablePullRequestAutoMerge` (MERGE), as the bridge sends it: (HTTP status, errors)."""
+        g = await self.http.post(
+            f"{self.api}/graphql",
+            headers={"Authorization": f"Bearer {await self.tokens.token()}", "Accept": "application/vnd.github+json"},
+            json={"query": ENABLE_AUTO_MERGE, "variables": {"id": node_id, "method": "MERGE"}},
+        )
+        body = g.json() if g.headers.get("content-type", "").startswith("application/json") else {}
+        return g.status_code, body.get("errors", [])
 
     async def head(self, branch: str) -> str:
         r = await self.call("GET", f"/git/ref/heads/{quote(branch, safe='/')}")
@@ -200,11 +211,6 @@ _SPIKE_FILE = "apps/pricing/README.md"
 _REV_LINE = re.compile(r"^(Notes revision: )(\d+)$", re.MULTILINE)
 _SPIKE_AUTONOMY_FILE = "aiops/autonomy.yaml"
 _LEVEL_LINE = re.compile(r"^level:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
-_ENABLE_AUTO_MERGE = (
-    "mutation($id: ID!, $method: PullRequestMergeMethod!) {"
-    " enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {"
-    " pullRequest { autoMergeRequest { enabledAt mergeMethod } } } }"
-)
 
 
 class SpikeError(Exception):
@@ -314,16 +320,11 @@ async def run_spike_pr(
     number, node_id, url = pr.json()["number"], pr.json()["node_id"], pr.json().get("html_url", "")
 
     enabled, err = False, ""
-    g = await http.post(
-        f"{api_url.rstrip('/')}/graphql",
-        headers={"Authorization": f"Bearer {await tokens.token()}", "Accept": "application/vnd.github+json"},
-        json={"query": _ENABLE_AUTO_MERGE, "variables": {"id": node_id, "method": "MERGE"}},
-    )
-    body = g.json() if g.headers.get("content-type", "").startswith("application/json") else {}
-    if g.status_code < 300 and not body.get("errors"):
+    status, errors = await gh.enable_auto_merge(node_id)
+    if status < 300 and not errors:
         enabled = True
     else:
-        err = "; ".join(e.get("message", "") for e in body.get("errors", [])) or f"HTTP {g.status_code}"
+        err = "; ".join(e.get("message", "") for e in errors) or f"HTTP {status}"
 
     rest_status: int | None = None
     rest_message = ""
@@ -645,14 +646,9 @@ async def run_test_pr_try_merge(
             raise NegativePrError(
                 f"{POLICY_CHECK_CONTEXT} on {str(pr['head']['sha'])[:7]} is {status or 'missing'}/{conclusion or '-'}; "
                 "a REST merge is tried only after it concluded non-success")
-    g = await http.post(
-        f"{api_url.rstrip('/')}/graphql",
-        headers={"Authorization": f"Bearer {await tokens.token()}", "Accept": "application/vnd.github+json"},
-        json={"query": _ENABLE_AUTO_MERGE, "variables": {"id": pr["node_id"], "method": "MERGE"}},
-    )
-    body = g.json() if g.headers.get("content-type", "").startswith("application/json") else {}
-    errors = "; ".join(e.get("message", "") for e in body.get("errors", []))
-    res = TryMergeResult(number, g.status_code < 300 and not errors, errors or ("" if g.status_code < 300 else f"HTTP {g.status_code}"))
+    status, error_list = await gh.enable_auto_merge(pr["node_id"])
+    errors = "; ".join(e.get("message", "") for e in error_list)
+    res = TryMergeResult(number, status < 300 and not errors, errors or ("" if status < 300 else f"HTTP {status}"))
     if rest:
         m = await gh.call("PUT", f"/pulls/{number}/merge", json={"merge_method": "merge", "sha": pr["head"]["sha"]})
         res.rest_status, res.rest_message = m.status_code, _message(m)
@@ -665,22 +661,14 @@ def _print(results: list[AttemptResult]) -> None:
 
 
 async def _try_direct_push(args: argparse.Namespace) -> int:
-    for key in ("GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_KEY_PATH"):
-        if not os.environ.get(key):
-            print(f"missing {key} (load .env)", file=sys.stderr)
-            return 2
     branches = [b for b in args.branches.split(",") if b]
-    if not branches:
-        print("no branches given", file=sys.stderr)
-        return 2
     async with httpx.AsyncClient(timeout=30.0) as http:
-        provider = InstallationTokenProvider(
-            os.environ["GITHUB_APP_ID"],
-            os.environ["GITHUB_INSTALLATION_ID"],
-            os.environ["GITHUB_APP_KEY_PATH"],
-            repo=args.repo,
-            http=http,
-        )
+        provider = _app_provider(http, args.repo)
+        if provider is None:
+            return 2
+        if not branches:
+            print("no branches given", file=sys.stderr)
+            return 2
         results = await run_try_direct_push(
             http, provider, repo=args.repo, branches=branches, operator_ref=args.operator_ref
         )
@@ -690,18 +678,10 @@ async def _try_direct_push(args: argparse.Namespace) -> int:
 
 
 async def _spike_pr(args: argparse.Namespace) -> int:
-    for key in ("GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_KEY_PATH"):
-        if not os.environ.get(key):
-            print(f"missing {key} (load .env)", file=sys.stderr)
-            return 2
     async with httpx.AsyncClient(timeout=30.0) as http:
-        provider = InstallationTokenProvider(
-            os.environ["GITHUB_APP_ID"],
-            os.environ["GITHUB_INSTALLATION_ID"],
-            os.environ["GITHUB_APP_KEY_PATH"],
-            repo=args.repo,
-            http=http,
-        )
+        provider = _app_provider(http, args.repo)
+        if provider is None:
+            return 2
         try:
             res = await run_spike_pr(http, provider, repo=args.repo, base=args.base, scenario=args.scenario,
                                      wait=not args.no_wait, timeout_s=args.timeout)
@@ -827,28 +807,25 @@ async def _test_pr_try_merge(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bridge.cli", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    t = sub.add_parser("try-direct-push", help="prove the App cannot write to protected refs")
-    t.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    repo = argparse.ArgumentParser(add_help=False)  # every subcommand takes --repo
+    repo.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    t = sub.add_parser("try-direct-push", parents=[repo], help="prove the App cannot write to protected refs")
     t.add_argument("--branches", default=os.environ.get("RULESET_BRANCHES", ""), help="comma list (default: $RULESET_BRANCHES)")
     t.add_argument("--operator-ref", default=None,
                    help="a promote/* branch the operator pushed; the App tries to move and delete it")
-    sp = sub.add_parser("spike-pr", help="open an App-authored PR on the scratch branch and enable auto-merge")
-    sp.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    sp = sub.add_parser("spike-pr", parents=[repo], help="open an App-authored PR on the scratch branch and enable auto-merge")
     sp.add_argument("--base", required=True, help=f"must be {SPIKE_BASE}")
     sp.add_argument("--scenario", choices=["two-line", "autonomy-raise"], default="two-line")
     sp.add_argument("--timeout", type=float, default=600.0, help="seconds to wait for MERGED (default 600)")
     sp.add_argument("--no-wait", action="store_true", help="open and enable auto-merge, do not wait")
-    op = sub.add_parser("open-test-pr", help="e2e only: open an App-authored policy-negative test PR on agent/test-*")
-    op.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    op = sub.add_parser("open-test-pr", parents=[repo], help="e2e only: open an App-authored policy-negative test PR on agent/test-*")
     op.add_argument("--base", default=os.environ.get("TRACKED_BRANCH", ""), help="default: $TRACKED_BRANCH")
     op.add_argument("--scenario", choices=SCENARIOS, required=True)
     op.add_argument("--branch", default=None, help=f"default {TEST_PR_PREFIX}<scenario>-<epoch>; must start {TEST_PR_PREFIX}")
-    tm = sub.add_parser("test-pr-try-merge", help="e2e only: enable auto-merge (and with --rest, REST-merge) a test PR as the App")
-    tm.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    tm = sub.add_parser("test-pr-try-merge", parents=[repo], help="e2e only: enable auto-merge (and with --rest, REST-merge) a test PR as the App")
     tm.add_argument("--pr", type=int, required=True)
     tm.add_argument("--rest", action="store_true", help="also try a REST merge")
-    ac = sub.add_parser("app-check", help="preflight: an installation token mints; print the installation's permissions as JSON")
-    ac.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
+    sub.add_parser("app-check", parents=[repo], help="preflight: an installation token mints; print the installation's permissions as JSON")
     args = ap.parse_args(argv)
     if args.repo.count("/") != 1:
         ap.error("--repo must be OWNER/NAME")
