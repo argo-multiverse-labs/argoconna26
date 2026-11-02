@@ -84,6 +84,13 @@ assert_rca_comment() { # BODY EXPECTED EXPECTED_REF
   timeline="$(grep -E '^- Timeline:' <<<"$body" || true)"
   [[ -n "$timeline" ]] || fail "no '- Timeline:' line"
   grep -qF "$ref" <<<"$timeline" || fail "the Timeline line does not cite $ref: $timeline"
+  # O25: no doubled label ("Timeline: Timeline change ...") and no unrelated change ref.
+  if grep -qiE '^- Timeline:[[:space:]]*timeline([[:space:]:–—-]|$)' <<<"$timeline"; then
+    fail "the Timeline line repeats its label: $timeline"
+  fi
+  local refs
+  refs="$(grep -oE 'CHG-[A-Z2-7]{6}' <<<"$timeline" | sort -u)"
+  [[ "$refs" == "$ref" ]] || fail "the Timeline line cites change refs other than $ref: $timeline"
 }
 
 # ---------------------------------------------------------------- pods by start time (O15)
