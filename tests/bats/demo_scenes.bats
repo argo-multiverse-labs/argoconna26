@@ -11,9 +11,9 @@ declare -gA SCENE_KEYS=(
   [cold-open]="mandate bolted-on page what-changed slack"
   [prologue]="intro timeline golden-path data cdevents rfc"
   [scene-1]="intro push gate wait-teach rca fix resolved"
-  [scene-2]="intro promotion board incident-again identity fix-pr review merged rejected act-offstage"
+  [scene-2]="intro promotion board incident-again identity fix-pr review merged rejected demote act-offstage"
   [scene-3]="intro board policy teach pr policy-pass merged healthy verify"
-  [epilogue]="panel verifier real simulated valve safe"
+  [epilogue]="panel verifier real real-list simulated valve safe"
   [close]="timeline slack drop repo"
 )
 
@@ -98,7 +98,8 @@ scene scene-3
 scene epilogue
 scene close" ]
   ! grep -q 'reset' "$LOG"
-  ! grep -v '^#' "$REPO_ROOT/scripts/demo-full.sh" | grep -q 'reset'
+  # no reset is run (the resume hint only prints the make target for the operator)
+  ! grep -v '^#' "$REPO_ROOT/scripts/demo-full.sh" | grep -v "printf 'next: make reset-to-scene" | grep -q 'reset'
 }
 
 @test "demo-full stops at the first scene that fails and returns its code" {
@@ -112,6 +113,52 @@ scene close" ]
   [ "$status" -eq 10 ]
   [[ "$output" == *"stopped: scene-1 (exit 10)"* ]]
   ! grep -q 'scene scene-2' "$LOG"
+}
+
+# fake_scenes_stop_at SCENE CODE : fake scene scripts; SCENE exits CODE.
+fake_scenes_stop_at() {
+  fake="$BATS_TEST_TMPDIR/fake"
+  mkdir -p "$fake"
+  for s in cold-open prologue scene-1 scene-2 scene-3 epilogue close; do
+    printf '#!/usr/bin/env bash\n[[ %s != %s ]] || exit %d\n' "$s" "$1" "$2" >"$fake/demo-$s.sh"
+    chmod +x "$fake/demo-$s.sh"
+  done
+}
+
+@test "demo-full says how to carry on after a stop in scene 1 or 2" {
+  fake_scenes_stop_at scene-1 10
+  DEMO_SCENES_DIR="$fake" run "$REPO_ROOT/scripts/demo-full.sh"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"next: make reset-to-scene-2"* ]]
+  [[ "$output" == *"then: make demo-scene-2"* ]]
+  fake_scenes_stop_at scene-2 1
+  DEMO_SCENES_DIR="$fake" run "$REPO_ROOT/scripts/demo-full.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"next: make reset-to-scene-3"* ]]
+  [[ "$output" == *"then: make demo-scene-3"* ]]
+}
+
+@test "demo-full says to run the epilogue and close after a stop in scene 3" {
+  fake_scenes_stop_at scene-3 6
+  DEMO_SCENES_DIR="$fake" run "$REPO_ROOT/scripts/demo-full.sh"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"next: make demo-epilogue"* ]]
+  [[ "$output" == *"then: make demo-close"* ]]
+  ! [[ "$output" == *"reset-to-scene"* ]]
+  fake_scenes_stop_at epilogue 1
+  DEMO_SCENES_DIR="$fake" run "$REPO_ROOT/scripts/demo-full.sh"
+  [[ "$output" == *"next: make demo-close"* ]]
+}
+
+@test "demo-full resume lines fit the stage pane" {
+  local s line
+  for s in scene-1 scene-2 scene-3 epilogue; do
+    fake_scenes_stop_at "$s" 10
+    DEMO_SCENES_DIR="$fake" run "$REPO_ROOT/scripts/demo-full.sh"
+    while IFS= read -r line; do
+      [ "${#line}" -le 30 ] || { echo "too long: $line"; return 1; }
+    done <<<"$output"
+  done
 }
 
 # ------------------------------------------------------------------ pace
@@ -179,6 +226,96 @@ scene close" ]
   [ "$status" -ne 0 ]
   # every cue in the scripts is one of the three
   ! grep -hoE '^[[:space:]]*speaker_beat [a-z]+' "$REPO_ROOT"/scripts/demo-*.sh | grep -vE 'speaker_beat (pe|sre|both)$'
+}
+
+# The keys that are the On-call SRE's (a placeholder only); every other key is the Platform
+# Engineer's. Mirrors the local narration.
+declare -gA SRE_KEYS=(
+  [cold-open]="page what-changed"
+  [prologue]="data"
+  [scene-1]="wait-teach"
+  [scene-2]="board review rejected"
+  [scene-3]="board teach"
+  [epilogue]="real valve"
+  [close]="slack drop"
+)
+
+# write_role_narration DIR : each key is one short line, "# PEline-KEY" or "# [SRE: KEY]".
+write_role_narration() {
+  local dir="$1" scene key
+  mkdir -p "$dir"
+  for scene in "${!SCENE_KEYS[@]}"; do
+    : >"$dir/$scene.txt"
+    for key in ${SCENE_KEYS[$scene]}; do
+      if [[ " ${SRE_KEYS[$scene]:-} " == *" $key "* ]]; then
+        printf '[%s]\n# [SRE: %s]\n\n' "$key" "$key" >>"$dir/$scene.txt"
+      else
+        printf '[%s]\n# PEline-%s\n\n' "$key" "$key" >>"$dir/$scene.txt"
+      fi
+    done
+  done
+}
+
+# cues_ok TEXT : every SRE placeholder follows an On-call SRE or Both cue, and every Platform
+# Engineer line follows a Platform Engineer or Both cue (or no cue yet in that text).
+cues_ok() {
+  local line cue="" bad=0
+  while IFS= read -r line; do
+    case "$line" in
+      *"> Platform Engineer"*) cue=pe ;;
+      *"> On-call SRE"*) cue=sre ;;
+      *"> Both"*) cue=both ;;
+      *"[SRE: "*) [[ "$cue" == sre || "$cue" == both ]] || { echo "SRE line under '$cue': $line"; bad=1; } ;;
+      *PEline-*) [[ -z "$cue" || "$cue" == pe || "$cue" == both ]] || { echo "PE line under '$cue': $line"; bad=1; } ;;
+    esac
+  done <<<"$1"
+  return "$bad"
+}
+
+@test "the reject branch: the SRE's placeholder, then the Platform Engineer's cue and callback" {
+  demo_setup suggest
+  set_prs "$(fix_body propose)"
+  export DEMO_REJECT_FOR_TEST=1 NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  write_role_narration "$NARRATION_DIR"
+  run scene scene-2
+  [ "$status" -eq 0 ]
+  # from the review's hand-over to the end
+  r="$(grep -n 'SRE: review\]' <<<"$output" | head -n1 | cut -d: -f1)"
+  c="$(head -n "$r" <<<"$output" | grep -n '> On-call SRE' | tail -n1 | cut -d: -f1)"
+  [ -n "$c" ]
+  window="$(tail -n "+$c" <<<"$output")"
+  [[ "$window" == *"rejected: demoting"* ]]
+  [[ "$window" == *"[SRE: rejected]"* ]]
+  [[ "$window" == *"PEline-demote"* ]]
+  cues_ok "$window"
+}
+
+@test "epilogue and close cue each speaker before their lines" {
+  demo_setup act
+  export NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  write_role_narration "$NARRATION_DIR"
+  run scene epilogue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[SRE: real]"* && "$output" == *"PEline-real-list"* ]]
+  cues_ok "$output"
+  run scene close
+  [ "$status" -eq 0 ]
+  cues_ok "$output"
+  # the joint landing line is cued for both
+  both="$(grep -n '> Both' <<<"$output" | head -n1 | cut -d: -f1)"
+  drop="$(grep -n 'SRE: drop' <<<"$output" | head -n1 | cut -d: -f1)"
+  [ -n "$both" ] && [ -n "$drop" ] && [ "$both" -lt "$drop" ]
+}
+
+@test "scene 3 puts the policy on screen before the job runs" {
+  demo_setup act
+  set_prs "$(fix_body act)"
+  echo "$BOT" >"$ST/auto-merge-by"
+  run scene scene-3
+  [ "$status" -eq 0 ]
+  p="$(grep -n '^open .*/blob/.*/policy/autofix.rego$' "$LOG" | head -n1 | cut -d: -f1)"
+  n="$(grep -n '^make night' "$LOG" | head -n1 | cut -d: -f1)"
+  [ -n "$p" ] && [ -n "$n" ] && [ "$p" -lt "$n" ]
 }
 
 @test "SRE lines are placeholders only, and no speaker is named" {

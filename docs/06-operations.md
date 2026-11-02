@@ -218,6 +218,14 @@ The talk's linear flow (the README's Demo Flow) wraps the rung scripts in scenes
   a scene, a branch that ends the rung early (a handoff, no fix PR, `policy-check` left for
   review) exits 10, and `demo-full` stops there and returns it. A refusal or PII block ends after
   the human fix with exit 0, so the talk goes on.
+- After a stop, `demo-full` prints the next step (two lines, each within `STAGE_COLS`), so the
+  clip plays and the later scenes stay live. After a stop in scene 1 or 2: `make
+  reset-to-scene-(N+1)` while the clip plays (68 s measured for scene 2), then `make
+  demo-scene-(N+1)`. After a stop in scene 3 (exit 10, or exit 6 below `propose`): `make
+  demo-epilogue && make demo-close`; the epilogue's `make demote` takes autonomy back to
+  `suggest`. After a stop in the epilogue: `make demo-close`. Starting the next scene without its
+  reset fails: after a scene-1 stop checkout is still armed, and scene 2's `make rearm` refuses
+  with exit 7.
 - Scene 2 opens the `act` promotion PR at its end when the level is `propose`. Scene 3 uses it,
   or opens one; below `propose` (after an on-stage reject and demote) it exits 6: play the
   recording.

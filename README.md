@@ -65,6 +65,25 @@ PRs a person would. Measured on a kind cluster with the real model, `DEMO_PACE=a
 demo-full` takes about 9 minutes of machine time: scene 1 about 105 s, scene 2 about 180 s,
 scene 3 about 240 s.
 
+### If a Scene Stops
+
+A scene that hits a failure branch (the agent hands off, no fix PR, `policy-check` left for
+review, or scene 3 finding the level below `propose`) stops `demo-full`, which prints what to type
+next. Play that rung's recording while you do it, and the later scenes still run live:
+
+| Stopped in | While the clip plays | Then |
+|------------|----------------------|------|
+| Scene 1 | `make reset-to-scene-2` (about 70 s) | `make demo-scene-2` |
+| Scene 2 | `make reset-to-scene-3` | `make demo-scene-3` |
+| Scene 3 | | `make demo-epilogue && make demo-close` |
+| Epilogue | | `make demo-close` |
+
+Don't start the next scene without its reset: after a stop in scene 1, checkout is still armed
+and Degraded, so scene 2's `make rearm` would refuse. After a stop in scene 3, the epilogue
+demotes back to `suggest`, so autonomy is not left at `act`. If scene 2 stopped after an on-stage
+reject (autonomy back at `suggest`), `make reset-to-scene-3` opens the `propose` promotion and
+exits 6; go to the epilogue instead.
+
 ### Jumping to a Specific Scene
 
 ```bash
@@ -307,7 +326,7 @@ that is too small to claim more than that.
   a PR that edits it could change how it runs. What stops an agent PR doing that: the App has no
   `workflows` permission, so GitHub refuses its commits under `.github/workflows/`, and for the
   agent's PRs auto-fix rule 1 denies any change outside the two fix files. `.github/` is also
-  code-owned, which binds once code-owner review is on. The workflow runs every tool outside the
+  code-owned, and code-owner review is on, so the promotion board must review it. The workflow runs every tool outside the
   PR's checkout, so a `conftest.toml` or `yaml.py` in the PR cannot configure the check either.
   See [docs/05-policy.md](docs/05-policy.md).
 - The policy sees Git facts only (the diff, the history of the tracked branch, the PR author and
