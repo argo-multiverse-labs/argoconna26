@@ -45,6 +45,17 @@ outside `agent/<name>` before it makes a call.
 Each step prints a short stage line (`▸ guardrails: passed`) at the stage terminal's width
 (`STAGE_COLS`). `make bridge-log` follows them.
 
+**Where the suggest comment goes.** On the cause commit's own PR when it has one: a PR merged
+into the tracked branch that contains the commit. Otherwise on the commit. An open PR that
+merely contains the commit (a test PR branched after it, say) never gets the comment.
+
+**Act and auto-merge lag.** At `act` the bridge turns on GitHub's auto-merge, then keeps
+reading `policy-check`. If the check passed and the PR is still unmerged
+`ACT_AUTOMERGE_GRACE_S` (30 s) later, the bridge merges it itself over REST, pinned to the head
+SHA. GitHub still enforces the required check on that merge. Once, auto-merge took 3 minutes
+after the check passed. If GitHub merges first, the bridge's merge is refused and that's not an
+error. `0` turns the catch-up off; a dry forge never does it.
+
 ### The prompt
 
 The prompt (`bridge/src/bridge/prompt.py`) is a single-scenario runbook. It names where to look
@@ -98,7 +109,7 @@ formatting, then runs every check so that every refusal is reported. Any forge e
 | Reason | Refused when |
 |--------|--------------|
 | `low_confidence` | `confidence` is below `CONFIDENCE_THRESHOLD` (0.7) |
-| `cause_not_in_history` | The cited commit is not a known commit, or is neither in the Argo history nor an ancestor of the synced revision that changed this key in this file |
+| `cause_not_in_history` | The cited commit is not a known commit, or is neither in the Argo history nor an ancestor of the synced revision that changed this key in this file. A full SHA GitHub doesn't know is first matched to the one Argo history revision it shares 7+ leading characters with (models mistype the tail); two candidates are refused |
 | `file_not_allowed` | The patch file is outside the allow-list (`apps/*/config/*.yaml`), is absolute or has `..` |
 | `key_not_found` | The key is not in a ConfigMap's `data` in that file at the tracked branch |
 | `from_mismatch` | The file's current value is not the answer's `from` |

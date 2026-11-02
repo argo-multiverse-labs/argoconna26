@@ -161,8 +161,9 @@ unless `policy-check` is a required status there. `make night` and `make timer-a
 before starting anything when the cluster lock is held (exit 5), when autonomy on the tracked
 branch is not `act` (exit 6), or when `preflight 3 --armed` fails (exit 9). They then write a
 runtime file (`$XDG_RUNTIME_DIR/argoconna26/job.env`, mode 0600, outside the repo) holding
-`GH_TOKEN` from `gh auth token`, because `gh` keeps its token in the desktop keyring and the unit
-cannot read it. The unit deletes the file when it stops. The unit starts only when you run
+`GH_TOKEN` from `gh auth token`. `gh` keeps its token in the desktop keyring, which a user unit
+can read only while the keyring is unlocked; the file means a timer run doesn't depend on that.
+The unit deletes the file when it stops. The unit starts only when you run
 `make night` or `make timer-arm` yourself; a timer then fires on its own, but only while the
 machine is awake and your session is logged in. Nothing on this path nudges Argo CD after the
 merge; it syncs on its own reconciliation. See the [README](../README.md).
