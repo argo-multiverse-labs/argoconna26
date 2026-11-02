@@ -506,3 +506,129 @@ def test_timeline_appends_only_the_first_ref_when_the_cut_drops_it() -> None:
     out = timeline_text("Config-only change, merged 3 days ago. Ref CHG-W4M4C4, not CHG-2SLM3T.")
     assert "CHG-W4M4C4" in out
     assert "CHG-2SLM3T" not in out
+
+
+# -- O25 timeline follow-ups (review 11-02): "Timeline of ..." and the cause's own change_ref ----
+
+
+@pytest.mark.parametrize("text", [
+    "Timeline of events: CHG-KBMAEZ merged at 10:02.",
+    "Timeline for checkout: CHG-KBMAEZ merged at 10:02.",
+    "Timeline is short: CHG-KBMAEZ merged at 10:02.",
+])
+def test_timeline_word_that_starts_a_phrase_is_kept(text: str) -> None:
+    from bridge.pipeline import timeline_text
+
+    assert timeline_text(text) == text
+
+
+@pytest.mark.parametrize("label", ["Timeline ", "Timeline CHG-", "Timeline 8312067"])
+def test_bare_timeline_label_before_content_is_stripped(label: str) -> None:
+    from bridge.pipeline import timeline_text
+
+    rest = {"Timeline ": "change CHG-KBMAEZ merged.", "Timeline CHG-": "CHG-KBMAEZ merged.",
+            "Timeline 8312067": "8312067 (CHG-KBMAEZ) merged."}[label]
+    assert timeline_text("Timeline " + rest) == rest
+
+
+def test_timeline_keeps_only_the_cause_ref_and_drops_the_others() -> None:
+    from bridge.pipeline import timeline_text
+
+    text = "CHG-AAAAAA (old rearm) and CHG-KBMAEZ (8312067) both tuned the timeout; the latter merged at 10:02."
+    out = timeline_text(text, cause_ref="CHG-KBMAEZ")
+    assert "CHG-KBMAEZ" in out
+    assert "CHG-AAAAAA" not in out
+    assert out.count("CHG-") == 1
+
+
+def test_timeline_appends_the_cause_ref_when_the_model_named_a_wrong_one() -> None:
+    from bridge.pipeline import ITEM_MAX, timeline_text
+
+    out = timeline_text("Config-only change CHG-AAAAAA merged 3 days ago.", cause_ref="CHG-KBMAEZ")
+    assert out.endswith("(CHG-KBMAEZ)")
+    assert "CHG-AAAAAA" not in out and len(out) <= ITEM_MAX
+
+
+def test_timeline_appends_the_cause_ref_when_the_model_named_none() -> None:
+    from bridge.pipeline import timeline_text
+
+    assert timeline_text("Config-only change merged 3 days ago.", cause_ref="CHG-KBMAEZ") == (
+        "Config-only change merged 3 days ago. (CHG-KBMAEZ)")
+
+
+class StubChangeRefs:
+    def __init__(self, ref: str | None) -> None:
+        self.ref = ref
+        self.calls: list[tuple[str, str]] = []
+
+    async def change_ref(self, app: str, sha: str) -> str | None:
+        self.calls.append((app, sha))
+        return self.ref
+
+
+async def test_comment_timeline_uses_the_cause_commits_change_ref(deps) -> None:
+    d = deps(holmes=StubHolmes(rca(delivery_context="CHG-AAAAAA merged 3 days before the abort.")))
+    refs = StubChangeRefs("CHG-KBMAEZ")
+    d.change_refs = refs
+    await handle_incident(make_hook(), d)
+    [timeline] = [line for line in bullets(comment_body(d)) if line.startswith("- Timeline: ")]
+    assert "CHG-KBMAEZ" in timeline and "CHG-AAAAAA" not in timeline
+    assert refs.calls == [("checkout", CAUSE)]
+
+
+async def test_comment_timeline_without_a_lookup_keeps_the_model_text(deps) -> None:
+    d = deps()
+    d.change_refs = StubChangeRefs(None)
+    await handle_incident(make_hook(), d)
+    assert f"- Timeline: {MODEL_CONTEXT}" in comment_body(d).splitlines()
+
+
+async def test_sim_change_refs_finds_the_ref_for_the_cause(_no_unmocked_http) -> None:
+    import httpx
+    import respx
+
+    from bridge.events import SimChangeRefs
+
+    rows = [
+        {"type": "dev.cdevents.change.merged.0.3.0", "revision": "d" * 40, "customData": {"change_ref": "CHG-AAAAAA"}},
+        {"type": "dev.cdevents.change.merged.0.3.0", "revision": CAUSE, "customData": {"change_ref": "CHG-KBMAEZ"}},
+        {"type": "dev.cdevents.change.merged.0.3.0", "revision": CAUSE, "customData": {"change_ref": "not-a-ref"}},
+    ]
+    with respx.mock(assert_all_called=True) as r:
+        route = r.get("http://sim.test/events").mock(return_value=httpx.Response(200, json=rows))
+        async with httpx.AsyncClient() as http:
+            got = await SimChangeRefs("http://sim.test/events", http=http).change_ref("checkout", CAUSE)
+    assert got == "CHG-KBMAEZ"
+    params = route.calls[0].request.url.params
+    assert params["app"] == "checkout" and params["type"].startswith("dev.cdevents.change.merged")
+
+
+@pytest.mark.parametrize("response", [500, "boom", [{"revision": "d" * 40, "customData": {"change_ref": "CHG-AAAAAA"}}]])
+async def test_sim_change_refs_none_when_unknown_or_unreachable(_no_unmocked_http, response) -> None:
+    import httpx
+    import respx
+
+    from bridge.events import SimChangeRefs
+
+    with respx.mock() as r:
+        route = r.get("http://sim.test/events")
+        if response == 500:
+            route.mock(return_value=httpx.Response(500))
+        elif response == "boom":
+            route.mock(side_effect=httpx.ConnectError("down"))
+        else:
+            route.mock(return_value=httpx.Response(200, json=response))
+        async with httpx.AsyncClient() as http:
+            assert await SimChangeRefs("http://sim.test/events", http=http).change_ref("checkout", CAUSE) is None
+
+
+async def test_sim_change_refs_without_url_is_none() -> None:
+    from bridge.events import SimChangeRefs
+
+    assert await SimChangeRefs("").change_ref("checkout", CAUSE) is None
+
+
+def test_timeline_label_given_twice_is_stripped_twice() -> None:
+    from bridge.pipeline import timeline_text
+
+    assert timeline_text("Timeline: Timeline change CHG-KBMAEZ merged.") == "change CHG-KBMAEZ merged."

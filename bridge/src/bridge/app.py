@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from . import stagelog
 from .autonomy import read_autonomy
 from .config import Settings
-from .events import CDEventsEmitter
+from .events import CDEventsEmitter, SimChangeRefs
 from .forge import DryForge, Forge
 from .forge.github import GitHubForge
 from .github_auth import InstallationTokenProvider
@@ -100,6 +100,7 @@ def build_pipeline(
         settings=settings,
         registry=registry,
         metrics=metrics,
+        change_refs=SimChangeRefs(settings.cdevents_url, http=http),
     )
 
     async def handler(hook: ArgoDegradedHook) -> Outcome:

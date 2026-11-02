@@ -122,12 +122,28 @@ pipeline_const() {
   sed -n "s/^$1 = \([0-9][0-9]*\).*/\1/p" "$(main_root)/bridge/src/bridge/pipeline.py"
 }
 
-# assert_fix_pr_body BODY CAUSE LEVEL : the first "Cause:" line is the policy-parsed cause (no model
+# assert_timeline_line BODY REF : the body's "- Timeline:" line cites REF (the cause's change_ref,
+# which only the operator's change event carries), does not repeat its label ("Timeline: Timeline
+# change ..."), and cites no other change ref (O25).
+assert_timeline_line() {
+  local body="$1" ref="$2" timeline refs
+  timeline="$(grep -m1 -E '^- Timeline:' <<<"$body" || true)"
+  [[ -n "$timeline" ]] || { echo "no '- Timeline:' line" >&2; return 1; }
+  grep -qF "$ref" <<<"$timeline" || { printf 'the Timeline line does not cite %s: %s\n' "$ref" "$timeline" >&2; return 1; }
+  if grep -qiE '^- Timeline:[[:space:]]*timeline([[:space:]:–—-]|$)' <<<"$timeline"; then
+    printf 'the Timeline line repeats its label: %s\n' "$timeline" >&2; return 1
+  fi
+  refs="$(grep -oE 'CHG-[A-Z2-7]{6}' <<<"$timeline" | sort -u)"
+  [[ "$refs" == "$ref" ]] || { printf 'the Timeline line cites change refs other than %s: %s\n' "$ref" "$timeline" >&2; return 1; }
+}
+
+# assert_fix_pr_body BODY CAUSE LEVEL [REF] : the first "Cause:" line is the policy-parsed cause (no model
 # text before it), the level's footer is there, and the root-cause section fits the projector:
 # the root-cause paragraph and every bullet within the bridge's caps (ROOT_CAUSE_MAX, ITEM_MAX,
-# plus a little room for the "- Timeline: " label and Markdown escapes).
+# plus a little room for the "- Timeline: " label and Markdown escapes). With REF, the Timeline
+# line also passes assert_timeline_line.
 assert_fix_pr_body() {
-  local body="$1" cause="$2" footer first root line root_max item_max slack=20
+  local body="$1" cause="$2" ref="${4:-}" footer first root line root_max item_max slack=20
   footer="$(fix_pr_footer "$3")"
   first="$(grep -m1 -E '^Cause: ' <<<"$body" || true)"
   [[ "$first" =~ ^Cause:\ $cause(\ |$) ]] || { printf 'first Cause line is not %s: %s\n' "$cause" "$first" >&2; return 1; }
@@ -144,6 +160,7 @@ assert_fix_pr_body() {
       ((${#line} <= root_max + slack)) || { printf 'root cause is %d chars (cap %d): %s\n' "${#line}" "$root_max" "$line" >&2; return 1; }
     fi
   done <<<"$root"
+  [[ -z "$ref" ]] || assert_timeline_line "$body" "$ref"
 }
 
 # bot_commit_comments SHA T0 : comments from BOT_LOGIN on commit SHA created at or after T0,

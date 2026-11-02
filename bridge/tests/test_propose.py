@@ -628,3 +628,13 @@ def test_fix_pr_timeline_label_word_and_second_ref() -> None:
     line = next(ln for ln in body.splitlines() if "CHG-KBMAEZ" in ln)
     assert "Timeline change" not in line
     assert "CHG-2SLM3T" not in body
+
+
+def test_fix_pr_timeline_uses_the_cause_ref_only() -> None:
+    ctx = "Timeline change CHG-AAAAAA merged earlier; CHG-KBMAEZ cut the timeout at 10:02."
+    r = rca().model_copy(update={"delivery_context": ctx})
+    fix = build_fix(r, CONFIGMAP, ROLLOUT_TEXT, ANNOTATION, rollout_path=ROLLOUT)
+    body = render_fix_pr_body(r, fix, level="propose", cause_ref="CHG-KBMAEZ")
+    [timeline] = [line for line in body.splitlines() if line.startswith("- Timeline: ")]
+    assert "CHG-KBMAEZ" in timeline and "CHG-AAAAAA" not in body
+    assert not timeline.startswith("- Timeline: Timeline")

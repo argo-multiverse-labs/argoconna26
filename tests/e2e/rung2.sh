@@ -239,7 +239,7 @@ main() {
   assert_fix_pr_diff "$fix_pr" 2> >(tee -a "$RUN_LOG" >&2) \
     || fail "fix PR $fix_pr is not exactly two changed lines in the two files"
   gh pr diff "$fix_pr" --repo "$REPO_SLUG" | tee -a "$RUN_LOG" >&2
-  assert_fix_pr_body "$body" "$cause" propose || fail "fix PR body: wrong or missing Cause line or footer"
+  assert_fix_pr_body "$body" "$cause" propose "$expected_ref" || fail "fix PR body: wrong Cause line, footer or Timeline line (above)"
 
   step "merge the fix PR ($merge_mode)"
   if [[ "$merge_mode" == script ]]; then

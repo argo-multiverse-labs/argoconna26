@@ -78,6 +78,10 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class ChangeRefs(Protocol):
+    async def change_ref(self, app: str, sha: str) -> str | None: ...
+
+
 @dataclass
 class Deps:
     forge: Forge
@@ -89,6 +93,8 @@ class Deps:
     metrics: Metrics = field(default_factory=Metrics)
     #: The act fallback's wait between check reads (a poll period, not a wait on a condition).
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    #: The cause commit's change reference (cdevents-sim's change events); None: not looked up.
+    change_refs: ChangeRefs | None = None
 
 
 @dataclass(frozen=True)
@@ -116,8 +122,12 @@ _GH_REF = re.compile(r"\b(GH)-(?=\d)", re.IGNORECASE)
 _SCHEME_SEP = re.compile(r"(?<=[A-Za-z0-9+.-]):(?=//)")
 _WWW = re.compile(r"\b(www)\.", re.IGNORECASE)
 # The template already labels the line "Timeline:"; the model often starts the field with it too.
-# Also a bare label word ("Timeline change CHG-..."), but not a longer word ("Timelines").
-_TIMELINE_PREFIX = re.compile(r"^\s*timeline(?:\s*[:\-\u2013\u2014]\s*|\s+)", re.IGNORECASE)
+# Also a bare label word, but only when content follows it ("Timeline change CHG-...",
+# "Timeline CHG-...", "Timeline 8312067 ..."), never a phrase ("Timeline of events: ...")
+# or a longer word ("Timelines").
+_TIMELINE_PREFIX = re.compile(
+    r"^\s*timeline(?:\s*[:\-\u2013\u2014]\s*|\s+(?=change\b|CHG-|[0-9a-f]{7,40}\b))", re.IGNORECASE
+)
 
 
 def plain(value: object) -> str:
@@ -163,19 +173,24 @@ def _cap(text: str, limit: int) -> str:
 # The operator's change reference (scripts/common.sh new_change_ref). tests/e2e/rung1.sh
 # greps the Timeline line for it, so capping must never drop it.
 CHANGE_REF = re.compile(r"\bCHG-[A-Z2-7]{6}\b")
-KEPT_REFS_MAX = 1  # only the cause's ref (the first in the text), never an unrelated later one
+KEPT_REFS_MAX = 1  # without the cause's ref: only the first in the text, never a later one
 
 
-def short_text(value: object, limit: int, keep: re.Pattern[str] | None = None) -> str:
+def short_text(value: object, limit: int, keep: re.Pattern[str] | None = None,
+               must_keep: Sequence[str] = ()) -> str:
     """The first sentence of `value`, cut on a word boundary with an ellipsis if it is still
     longer than `limit` characters. Applied before `plain`, which only adds escapes.
 
-    Tokens matching `keep` anywhere in `value` that the cut would drop are appended in
-    parentheses, and the text is cut shorter to make room, so the result stays within `limit`.
+    Tokens matching `keep` anywhere in `value` (at most KEPT_REFS_MAX), or the strings in
+    `must_keep` when given, that the result would lack are appended in parentheses, and the
+    text is cut shorter to make room, so the result stays within `limit`.
     """
     text = " ".join(str(value).split())
     first = _SENTENCE_END.split(text, maxsplit=1)[0]
-    kept = list(dict.fromkeys(keep.findall(text)))[:KEPT_REFS_MAX] if keep else []
+    if must_keep:
+        kept = list(dict.fromkeys(must_keep))
+    else:
+        kept = list(dict.fromkeys(keep.findall(text)))[:KEPT_REFS_MAX] if keep else []
     missing: list[str] = []
     while True:  # each pass can only add to `missing`, so this ends
         suffix = f" ({', '.join(missing)})" if missing else ""
@@ -186,14 +201,40 @@ def short_text(value: object, limit: int, keep: re.Pattern[str] | None = None) -
         missing = now
 
 
-def timeline_text(delivery_context: str) -> str:
-    """The Timeline bullet's text: no doubled label, capped, the change reference kept."""
-    return short_text(timeline_line(delivery_context), ITEM_MAX, keep=CHANGE_REF)
+# A change reference with its own brackets, and the separator before it, so dropping one
+# leaves no "()" or ", ," behind.
+_REF_WITH_DECOR = re.compile(r"(?:\s*,)?\s*([(\[])?\s*\bCHG-[A-Z2-7]{6}\b\s*(?(1)[)\]])")
+
+
+def _drop_refs_except(text: str, keep_ref: str) -> str:
+    def drop(m: re.Match[str]) -> str:
+        return m.group(0) if keep_ref in m.group(0) else ""
+
+    out = _REF_WITH_DECOR.sub(drop, text)
+    out = re.sub(r"\s+([,.;:!?)\]])", r"\1", out)
+    out = re.sub(r"([(\[])\s+", r"\1", out)
+    return " ".join(out.split())
+
+
+def timeline_text(delivery_context: str, cause_ref: str | None = None) -> str:
+    """The Timeline bullet's text: no doubled label, capped, and the change reference kept.
+
+    With `cause_ref` (the cause commit's own reference, from the timeline), every other
+    reference is dropped and that one is appended if the text lacks it, so the line never
+    names another change's ticket. Without it, the first reference in the text is kept.
+    """
+    text = timeline_line(delivery_context)
+    if cause_ref:
+        return short_text(_drop_refs_except(text, cause_ref), ITEM_MAX, must_keep=(cause_ref,))
+    return short_text(text, ITEM_MAX, keep=CHANGE_REF)
 
 
 def timeline_line(delivery_context: str) -> str:
     """The delivery context without a leading "Timeline:" the template already prints."""
-    return _TIMELINE_PREFIX.sub("", delivery_context, count=1)
+    text = delivery_context
+    for _ in range(2):  # "Timeline: Timeline change ..." carries the label twice
+        text = _TIMELINE_PREFIX.sub("", text, count=1)
+    return text
 
 
 _env = Environment(
@@ -273,6 +314,7 @@ def render_fix_pr_body(
     image_tag: str | None = None,
     cve_tag: str | None = None,
     kustomization: str = "kustomization.yaml",
+    cause_ref: str | None = None,
 ) -> str:
     """The fix PR's body: root cause and the `Cause:` line, at most three evidence bullets
     (the last one the delivery context), the blast radius, and the Argo record for the
@@ -285,7 +327,7 @@ def render_fix_pr_body(
         root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
         cause_title=cause_title,
         evidence=[short_text(e, ITEM_MAX) for e in rca.evidence[:EVIDENCE_BULLETS]],
-        timeline=timeline_text(rca.delivery_context),
+        timeline=timeline_text(rca.delivery_context, cause_ref),
         blast_changes=changes,
         blast_leaves=leaves,
         argo_url=argo_url,
@@ -400,6 +442,18 @@ class _Run:
         except ForgeError:
             return None
 
+    async def cause_ref(self, sha: str) -> str | None:
+        """The cause commit's change reference from the timeline, or None (never raises)."""
+        lookup = self.deps.change_refs
+        if lookup is None:
+            return None
+        try:
+            ref = await lookup.change_ref(self.hook.app, sha)
+        except Exception:  # noqa: BLE001  a missing reference must not fail an incident
+            log.warning("change_ref lookup failed for %s", sha[:SHORT_REVISION])
+            return None
+        return ref if ref and CHANGE_REF.fullmatch(ref) else None
+
     async def suggest_target(self, sha: str) -> tuple[str, int | None]:
         try:
             prs = await self.deps.forge.prs_for_commit(sha)
@@ -470,7 +524,7 @@ class _Run:
             "rca_comment.md.j2",
             rca=rca,
             root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
-            timeline=timeline_text(rca.delivery_context),
+            timeline=timeline_text(rca.delivery_context, await self.cause_ref(rca.cause_commit_sha)),
             evidence=[short_text(e, ITEM_MAX) for e in rca.evidence[:EVIDENCE_BULLETS]],
             patch=rca.proposed_patch,
             cause_title=await self.cause_title(rca.cause_commit_sha),
@@ -584,6 +638,7 @@ class _Run:
             image_tag=await self.image_tag(base_sha),
             cve_tag=self.s.cve_fix_tag or None,
             kustomization=self.s.kustomization_file,
+            cause_ref=await self.cause_ref(rca.cause_commit_sha),
         )
         blocked = await self.pii_gate(body, rca_event, title, commit_message)
         if blocked:

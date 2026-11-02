@@ -26,6 +26,8 @@ set -euo pipefail
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/git-ops.sh
 . "$E2E_DIR/../../scripts/git-ops.sh"
+# shellcheck source=tests/e2e/assert.sh
+. "$E2E_DIR/assert.sh"
 
 COMMENT_WAIT_S="${COMMENT_WAIT_S:-300}"
 DEGRADED_WAIT_S="${DEGRADED_WAIT_S:-180}"
@@ -81,16 +83,8 @@ assert_rca_comment() { # BODY EXPECTED EXPECTED_REF
   grep -qE "^Cause: $sha( |\$)" <<<"$body" || fail "no 'Cause: $sha' line"
   grep -qE '(^|[^0-9])200([^0-9]|$)' <<<"$body" || fail "no 200 token in the comment"
   grep -qE '(^|[^0-9])2000([^0-9]|$)' <<<"$body" || fail "no 2000 token in the comment"
-  timeline="$(grep -E '^- Timeline:' <<<"$body" || true)"
-  [[ -n "$timeline" ]] || fail "no '- Timeline:' line"
-  grep -qF "$ref" <<<"$timeline" || fail "the Timeline line does not cite $ref: $timeline"
-  # O25: no doubled label ("Timeline: Timeline change ...") and no unrelated change ref.
-  if grep -qiE '^- Timeline:[[:space:]]*timeline([[:space:]:–—-]|$)' <<<"$timeline"; then
-    fail "the Timeline line repeats its label: $timeline"
-  fi
-  local refs
-  refs="$(grep -oE 'CHG-[A-Z2-7]{6}' <<<"$timeline" | sort -u)"
-  [[ "$refs" == "$ref" ]] || fail "the Timeline line cites change refs other than $ref: $timeline"
+  local why
+  why="$(assert_timeline_line "$body" "$ref" 2>&1)" || fail "$why"
 }
 
 # ---------------------------------------------------------------- pods by start time (O15)

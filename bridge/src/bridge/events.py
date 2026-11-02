@@ -8,6 +8,7 @@ agent's own output (P16).
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -164,3 +165,38 @@ class CDEventsEmitter:
             return
         if r.status_code >= 400:
             log.warning("event not delivered (%s): HTTP %s", etype, r.status_code)
+
+
+_CHANGE_REF = re.compile(r"CHG-[A-Z2-7]{6}")
+_CHANGE_MERGED = "dev.cdevents.change.merged"
+
+
+class SimChangeRefs:
+    """Looks up a commit's change reference in cdevents-sim's change events (the operator
+    scripts post one per change, Δ28). Never raises: a missing reference only means the
+    Timeline line keeps the model's own reference."""
+
+    def __init__(self, url: str, *, http: httpx.AsyncClient | None = None, timeout_s: float = 5.0,
+                 limit: int = 500) -> None:
+        self.url = url  # the sim's /events URL (CDEVENTS_URL), read here with GET
+        self._http = http or httpx.AsyncClient(timeout=timeout_s)
+        self._limit = limit
+
+    async def change_ref(self, app: str, sha: str) -> str | None:
+        if not self.url or not sha:
+            return None
+        try:
+            r = await self._http.get(self.url, params={"app": app, "type": _CHANGE_MERGED, "limit": self._limit})
+            rows = r.json() if r.status_code < 300 else []
+        except Exception as exc:  # noqa: BLE001  never raise from here
+            log.warning("change_ref lookup failed: %s", type(exc).__name__)
+            return None
+        if not isinstance(rows, list):
+            return None
+        for row in rows:  # newest first
+            if not isinstance(row, dict) or str(row.get("revision", "")).lower() != sha.lower():
+                continue
+            ref = (row.get("customData") or {}).get("change_ref") if isinstance(row.get("customData"), dict) else None
+            if isinstance(ref, str) and _CHANGE_REF.fullmatch(ref):
+                return ref
+        return None
