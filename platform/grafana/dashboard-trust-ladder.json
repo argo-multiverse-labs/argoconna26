@@ -448,8 +448,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (reason) (aiops_guardrail_executions_total)",
-          "legendFormat": "guardrail: {{reason}}",
+          "expr": "sum(aiops_guardrail_executions_total) or vector(0)",
+          "legendFormat": "guardrail refusals",
           "instant": false,
           "range": true
         },
