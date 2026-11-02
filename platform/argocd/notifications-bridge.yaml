@@ -42,7 +42,9 @@ notifications:
             }
 
   triggers:
+    # Once per Degraded transition, not per revision: a fix that syncs while the aborted
+    # rollout still reports Degraded is a new revision but not a new incident.
     trigger.on-health-degraded-bridge: |
       - when: app.status.health.status == 'Degraded'
-        oncePer: app.status.operationState?.syncResult?.revision
+        oncePer: app.status.health.lastTransitionTime
         send: [bridge-app-degraded]
