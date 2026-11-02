@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from bridge.patch import FixChange, PatchError, build_fix
 from bridge.rca import RCA
 
