@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # The fix-PR outcome reconciler (Task 4.3a) polls agent/<app>-* PRs this often.
     reconcile_app: str = Field(default="checkout", validation_alias=_env("RECONCILE_APP"))
     reconcile_interval_s: float = Field(default=30, gt=0, validation_alias=_env("RECONCILE_INTERVAL_S"))
+    # Act (Task 5.4): the required check (demo.env), and how the clean_status fallback waits for it.
+    policy_check_context: str = Field(default="policy-check", validation_alias=_env("POLICY_CHECK_CONTEXT"))
+    policy_check_integration_id: int = Field(default=15368, validation_alias=_env("POLICY_CHECK_INTEGRATION_ID"))
+    act_check_poll_s: float = Field(default=5, gt=0, validation_alias=_env("ACT_CHECK_POLL_S"))
+    act_check_timeout_s: float = Field(default=600, gt=0, validation_alias=_env("ACT_CHECK_TIMEOUT_S"))
 
     @property
     def test_hooks_active(self) -> bool:

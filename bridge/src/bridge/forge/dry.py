@@ -6,7 +6,16 @@ import logging
 from typing import Literal
 
 from .. import stagelog
-from .base import Forge, PullRequest, PullRequestInfo, check_agent_branch
+from .base import (
+    POLICY_CHECK,
+    AutoMergeResult,
+    CheckStatus,
+    Forge,
+    MergeMethod,
+    PullRequest,
+    PullRequestInfo,
+    check_agent_branch,
+)
 
 log = logging.getLogger("bridge.forge")
 
@@ -70,3 +79,20 @@ class DryForge:
 
     async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:
         return await self.inner.list_agent_prs(app, state)
+
+    async def list_pr_comments(self, number: int) -> list[str]:
+        return await self.inner.list_pr_comments(number)
+
+    async def merge_methods(self) -> tuple[MergeMethod, ...]:
+        return await self.inner.merge_methods()
+
+    async def check_run_status(self, sha: str, name: str = POLICY_CHECK) -> CheckStatus:
+        return await self.inner.check_run_status(sha, name)
+
+    async def enable_auto_merge(self, pr: PullRequest, method: MergeMethod) -> AutoMergeResult:
+        # "enabled" ends the act flow here: a dry run never polls a check or merges.
+        self._skip("enable auto-merge", f"pr {pr.number}")
+        return "enabled"
+
+    async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
+        return self._skip("merge", f"pr {pr.number}")

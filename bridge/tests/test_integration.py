@@ -431,3 +431,71 @@ async def test_propose_end_to_end_opens_pr(respx_mock, settings: Settings, stage
     assert "dev.cdevents.change.created.0.4.0" in types
     assert 'aiops_actions_total{action="pr_opened"} 1.0' in result["metrics"]
     assert stage_lines[-1] == "▸ propose: pr opened"
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_act_end_to_end_enables_auto_merge(respx_mock, settings: Settings, stage_lines) -> None:
+    """Task 5.4: at `act`, the same one-commit PR, then `enablePullRequestAutoMerge` over GraphQL
+    with the PR's node id and the repo's merge method. GitHub merges once the required check
+    passes, so the bridge makes no REST merge call and reads no check run here."""
+    envelope = recorded("rca_toolcall_timeline.json")
+    envelope["analysis"] = json.dumps(GOOD_ANALYSIS)
+    world = World(respx_mock, httpx.Response(200, json=envelope))
+    respx_mock.get(f"{REPO_API}/contents/aiops/autonomy.yaml", params={"ref": BRANCH}).mock(
+        return_value=httpx.Response(200, json=content(AUTONOMY.replace("level: suggest", "level: act")))
+    )
+    for path, text in ((CONFIG, CONFIGMAP), (ROLLOUT, ROLLOUT_TEXT), (KUSTOMIZATION, KUSTOMIZATION_TEXT)):
+        respx_mock.get(f"{REPO_API}/contents/{path}", params={"ref": TRACKED_HEAD}).mock(
+            return_value=httpx.Response(200, json=content(text))
+        )
+    respx_mock.get(f"{REPO_API}/git/ref/heads/{BRANCH}").mock(
+        return_value=httpx.Response(200, json={"object": {"sha": TRACKED_HEAD}})
+    )
+    respx_mock.get(f"{REPO_API}/git/commits/{TRACKED_HEAD}").mock(
+        return_value=httpx.Response(200, json={"sha": TRACKED_HEAD, "tree": {"sha": "t" * 40}})
+    )
+    respx_mock.post(f"{REPO_API}/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "b" * 40}))
+    respx_mock.post(f"{REPO_API}/git/trees").mock(return_value=httpx.Response(201, json={"sha": "d" * 40}))
+    respx_mock.post(f"{REPO_API}/git/commits").mock(return_value=httpx.Response(201, json={"sha": "9" * 40}))
+    respx_mock.post(f"{REPO_API}/git/refs").mock(return_value=httpx.Response(201, json={}))
+    pr_url = f"https://github.test/{REPO}/pull/7"
+    pulls = respx_mock.post(f"{REPO_API}/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 7, "html_url": pr_url, "node_id": "PR_7", "head": {"sha": "9" * 40}}
+        )
+    )
+    repo = respx_mock.get(REPO_API).mock(
+        return_value=httpx.Response(
+            200, json={"allow_merge_commit": True, "allow_squash_merge": True, "allow_rebase_merge": False}
+        )
+    )
+    graphql = respx_mock.post(f"{GITHUB}/graphql").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"enablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {}}}}}
+        )
+    )
+    merge = respx_mock.put(url__regex=rf"^{REPO_API}/pulls/\d+/merge$").mock(return_value=httpx.Response(200))
+    checks = respx_mock.get(url__regex=rf"^{REPO_API}/commits/[0-9a-f]{{40}}/check-runs").mock(
+        return_value=httpx.Response(200, json={"check_runs": []})
+    )
+
+    result = await run_incident(settings)
+
+    assert result["status"]["level_last_seen"] == "act"
+    assert result["status"]["last_incident"]["action"] == "auto_merge_enabled"
+    assert result["status"]["last_incident"]["url"] == pr_url
+    assert pulls.call_count == 1
+    assert pulls.calls[0].request.content and "autonomy level act" in json.loads(pulls.calls[0].request.content)["body"]
+    assert repo.call_count == 1
+    [call] = graphql.calls
+    sent = json.loads(call.request.content)
+    assert "enablePullRequestAutoMerge" in sent["query"]
+    assert sent["variables"] == {"id": "PR_7", "method": "MERGE"}
+    assert call.request.headers["Authorization"] == f"Bearer {INSTALLATION_TOKEN}"
+    assert merge.call_count == 0 and checks.call_count == 0
+    assert world.posted() == [] and world.pr_comments.call_count == 0
+    actions = [e["customData"].get("action") for e in world.events() if "action" in e.get("customData", {})]
+    assert actions[-2:] == ["pr_opened", "auto_merge_enabled"]
+    assert 'aiops_actions_total{action="auto_merge_enabled"} 1.0' in result["metrics"]
+    assert "aiops_policy_checks_total" in result["metrics"]
+    assert stage_lines[-1] == "▸ act: auto-merge on"

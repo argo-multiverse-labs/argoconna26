@@ -22,6 +22,11 @@ blast_radius:
 footer:
   propose: "Opened by the agent at autonomy level propose. A human reviews and merges."
   act: "Opened by the agent at autonomy level act. Auto-merge is allowed only if policy-check passes; a human reviews it after the fact."
+# Act (Task 5.4): the PR comments when policy-check fails (posted once by the reconciler) or
+# reports nothing in time (posted by the act flow). The PR stays open for a human either way.
+policy:
+  failed: "Policy check failed; leaving this for a human."
+  no_result: "policy-check did not pass within {minutes} min; leaving this for a human."
 # The refusal comment's sentence (refusal_comment.md.j2), by autonomy level.
 refusal:
   suggest: "The investigation finished, but its answer did not pass the guardrails, so the agent is not suggesting a fix."

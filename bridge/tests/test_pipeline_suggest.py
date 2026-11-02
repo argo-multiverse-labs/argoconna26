@@ -254,16 +254,6 @@ async def test_failsafe_level_used_when_autonomy_unreadable(deps, stage_lines: l
     assert d.metrics.value("aiops_incidents_total", level="suggest") == 1
 
 
-@pytest.mark.parametrize("level", ["act"])
-async def test_act_not_implemented_before_task_5_4(deps, level: str) -> None:
-    forge = make_forge()
-    forge.files[("aiops/autonomy.yaml", BRANCH)] = AUTONOMY.replace("level: suggest", f"level: {level}")
-    d = deps(forge=forge)
-    with pytest.raises(NotImplementedError):
-        await handle_incident(make_hook(), d)
-    assert posted(d.forge) == []
-
-
 async def test_rca_event_emitted(deps) -> None:
     emitter = RecordingEmitter()
     d = deps(emitter=emitter)

@@ -82,7 +82,8 @@ def build_pipeline(
         http=http,
     )
     github = GitHubForge(
-        settings.github_repo, tokens, api_url=settings.github_api_url, http=http, bot_login=settings.bot_login
+        settings.github_repo, tokens, api_url=settings.github_api_url, http=http, bot_login=settings.bot_login,
+        check_app_id=settings.policy_check_integration_id,
     )
     forge: Forge = DryForge(github, settings.stage_cols) if settings.dry_forge else github
     holmes = HolmesClient(
@@ -230,6 +231,8 @@ def create_app(
                 app=settings.reconcile_app,
                 source=settings.bridge_event_source,
                 repo=settings.github_repo,
+                registry=state.registry,
+                check_name=settings.policy_check_context,
             )
             tasks.append(asyncio.create_task(rec.loop(settings.reconcile_interval_s), name="fix-pr-reconcile"))
         try:

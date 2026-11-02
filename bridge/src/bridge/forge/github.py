@@ -12,9 +12,13 @@ import httpx
 from ..github_auth import GitHubAuthError
 from .base import (
     AGENT_BRANCH_PREFIX,
+    POLICY_CHECK,
+    AutoMergeResult,
+    CheckStatus,
     ForgeConflict,
     ForgeError,
     ForgeNotFound,
+    MergeMethod,
     PullRequest,
     PullRequestInfo,
     check_agent_branch,
@@ -23,6 +27,21 @@ from .base import (
 # The App's login (demo.env BOT_LOGIN); list_open_agent_prs trusts only PRs it authored.
 DEFAULT_BOT_LOGIN = "argoconna26-agent[bot]"
 _HEX = re.compile(r"^[0-9a-f]{7,40}$")
+# GitHub Actions' app id (demo.env POLICY_CHECK_INTEGRATION_ID): the required check is pinned to
+# it, and so is the bridge's own read, so a same-named check from another app never counts.
+DEFAULT_CHECK_APP_ID = 15368
+_ENABLE_AUTO_MERGE = (
+    "mutation($id: ID!, $method: PullRequestMergeMethod!) {"
+    " enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {"
+    " pullRequest { autoMergeRequest { enabledAt mergeMethod } } } }"
+)
+# GitHub refuses auto-merge on a PR it could merge right now: "clean status" when nothing is
+# pending, "unstable status" when only checks that aren't required are pending or failing (no
+# required check yet, O25). Either way nothing would hold the merge, so the bridge waits itself.
+_MERGEABLE_NOW = re.compile(r"\b(clean|unstable) status\b", re.IGNORECASE)
+_METHODS: tuple[tuple[str, MergeMethod], ...] = (
+    ("allow_merge_commit", "merge"), ("allow_squash_merge", "squash"), ("allow_rebase_merge", "rebase"),
+)
 
 
 class TokenProvider(Protocol):
@@ -39,12 +58,14 @@ class GitHubForge:
         http: httpx.AsyncClient | None = None,
         timeout_s: float = 20.0,
         bot_login: str = DEFAULT_BOT_LOGIN,
+        check_app_id: int | None = DEFAULT_CHECK_APP_ID,
     ) -> None:
         if repo.count("/") != 1:
             raise ValueError("repo must be owner/name")
         self.repo = repo
         self._tokens = token_provider
         self.bot_login = bot_login
+        self.check_app_id = check_app_id
         self._api = api_url.rstrip("/")
         self._http = http or httpx.AsyncClient(timeout=timeout_s)
         self._merged_by_cache: dict[int, str] = {}
@@ -52,17 +73,20 @@ class GitHubForge:
     def __repr__(self) -> str:
         return f"GitHubForge(repo={self.repo!r})"
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async def _headers(self, what: str) -> dict[str, str]:
         try:
             token = await self._tokens.token()
         except (GitHubAuthError, OSError) as exc:
             # A failed token exchange or an unreadable key is a forge error, so callers fail closed.
-            raise ForgeError(f"{method} {path}: token unavailable ({type(exc).__name__})") from None
-        headers = {
+            raise ForgeError(f"{what}: token unavailable ({type(exc).__name__})") from None
+        return {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        headers = await self._headers(f"{method} {path}")
         url = f"{self._api}/repos/{self.repo}{path}"
         try:
             response = await self._http.request(method, url, headers=headers, **kwargs)
@@ -281,3 +305,68 @@ class GitHubForge:
         login = str((r.json().get("merged_by") or {}).get("login") or "unknown")
         self._merged_by_cache[number] = login
         return login
+
+    # -- act (Task 5.4) ------------------------------------------------------------
+
+    async def list_pr_comments(self, number: int) -> list[str]:
+        """The bot's own comments on PR `number` (first 100; the bridge posts one or two)."""
+        r = await self._request("GET", f"/issues/{int(number)}/comments", params={"per_page": 100})
+        return [
+            str(c.get("body") or "") for c in r.json() if (c.get("user") or {}).get("login") == self.bot_login
+        ]
+
+    async def merge_methods(self) -> tuple[MergeMethod, ...]:
+        r = await self._request("GET", "")
+        data = r.json()
+        return tuple(method for key, method in _METHODS if data.get(key))
+
+    async def enable_auto_merge(self, pr: PullRequest, method: MergeMethod) -> AutoMergeResult:
+        """GraphQL `enablePullRequestAutoMerge` with the installation token."""
+        what = "enablePullRequestAutoMerge"
+        headers = await self._headers(what)
+        payload = {"query": _ENABLE_AUTO_MERGE, "variables": {"id": pr.node_id, "method": method.upper()}}
+        try:
+            response = await self._http.post(f"{self._api}/graphql", headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            raise ForgeError(f"{what}: {type(exc).__name__}") from None
+        if response.status_code >= 400:
+            raise ForgeError(f"{what}: {response.status_code}", response.status_code)
+        try:
+            errors = response.json().get("errors") or []
+        except ValueError:
+            raise ForgeError(f"{what}: not JSON") from None
+        if not errors:
+            return "enabled"
+        messages = [str(e.get("message", "")) for e in errors]
+        if any(_MERGEABLE_NOW.search(m) for m in messages):
+            return "clean_status"
+        # GraphQL error types (FORBIDDEN, UNPROCESSABLE, ...) carry no token or model text.
+        raise ForgeError(f"{what}: {', '.join(str(e.get('type', 'error')) for e in errors)}")
+
+    async def check_run_status(self, sha: str, name: str = POLICY_CHECK) -> CheckStatus:
+        """The newest `name` check run on `sha` from the pinned app. Only `success` passes: any
+        other conclusion (failure, cancelled, skipped, neutral, ...) is `failure`."""
+        r = await self._request(
+            "GET", f"/commits/{self._q(sha)}/check-runs", params={"check_name": name, "per_page": 100}
+        )
+        runs = [
+            run for run in r.json().get("check_runs") or []
+            if run.get("name") == name
+            and (self.check_app_id is None or (run.get("app") or {}).get("id") == self.check_app_id)
+        ]
+        if not runs:
+            return "missing"
+        newest = max(runs, key=lambda run: int(run.get("id") or 0))
+        if newest.get("status") != "completed":
+            return "pending"
+        return "success" if newest.get("conclusion") == "success" else "failure"
+
+    async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
+        """REST merge, pinned to the PR's head SHA so a commit pushed since is refused (409)."""
+        r = await self._request(
+            "PUT", f"/pulls/{int(pr.number)}/merge", json={"merge_method": method, "sha": pr.head_sha}
+        )
+        sha = str(r.json().get("sha", "")).lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ForgeError(f"merge_pr {pr.number}: no merge SHA")
+        return sha

@@ -7,8 +7,12 @@ from typing import Literal
 
 from .base import (
     AGENT_BRANCH_PREFIX,
+    POLICY_CHECK,
+    AutoMergeResult,
+    CheckStatus,
     ForgeConflict,
     ForgeNotFound,
+    MergeMethod,
     PullRequest,
     PullRequestInfo,
     check_agent_branch,
@@ -37,6 +41,12 @@ class FakeForge:
     Set `fail_reads` to an exception to make every read raise it, and `fail_writes`
     to make every comment raise it. `heads` maps a branch to its head SHA; a branch not
     in it resolves to its own name, so `files` keyed by branch name still read.
+
+    Act (Task 5.4): `auto_merge` is what `enable_auto_merge` returns, or an exception it
+    raises. `check_runs` maps a head SHA to the statuses `check_run_status` returns, one per
+    call, the last one repeating (an exception in the list is raised); an unknown SHA is
+    `missing`. Merges are recorded in `merged` as (number, method, head SHA), and `fail_merge`
+    makes `merge_pr` raise. `pr_comments` doubles as the bot's comment listing.
     """
 
     files: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -53,6 +63,13 @@ class FakeForge:
     opened: list[OpenedPR] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
     heads: dict[str, str] = field(default_factory=dict)
+    auto_merge: AutoMergeResult | BaseException = "enabled"
+    auto_merges: list[tuple[int, str]] = field(default_factory=list)
+    check_runs: dict[str, list[CheckStatus | BaseException]] = field(default_factory=dict)
+    merge_methods_allowed: tuple[MergeMethod, ...] = ("merge", "squash", "rebase")
+    merged: list[tuple[int, str, str]] = field(default_factory=list)
+    merge_shas: list[str] = field(default_factory=list)
+    fail_merge: BaseException | None = None
 
     def _read(self, *call: object) -> None:
         self.calls.append(call)
@@ -138,3 +155,50 @@ class FakeForge:
         self._read("list_agent_prs", app, state)
         prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
         return [p for p in self.agent_prs if p.branch.startswith(prefix) and state in ("all", p.state)]
+
+    async def list_pr_comments(self, number: int) -> list[str]:
+        self._read("list_pr_comments", number)
+        return [body for n, body in self.pr_comments if n == number]
+
+    async def merge_methods(self) -> tuple[MergeMethod, ...]:
+        self._read("merge_methods")
+        return self.merge_methods_allowed
+
+    async def enable_auto_merge(self, pr: PullRequest, method: MergeMethod) -> AutoMergeResult:
+        self.calls.append(("enable_auto_merge", pr.number, method))
+        if isinstance(self.auto_merge, BaseException):
+            raise self.auto_merge
+        self.auto_merges.append((pr.number, method))
+        return self.auto_merge
+
+    async def check_run_status(self, sha: str, name: str = POLICY_CHECK) -> CheckStatus:
+        self._read("check_run_status", sha, name)
+        queue = self.check_runs.get(sha)
+        if not queue:
+            return "missing"
+        status = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(status, BaseException):
+            raise status
+        return status
+
+    async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
+        self.calls.append(("merge_pr", pr.number, method))
+        if self.fail_merge is not None:
+            raise self.fail_merge
+        if self.fail_writes is not None:
+            raise self.fail_writes
+        sha = f"{pr.number + 5000:040x}"
+        self.merged.append((pr.number, method, pr.head_sha))
+        self.merge_shas.append(sha)
+        return sha
+
+    def info(self, number: int, *, state: str = "open", merged: bool = False, merged_by: str | None = None,
+             labels: tuple[str, ...] = ()) -> PullRequestInfo:
+        """A listing entry for a PR this forge opened, for tests that drive the reconciler."""
+        pr = next(o.pr for o in self.opened if o.pr.number == number)
+        merge_sha = self.merge_shas[0] if merged and self.merge_shas else None
+        return PullRequestInfo(
+            number=pr.number, url=pr.url, node_id=pr.node_id, head_sha=pr.head_sha, branch=pr.branch,
+            state="open" if state == "open" else "closed", merged=merged, merged_by=merged_by,
+            merge_sha=merge_sha, labels=labels,
+        )
