@@ -239,14 +239,12 @@ def test_real_repo_files_patch_cleanly():
     assert int(fix.config_version_to) == int(fix.config_version_from) + 1
 
 
-@pytest.mark.skip(reason="enabled in Task 5.2 Step 3")
 def test_output_passes_policy_fixture(tmp_path: Path):
     """The produced diff and the rendered fix-PR body satisfy autofix rules 1, 2, 4 and 5.
 
-    Needs Task 4.3's body renderer and Tasks 5.1-5.2's `policy/facts/facts.py` and
-    `policy/autofix.rego` on the branch. Task 5.2 Step 3 removes the skip marker.
+    Needs the body renderer and `policy/facts/facts.py` and `policy/autofix.rego` on the branch.
     """
-    from bridge.pipeline import render_fix_pr_body  # Task 4.3
+    from bridge.pipeline import render_fix_pr_body
 
     root = Path(__file__).resolve().parents[2]
     conftest = shutil.which("conftest")
