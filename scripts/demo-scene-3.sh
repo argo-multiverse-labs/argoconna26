@@ -27,7 +27,7 @@ act_promotion_pr() {
 scene_init scene-3
 scene_break "2:31 Back in bed?"
 scene_say intro
-speaker_beat hilliary "time is compressed; the bar"
+speaker_beat sre "time is compressed; the bar"
 if ! tracked_level_is act; then
   tracked_level_is propose || refuse 6 "below propose; clip" "autonomy on $TRACKED_BRANCH is below propose; roll the clip"
   act_pr="$(act_promotion_pr)"

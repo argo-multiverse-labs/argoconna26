@@ -3,7 +3,7 @@
 # the fleet is disarmed, autonomy is suggest).
 #
 #   make bump (the innocent release) -> Degraded at the bump -> the agent's RCA comment on the
-#   cause commit -> Hilliary's beat -> make fix -> Healthy -> the incident is resolved.
+#   cause commit -> the On-call SRE's beat -> make fix -> Healthy -> the incident is resolved.
 #
 # A refusal, a PII block or a handoff is shown as a feature, not a failure (see demo-common.sh).
 # TYPE_SPEED and NO_WAIT are described in demo-common.sh. With NO_WAIT=true the script ends
@@ -34,8 +34,8 @@ rung1_main() {
   READY_TIMEOUT_S="${DEGRADED_WAIT_S:-180}" until_ready "Degraded" degraded_at "$bump"
   beat "Degraded"
   scene_say gate
-  speaker_beat hilliary "read-only by default; dry runs"
-  scene_say wait-teach # Hilliary teaches while the agent works
+  speaker_beat sre "read-only by default; dry runs"
+  scene_say wait-teach # the On-call SRE teaches while the agent works
   READY_TIMEOUT_S="${OUTCOME_WAIT_S:-300}" await_outcome "$t0" 0 checkout "$cause" "$bump"
   unhappy_outcome || true
 

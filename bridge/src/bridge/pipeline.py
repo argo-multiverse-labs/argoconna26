@@ -114,6 +114,9 @@ class Outcome:
 _MENTION = re.compile(r"(?<![\w.+-])@(?=[A-Za-z0-9_-])")
 # Link, image, autolink and code syntax: escaped so model text renders as text.
 _MARKDOWN = re.compile(r"([\[\]()!<>`\\])")
+# A line that starts a Markdown block: heading, list, quote, rule, setext underline or table.
+_BLOCK_START = re.compile(r"^([#*+_=|~-])")
+_ORDERED_START = re.compile(r"^(\d+)([.)])")
 # `#123` and `owner/repo#123` would write a cross-reference into that issue.
 _ISSUE_REF = re.compile(r"#(?=[A-Za-z0-9])")
 # `GH-12` is GitHub's other issue-reference form.
@@ -134,14 +137,18 @@ def plain(value: object) -> str:
     """One line of model text for a public comment.
 
     Format characters are dropped (they can hide text from the PII scan), whitespace is
-    collapsed (so it can't start a new Markdown block), link, image, autolink and code
+    collapsed and a leading block marker escaped (so it can't start a new Markdown block), `&`
+    is escaped (so no entity spells a mention or link), link, image, autolink and code
     syntax is backslash-escaped (so it can't link, embed a tracking image or break out of
     the line), and @-mentions, issue references (`#12`, `GH-12`) and bare autolinks
     (`https://...`, `www....`) are broken with a zero-width space (so they notify no one,
     write nothing into another issue and put no clickable link in a public comment).
     """
     text = " ".join(pii.strip_format(str(value)).split())
+    text = text.replace("&", "&amp;")  # no entity can spell an @, # or link past the checks below
     text = _MARKDOWN.sub(r"\\\1", text)
+    text = _BLOCK_START.sub(r"\\\1", text)  # the line can't open a heading, list, quote or rule
+    text = _ORDERED_START.sub(r"\1\\\2", text)  # nor an ordered list ("1\\. ...")
     text = _ISSUE_REF.sub("#\u200b", text)
     text = _GH_REF.sub("\\1\u200b-", text)
     text = _SCHEME_SEP.sub(":\u200b", text)

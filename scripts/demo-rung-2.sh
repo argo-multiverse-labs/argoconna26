@@ -2,8 +2,8 @@
 # Rung 2 (propose) as it is shown on stage. Start from `make reset-rung-2` (autonomy suggest, a
 # fresh promotion PR to propose is open, the fleet is disarmed).
 #
-#   verify the promotion PR -> it is merged (Hilliary's beat: she approves, Luke merges) -> record
-#   the approval -> make rearm -> Degraded -> the agent's fix PR -> merged (Hilliary's beat) ->
+#   verify the promotion PR -> it is merged (the On-call SRE approves as the board, the Platform Engineer merges) -> record
+#   the approval -> make rearm -> Degraded -> the agent's fix PR -> merged (the On-call SRE's beat) ->
 #   refresh -> synced -> Healthy.
 #   If the fix PR is closed instead: rejected -> make demote -> autonomy suggest and the
 #   rejected count up -> the human fix -> Healthy.
@@ -28,12 +28,12 @@ rejected_branch() {
   want="$(awk -v a="$1" 'BEGIN {printf "%d", a + 1}')"
   beat "rejected: demoting"
   scene_say rejected
-  speaker_beat luke "the safety valve"
+  speaker_beat pe "the safety valve"
   typed "make demote"
   until_ready "autonomy suggest" tracked_level_is suggest
   until_ready "rejected count up" bridge_metric_at_least "$REJECTED_SERIES" "$want"
   beat "autonomy: suggest"
-  human_fix # Hilliary's beat
+  human_fix # the On-call SRE's beat
   if [[ "$NO_WAIT" == true ]]; then
     check "autonomy is suggest" tracked_level_is suggest
     check "rejected count rose" bridge_metric_at_least "$REJECTED_SERIES" "$want"
@@ -79,7 +79,7 @@ rung2_main() {
 
   READY_TIMEOUT_S="${DEGRADED_WAIT_S:-180}" until_ready "Degraded" degraded_at "$bump"
   beat "Degraded"
-  scene_say identity # Luke covers the agent's identity and the bridge while the agent works
+  scene_say identity # the Platform Engineer covers the agent's identity and the bridge while the agent works
   READY_TIMEOUT_S="${OUTCOME_WAIT_S:-300}" await_outcome "$t0" 1 checkout "$cause" "$bump"
   unhappy_outcome || true
   if [[ "$OUT_KIND" != pr ]]; then
@@ -92,7 +92,7 @@ rung2_main() {
   beat "bot PR #$OUT_PR"
   open_tab "$OUT_URL"
   scene_say fix-pr
-  speaker_beat hilliary "reviews the fix PR"
+  speaker_beat sre "reviews the fix PR"
   scene_say review
   READY_TIMEOUT_S="${FIX_PR_WAIT_S:-900}" until_ready "PR merged" pr_not_open "$OUT_PR"
   if [[ "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]]; then

@@ -10,7 +10,7 @@ scene_init close
 scene_break "Back in bed by 2:30"
 open_tab "$(grafana_kiosk_url)"
 scene_say timeline
-speaker_beat hilliary "it's in Slack, the callback"
+speaker_beat sre "it's in Slack, the callback"
 scene_say slack
 scene_say drop
 beat "${REPO_SLUG%%/*}/"

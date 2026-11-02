@@ -33,7 +33,9 @@
 #
 #   scene_break TITLE        blank line, the title as one line, then Enter (talk pace)
 #   fourth_wall TITLE        "-- TITLE --" (stepping out of the story), then Enter
-#   speaker_beat WHO TOPIC   hand over to WHO (luke, hilliary, both): prints "> Who", keeps TOPIC
+#   speaker_beat WHO TOPIC   hand over to a character (the talk draft's cast): pe, the Platform
+#                            Engineer; sre, the On-call SRE; or both. Prints "> Platform Engineer"
+#                            or "> On-call SRE" or "> Both", keeps TOPIC
 #                            in .operator/stage.log, then Enter. Outside a scene it is only the
 #                            Enter. (The plan calls this `beat WHO TOPIC`; `beat TEXT` is already
 #                            the one-line printer in common.sh, so this one has another name.)
@@ -50,10 +52,11 @@
 #   [push]
 #   # An innocent release goes out.
 #   [wait-teach]
-#   # [Hilliary: read-only by default; dry runs]
+#   # [SRE: read-only by default; dry runs]
 #
-# Hilliary's lines are placeholders only, in exactly this form (tests/bats/demo_scenes.bats
-# checks every line that mentions Hilliary): `# [Hilliary: <beat topic>]`.
+# The On-call SRE's lines are placeholders only, in exactly this form, until that speaker writes
+# them (tests/bats/demo_scenes.bats checks every line that opens a bracket): `# [SRE: <beat topic>]`.
+# No speaker's real name appears in the scripts or the narration: the cues use the characters.
 # The keys each scene uses: grep -ho 'scene_say [a-z0-9-]*' scripts/demo-*.sh
 #
 # Exit codes: 1 a failed assertion or an unexpected outcome, 3 wrong context, 4 a wait timed
@@ -148,11 +151,17 @@ fourth_wall() { # TITLE
   _pause
 }
 
-speaker_beat() { # WHO TOPIC
-  local who="$1" topic="${2:-}"
+speaker_beat() { # WHO TOPIC : WHO is pe (the Platform Engineer), sre (the On-call SRE) or both
+  local who="$1" topic="${2:-}" name
+  case "$who" in
+    pe) name="Platform Engineer" ;;
+    sre) name="On-call SRE" ;;
+    both) name="Both" ;;
+    *) die "speaker_beat: WHO must be pe, sre or both, got '$who'" ;;
+  esac
   if [[ -n "$SCENE" ]]; then
     _stage_keep "beat: $who: $topic"
-    beat "> ${who^}"
+    beat "> $name"
   fi
   _pause
 }
@@ -204,7 +213,7 @@ show_verify() {
   fi
 }
 
-# promote_to LEVEL PR : verified, merged by people, recorded (Hilliary approves as the board).
+# promote_to LEVEL PR : verified, merged by people, recorded (the On-call SRE approves as the board).
 # With NO_WAIT=true and DEMO_AUTOMERGE_FOR_TEST=1 an open promotion PR is merged here with
 # --admin (logged as admin-bypass), which stands in for the board in a run nobody watches.
 act_with_approval() { tracked_level_is act && [[ -n "$(autonomy_approved_by)" ]]; }
@@ -213,7 +222,7 @@ promote_to() {
   local level="$1" pr="$2" state
   "$PROMOTION_PR_SH" verify "$pr" # one line (P23); exit 8 and a refusal line when the PR changed
   open_tab "$(gh pr view "$pr" --repo "$REPO_SLUG" --json url --jq .url)"
-  speaker_beat hilliary "approves the promotion"
+  speaker_beat sre "approves the promotion"
   scene_say board
   state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state 2>/dev/null || true)"
   if [[ "$state" == OPEN ]] && automerge_for_test; then "$PROMOTION_PR_SH" merge "$pr" --admin >/dev/null; fi
@@ -383,9 +392,9 @@ await_outcome() {
 
 refusal_reason() { sed -n 's/^- \([a-z_]*\): .*/\1/p' <<<"$OUT_BODY" | head -n1; }
 
-# human_fix : Hilliary's beat, then the human fix (make fix, one pushed: line) until Healthy.
+# human_fix : the On-call SRE's beat, then the human fix (make fix, one pushed: line) until Healthy.
 human_fix() {
-  speaker_beat hilliary "before the human fix"
+  speaker_beat sre "before the human fix"
   as_platform_engineer
   typed "make fix"
   until_ready "Healthy" app_health_is checkout Healthy

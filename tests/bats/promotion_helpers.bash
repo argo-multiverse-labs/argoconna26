@@ -111,6 +111,12 @@ case "$1 $2" in
     "$REAL_GIT" -C "$OTHER" merge -q --no-ff -m "Merge pull request #$n from argo-multiverse-labs/$b" "origin/$b"
     "$REAL_GIT" -C "$OTHER" push -q origin HEAD:refs/heads/build/demo
     jq '.state = "MERGED"' "$S/pr/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pr/$n.json" ;;
+  "api orgs/"*"/teams/"*"/memberships/"*)
+    # members: one login per line (default: stub-reviewer); anyone else is a 404.
+    login="${2##*/}"
+    if grep -qx -- "$login" "$S/members" 2>/dev/null || { [ ! -f "$S/members" ] && [ "$login" = stub-reviewer ]; }; then
+      echo '{"state":"active"}' | emit
+    else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi ;;
   "api repos/argo-multiverse-labs/argoconna26/pulls/"*)
     path="$2"; n="${path#*/pulls/}"; n="${n%%/*}"
     { cat "$S/reviews-$n.json" 2>/dev/null || echo '[]'; } | emit ;;

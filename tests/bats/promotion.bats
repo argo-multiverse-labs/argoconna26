@@ -243,6 +243,28 @@ approve() { review "$1" APPROVED; }
   [ "$(tip_autonomy .promotion.approved_by)" = "admin-bypass" ]
 }
 
+@test "an approval by someone outside the promotion-board team does not count (C4 F1)" {
+  promo ensure propose
+  review 1 APPROVED drive-by-user User
+  run promo merge 1
+  [ "$status" -ne 0 ]
+  ! gh_calls | grep -q 'pr merge'
+  promo merge 1 --admin
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "admin-bypass" ]
+}
+
+@test "a board member's approval counts even after an outsider approves later" {
+  promo ensure propose
+  approve 1
+  review 1 APPROVED drive-by-user User
+  promo merge 1
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [[ "$(tip_autonomy .promotion.approved_by)" == "promotion-board member (review "*"#pullrequestreview-555)" ]]
+}
+
 @test "an approval by BOT_LOGIN typed as a user still does not count" {
   promo ensure propose
   review 1 APPROVED "argoconna26-agent[bot]" User
