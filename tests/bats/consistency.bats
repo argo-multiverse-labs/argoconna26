@@ -181,6 +181,8 @@ ROLLOUT_FILE=apps/checkout/deploy/rollout.yaml
 KUSTOMIZATION_FILE=apps/checkout/kustomization.yaml
 CHECKOUT_CVE_TAG=v1.4.2
 BOT_LOGIN=example-agent[bot]
+POLICY_CHECK_CONTEXT=policy-check
+POLICY_CHECK_INTEGRATION_ID=15368
 ENV
   declare -A v=(
     [REPO_SLUG]=example-org/example-repo [TRACKED_BRANCH]=build/demo
@@ -188,7 +190,8 @@ ENV
     [CDEVENTS_URL]='"http://cdevents-sim.aiops.svc:8080/events"' [BRIDGE_EVENT_SOURCE]=/argoconna26/bridge
     [ARGO_UI_URL]='"http://127.0.0.1:30080"' [ROLLOUT_FILE]=apps/checkout/deploy/rollout.yaml
     [KUSTOMIZATION_FILE]=apps/checkout/kustomization.yaml [CHECKOUT_CVE_TAG]=v1.4.2
-    [BOT_LOGIN]='"example-agent[bot]"'
+    [BOT_LOGIN]='"example-agent[bot]"' [POLICY_CHECK_CONTEXT]='"policy-check"'
+    [POLICY_CHECK_INTEGRATION_ID]='"15368"'
   )
   local kv tag=v0.1.0
   for kv in "$@"; do
@@ -197,7 +200,7 @@ ENV
   {
     printf '          env:\n'
     for k in REPO_SLUG TRACKED_BRANCH HOLMES_URL HOLMES_TIMEOUT_S STAGE_COLS CDEVENTS_URL BRIDGE_EVENT_SOURCE ARGO_UI_URL \
-        ROLLOUT_FILE KUSTOMIZATION_FILE CHECKOUT_CVE_TAG BOT_LOGIN; do
+        ROLLOUT_FILE KUSTOMIZATION_FILE CHECKOUT_CVE_TAG BOT_LOGIN POLICY_CHECK_CONTEXT POLICY_CHECK_INTEGRATION_ID; do
       printf '            - {name: %s, value: %s}\n' "$k" "${v[$k]}"
     done
   } > "$WORK/bridge/deploy/deployment.yaml"
@@ -209,6 +212,13 @@ ENV
   bridge_files
   run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
   [ "$status" -eq 0 ]
+}
+
+@test "flags a bridge POLICY_CHECK_INTEGRATION_ID that differs from demo.env" {
+  bridge_files POLICY_CHECK_INTEGRATION_ID='"1"'
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"POLICY_CHECK_INTEGRATION_ID"* ]]
 }
 
 @test "flags a bridge BRIDGE_EVENT_SOURCE that differs from demo.env" {
