@@ -2,6 +2,7 @@
 # Promotion PRs and demotion for the agent's autonomy level (aiops/autonomy.yaml).
 #
 #   scripts/promotion-pr.sh ensure LEVEL          close any open promotion PR, open a fresh one for LEVEL
+#   scripts/promotion-pr.sh close-open            close any open promotion PR (reset-rung-1 and reset-demo)
 #   scripts/promotion-pr.sh verify PR             head and diff are what ensure pushed (exit 8 if not)
 #   scripts/promotion-pr.sh merge PR [--admin]    verify, then merge (--admin is logged as admin-bypass)
 #   scripts/promotion-pr.sh record-approval PR    after the merge: write who approved, as a role plus a link
@@ -169,12 +170,12 @@ record_value() { sed -n "s/^$2=//p" "$1" | head -n1; } # FILE KEY
 require_pr_number() { [[ "${1:-}" =~ ^[0-9]+$ ]] || die "PR must be a number, got '${1:-}'"; }
 
 # --------------------------------------------------------------- ensure
-close_stale_promotion_prs() {
-  local n stale
+close_stale_promotion_prs() { # [COMMENT]
+  local n stale comment="${1:-superseded by a fresh promotion PR}"
   stale="$(gh_open_promotion_prs)" || die "could not list open promotion PRs"
   while read -r n; do
     [[ -n "$n" ]] || continue
-    gh pr close "$n" --repo "$REPO_SLUG" --comment "superseded by a fresh promotion PR" >/dev/null \
+    gh pr close "$n" --repo "$REPO_SLUG" --comment "$comment" >/dev/null \
       || die "could not close the stale promotion PR $n"
     log_info "closed superseded promotion PR $n"
   done <<<"$stale"
@@ -345,7 +346,8 @@ main() {
     merge) cmd_merge "$@" ;;
     record-approval) cmd_record_approval "$@" ;;
     demote) cmd_demote "$@" ;;
-    *) die "usage: promotion-pr.sh ensure LEVEL | verify PR | merge PR [--admin] | record-approval PR | demote" ;;
+    close-open) (($# == 0)) || die "usage: promotion-pr.sh close-open"; close_stale_promotion_prs "closed by a demo reset" ;;
+    *) die "usage: promotion-pr.sh ensure LEVEL | verify PR | merge PR [--admin] | record-approval PR | demote | close-open" ;;
   esac
 }
 

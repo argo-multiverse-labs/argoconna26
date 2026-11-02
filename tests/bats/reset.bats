@@ -209,6 +209,20 @@ calls_at() { grep -n "$1" "$CALLS" | head -n1 | cut -d: -f1; }
   [ "$(pr_state 102)" = "OPEN" ]
 }
 
+leftover_promotion_closed_by() { # TARGET
+  seed_autonomy propose
+  run promo ensure act
+  [ "$status" -eq 0 ]
+  [ "$(open_pr_count)" -eq 1 ]
+  run reset "$1"
+  [ "$status" -eq 0 ]
+  [ "$(open_pr_count)" -eq 0 ]
+}
+
+@test "reset-rung-1 closes a leftover promotion PR" { leftover_promotion_closed_by 1; }
+
+@test "reset-demo closes a leftover promotion PR" { leftover_promotion_closed_by demo; }
+
 @test "reset-rung-3 from act lowers to propose and opens a fresh act promotion PR" {
   seed_autonomy act
   run reset 3
