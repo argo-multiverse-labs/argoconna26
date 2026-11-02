@@ -312,3 +312,42 @@ holmes_files() { # IMAGE URL : platform/holmes/values.yaml and the demo.env name
   [ "$status" -ne 0 ]
   [[ "$output" == *"HOLMES_URL"* ]]
 }
+
+# fork_files : the Applications, CODEOWNERS and policy data that name demo.env's repo, team and login
+fork_files() {
+  mkdir -p "$WORK/gitops/apps" "$WORK/.github" "$WORK/policy/data"
+  printf 'kind: Application\nspec:\n  source:\n    repoURL: https://github.com/argo-multiverse-labs/argoconna26.git\n' > "$WORK/gitops/root.yaml"
+  printf 'kind: Application\nspec:\n  sources:\n    - repoURL: https://github.com/argo-multiverse-labs/argoconna26.git\n' > "$WORK/gitops/apps/checkout.yaml"
+  printf '/aiops/autonomy.yaml  @argo-multiverse-labs/promotion-board\n/.github/  @argo-multiverse-labs/promotion-board\n' > "$WORK/.github/CODEOWNERS"
+  printf '# login\nagent_login: argoconna26-agent[bot]\n' > "$WORK/policy/data/agent.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m fork-files
+}
+
+@test "consistency passes Applications, CODEOWNERS and policy data that match demo.env" {
+  fork_files
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "consistency: OK" ]
+}
+
+@test "consistency flags an Application repoURL that differs from REPO_SLUG" {
+  fork_files
+  sed -i 's#argoconna26.git#other-repo.git#' "$WORK/gitops/apps/checkout.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m drift
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"gitops/apps/checkout.yaml:4:"* ]]
+  [[ "$output" == *"REPO_SLUG"* ]]
+}
+
+@test "consistency flags a CODEOWNERS team or policy agent_login that differs from demo.env" {
+  fork_files
+  sed -i 's#promotion-board#other-board#' "$WORK/.github/CODEOWNERS"
+  sed -i 's#agent\[bot\]#other[bot]#' "$WORK/policy/data/agent.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m drift
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *".github/CODEOWNERS:1:"*"PROMOTION_TEAM"* ]]
+  [[ "$output" == *".github/CODEOWNERS:2:"* ]]
+  [[ "$output" == *"policy/data/agent.yaml:2:"*"BOT_LOGIN"* ]]
+}

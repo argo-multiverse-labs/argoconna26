@@ -175,6 +175,34 @@ if [[ -n "${HOLMES_URL:-}" && -n "${HOLMES_RELEASE:-}" && -n "${NS_AIOPS:-}" ]];
     || report "demo.env: HOLMES_URL '$HOLMES_URL' is not the Service http://${HOLMES_RELEASE}-holmes.${NS_AIOPS}.svc"
 fi
 
+# 9. Forkability (Task 6.7a): the repo, the code-owner team and the agent login that demo.env
+#    owns must be the ones the Applications, CODEOWNERS and the policy data actually name.
+#    scripts/configure-fork.sh rewrites all of them from demo.env's three values.
+if [[ -n "${REPO_SLUG:-}" ]]; then
+  want_url="https://github.com/${REPO_SLUG}.git"
+  while IFS=: read -r file line text; do
+    got="${text#*repoURL:}"; got="${got//[[:space:]\"\']/}"
+    [[ "$got" == "$want_url" ]] || report "$file:$line: repoURL '$got' differs from demo.env REPO_SLUG ($want_url)"
+  done < <(git grep -nI -E '^[[:space:]-]*repoURL:[[:space:]]*"?https://github\.com/' -- 'gitops' 2>/dev/null || true)
+fi
+if [[ -n "${PROMOTION_TEAM:-}" ]] && git ls-files --error-unmatch .github/CODEOWNERS >/dev/null 2>&1; then
+  n=0
+  while IFS= read -r text || [[ -n "$text" ]]; do
+    n=$((n + 1))
+    [[ "$text" =~ ^[[:space:]]*($|#) ]] && continue
+    read -r -a toks <<<"$text"
+    for tok in "${toks[@]:1}"; do
+      [[ "$tok" == "$PROMOTION_TEAM" ]] || report ".github/CODEOWNERS:$n: owner '$tok' differs from demo.env PROMOTION_TEAM ($PROMOTION_TEAM)"
+    done
+  done < .github/CODEOWNERS
+fi
+if [[ -n "${BOT_LOGIN:-}" ]] && git ls-files --error-unmatch policy/data/agent.yaml >/dev/null 2>&1; then
+  while IFS=: read -r line text; do
+    got="${text#*agent_login:}"; got="${got//[[:space:]\"\']/}"
+    [[ "$got" == "$BOT_LOGIN" ]] || report "policy/data/agent.yaml:$line: agent_login '$got' differs from demo.env BOT_LOGIN ($BOT_LOGIN)"
+  done < <(grep -nE '^agent_login:' policy/data/agent.yaml || true)
+fi
+
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2
   exit 1

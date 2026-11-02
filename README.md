@@ -105,13 +105,45 @@ keys, all blank in the example:
 the App, install it on one repository (your fork), and apply the rulesets as described in
 [docs/github-setup.md](docs/github-setup.md).
 
+## Run it from your own fork
+
+As published, the Applications read `argo-multiverse-labs/argoconna26`, and the operator
+scripts push to it. Without push rights there, point the demo at a fork of yours:
+
+1. Fork the repository on GitHub and clone your fork.
+2. Set the three names and rewrite everything that uses them, then commit to your fork:
+
+   ```bash
+   make configure-fork REPO_SLUG=you/argoconna26 BOT_LOGIN=your-app[bot] PROMOTION_TEAM=@you/promotion-board
+   make consistency          # prints "consistency: OK" when every name agrees
+   git add -A && git commit -m "feat: configure the demo for my fork" && git push
+   ```
+
+   This changes `demo.env`, each Application's `repoURL` under `gitops/`, `.github/CODEOWNERS`,
+   `policy/data/agent.yaml` and the two env values in `bridge/deploy/deployment.yaml`. Any name
+   you leave out keeps its value, and running it twice changes nothing the second time.
+   `BOT_LOGIN` is your GitHub App's login (`<app-name>[bot]`).
+3. Copy [.env.example](.env.example) to `.env` (mode 0600) and add an LLM key.
+4. `make operator-clone`. It pushes with your own `gh` login, or with a fine-grained token for
+   your fork in `GH_TOKEN`.
+5. `make build-all`, then `make seed-history` and `make bump` for the first incident.
+
+What each rung needs on top of the platform:
+
+| Rung | Needs |
+|------|-------|
+| The platform, the incident and `make naive-revert` | Push rights to your fork |
+| 1 (suggest) | Also your own GitHub App with the permissions in [docs/github-setup.md](docs/github-setup.md), installed on the fork |
+| 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow) |
+
+The fork path was checked on the upstream repository and by the tests in
+`tests/bats/configure_fork.bats` and `tests/bats/consistency.bats`, not from a real fork.
+
 ## Quick Start
 
 Argo CD pulls from GitHub, so the cluster follows what is pushed to the tracked branch
-(`TRACKED_BRANCH` in [demo.env](demo.env), `build/demo`). Run it from your own fork: set
-`REPO_SLUG`, `BOT_LOGIN` and `PROMOTION_TEAM` in `demo.env`, change the `repoURL` in
-`gitops/` and `bridge/deploy/deployment.yaml` to match, and run `make consistency`, which
-reports names that disagree.
+(`TRACKED_BRANCH` in [demo.env](demo.env), `build/demo`). To run it from your own fork,
+use the section above first.
 
 ```bash
 cp .env.example .env && chmod 600 .env     # then fill in the keys
