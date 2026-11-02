@@ -295,3 +295,319 @@ async def test_github_list_agent_prs_error_raises(respx_mock, forge: GitHubForge
     respx_mock.get(f"{BASE}/pulls").mock(return_value=httpx.Response(502))
     with pytest.raises(ForgeError):
         await forge.list_agent_prs("checkout", "all")
+
+
+# --- Task 5.4: policy-check results, counted on both act paths ---
+
+POLICY_FAILED = "dev.cdeventsx.agent-action.0.1.0"
+
+
+def policy_counts(metrics: Metrics) -> tuple[float | None, float | None]:
+    return (
+        metrics.value("aiops_policy_checks_total", result="pass"),
+        metrics.value("aiops_policy_checks_total", result="fail"),
+    )
+
+
+def policy_actions(emitter: RecordingEmitter) -> list[dict]:
+    return [
+        e for e in emitter.events
+        if e["context"]["type"] == events.AGENT_ACTION and e["customData"]["action"] == "policy_failed"
+    ]
+
+
+def with_checks(forge: FakeForge, statuses: dict[int, str]) -> None:
+    forge.check_runs = {f"{n:040x}": [status] for n, status in statuses.items()}
+
+
+async def test_policy_series_start_at_zero() -> None:
+    _, metrics, _, _ = make([])
+    assert policy_counts(metrics) == (0, 0)
+
+
+async def test_enabled_path_policy_pass_counted() -> None:
+    """Auto-merge was enabled while the check was pending; GitHub merged after it passed. The
+    act flow never looked again, so the count comes from the reconciler."""
+    forge, metrics, _, rec = make([pr(1, "closed", merged=True), pr(2), pr(3)])
+    with_checks(forge, {1: "success", 2: "pending", 3: "missing"})
+    await rec.run_once()
+    assert policy_counts(metrics) == (1, 0)
+    assert next(c[1:] for c in forge.calls if c[0] == "check_run_status") == (f"{1:040x}", "policy-check")
+
+
+async def test_enabled_path_policy_fail_comments_once() -> None:
+    forge, metrics, emitter, rec = make([pr(1)])
+    with_checks(forge, {1: "failure"})
+    await rec.run_once()
+    await rec.run_once()
+    assert policy_counts(metrics) == (0, 1)
+    [(number, body)] = forge.pr_comments
+    assert number == 1
+    assert "Policy check failed; leaving this for a human." in body
+    [event] = policy_actions(emitter)
+    assert event["customData"]["target_url"] == "https://forge.test/pull/1"
+    assert event["customData"]["app"] == APP
+    assert metrics.value("aiops_actions_total", action="policy_failed") == 1
+
+
+async def test_policy_fail_comment_survives_a_restart() -> None:
+    """A new process finds its own marker comment on the PR and posts nothing more."""
+    forge, _, _, rec = make([pr(1)])
+    with_checks(forge, {1: "failure"})
+    await rec.run_once()
+    rec2 = Reconciler(forge, Metrics(), (emitter2 := RecordingEmitter()), app=APP, source=SOURCE)
+    await rec2.run_once()
+    await rec2.run_once()
+    assert len(forge.pr_comments) == 1
+    assert policy_actions(emitter2) == []
+
+
+async def test_policy_fail_comment_retried_after_a_failed_post() -> None:
+    forge, _, emitter, rec = make([pr(1)])
+    with_checks(forge, {1: "failure"})
+    forge.fail_writes = ForgeError("POST /issues/1/comments: 502", 502)
+    await rec.run_once()
+    assert forge.pr_comments == [] and policy_actions(emitter) == []
+    forge.fail_writes = None
+    await rec.run_once()
+    assert len(forge.pr_comments) == 1 and len(policy_actions(emitter)) == 1
+
+
+async def test_fallback_path_policy_fail_not_double_commented(settings) -> None:
+    """clean_status fallback: the act flow sees the failure and leaves the PR; the reconciler
+    then comments once. One comment and one policy_failed event in all."""
+    from bridge.incidents import IncidentRegistry
+    from bridge.pipeline import Deps, handle_incident
+
+    from .test_act import Sleeper, act_forge
+    from .test_pipeline_suggest import NOW, StubHolmes, make_hook, rca
+
+    forge = act_forge(auto_merge="clean_status", check_runs={f"{1:040x}": ["pending", "failure"]})
+    emitter = RecordingEmitter()
+    metrics = Metrics()
+    registry = IncidentRegistry()
+    deps = Deps(forge=forge, holmes=StubHolmes(rca()), emitter=emitter, settings=settings, registry=registry,
+                clock=lambda: NOW, metrics=metrics, sleep=Sleeper())
+    rec = Reconciler(forge, metrics, emitter, app=APP, source=SOURCE, registry=registry)
+    await rec.run_once()  # baseline: nothing yet
+    out = await handle_incident(make_hook(), deps)
+    assert out.action == "policy_failed"
+    forge.agent_prs = [forge.info(1)]
+    await rec.run_once()
+    await rec.run_once()
+    assert len(forge.pr_comments) == 1
+    assert len(policy_actions(emitter)) == 1
+    assert policy_counts(metrics) == (0, 1)
+    assert metrics.value("aiops_actions_total", action="policy_failed") == 1
+
+
+async def test_policy_fail_on_closed_pr_counted_not_commented() -> None:
+    forge, metrics, emitter, rec = make([pr(1, "closed")])
+    with_checks(forge, {1: "failure"})
+    await rec.run_once()
+    assert policy_counts(metrics) == (0, 1)
+    assert forge.pr_comments == [] and policy_actions(emitter) == []
+
+
+async def test_policy_metric_set_from_listing_not_incremented() -> None:
+    forge, metrics, _, rec = make([pr(1, "closed", merged=True), pr(2, "closed", merged=True), pr(3, "closed")])
+    with_checks(forge, {1: "success", 2: "success", 3: "failure"})
+    for _ in range(3):
+        await rec.run_once()
+    assert policy_counts(metrics) == (2, 1)
+    # A restart (fresh Reconciler and Metrics) over the same listing gives the same values.
+    metrics2 = Metrics()
+    rec2 = Reconciler(forge, metrics2, RecordingEmitter(), app=APP, source=SOURCE)
+    await rec2.run_once()
+    await rec2.run_once()
+    assert policy_counts(metrics2) == (2, 1)
+
+
+async def test_policy_negative_and_reset_labels_excluded() -> None:
+    """O23: harness PRs count on neither panel-4 series, get no comment and cost no check read."""
+    prs = [
+        pr(1, labels=("policy-negative-test",)),
+        pr(2, "closed", merged=True, labels=("demo-reset",)),
+        pr(3, "closed", merged=True),
+    ]
+    forge, metrics, emitter, rec = make(prs)
+    with_checks(forge, {1: "failure", 2: "success", 3: "success"})
+    await rec.run_once()
+    await rec.run_once()
+    assert policy_counts(metrics) == (1, 0)
+    assert forge.pr_comments == [] and policy_actions(emitter) == []
+    checked = {c[1] for c in forge.calls if c[0] == "check_run_status"}
+    assert checked == {f"{3:040x}"}
+
+
+async def test_policy_labelled_later_drops_out_of_the_count() -> None:
+    forge, metrics, _, rec = make([pr(1, "closed", merged=True)])
+    with_checks(forge, {1: "success"})
+    await rec.run_once()
+    assert policy_counts(metrics) == (1, 0)
+    forge.agent_prs[0] = pr(1, "closed", merged=True, labels=("demo-reset",))
+    await rec.run_once()
+    assert policy_counts(metrics) == (0, 0)
+
+
+async def test_policy_check_error_keeps_last_policy_values() -> None:
+    forge, metrics, _, rec = make([pr(1, "closed", merged=True), pr(2)])
+    forge.check_runs = {f"{1:040x}": ["success"], f"{2:040x}": [ForgeError("boom", 502)]}
+    await rec.run_once()
+    assert policy_counts(metrics) == (0, 0)  # never set from a partial read
+    assert counts(metrics) == (1, 0)  # the outcome counts don't depend on the checks
+    forge.check_runs[f"{2:040x}"] = ["failure"]
+    await rec.run_once()
+    assert policy_counts(metrics) == (1, 1)
+
+
+async def test_concluded_check_on_closed_pr_read_once() -> None:
+    forge, _, _, rec = make([pr(1, "closed", merged=True), pr(2)])
+    with_checks(forge, {1: "success", 2: "pending"})
+    for _ in range(3):
+        await rec.run_once()
+    reads = [c[1] for c in forge.calls if c[0] == "check_run_status"]
+    assert reads.count(f"{1:040x}") == 1
+    assert reads.count(f"{2:040x}") == 3
+
+
+async def test_reconciler_skips_change_merged_the_pipeline_announced() -> None:
+    from bridge.incidents import IncidentRegistry
+
+    registry = IncidentRegistry()
+    forge = FakeForge(agent_prs=[pr(1)])
+    emitter = RecordingEmitter()
+    rec = Reconciler(forge, Metrics(), emitter, app=APP, source=SOURCE, registry=registry)
+    await rec.run_once()
+    registry.announce_merge(1)
+    forge.agent_prs[0] = pr(1, "closed", merged=True)
+    await rec.run_once()
+    assert events.CHANGE_MERGED not in emitter.types()
+
+
+# --- the GitHub implementation of the act calls ---
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_enable_auto_merge_enabled(respx_mock, forge: GitHubForge) -> None:
+    route = respx_mock.post(f"{API}/graphql").mock(
+        return_value=httpx.Response(200, json={"data": {"enablePullRequestAutoMerge": {"pullRequest": {}}}})
+    )
+    from bridge.forge.base import PullRequest
+
+    got = await forge.enable_auto_merge(PullRequest(7, "u", "PR_7", "a" * 40, "agent/checkout-x"), "squash")
+    assert got == "enabled"
+    sent = route.calls[0].request
+    assert sent.headers["Authorization"] == "Bearer inst-token"
+    import json as _json
+
+    body = _json.loads(sent.content)
+    assert "enablePullRequestAutoMerge" in body["query"]
+    assert body["variables"] == {"id": "PR_7", "method": "SQUASH"}
+
+
+@pytest.mark.parametrize(
+    "message", ["Pull request Pull request is in clean status", "Pull request Pull request is in unstable status"]
+)
+@respx.mock(assert_all_mocked=True)
+async def test_github_enable_auto_merge_clean_status(respx_mock, forge: GitHubForge, message: str) -> None:
+    respx_mock.post(f"{API}/graphql").mock(
+        return_value=httpx.Response(200, json={"data": None, "errors": [{"type": "UNPROCESSABLE", "message": message}]})
+    )
+    from bridge.forge.base import PullRequest
+
+    assert await forge.enable_auto_merge(PullRequest(7, "u", "PR_7", "a" * 40), "merge") == "clean_status"
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_enable_auto_merge_other_error_raises(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.post(f"{API}/graphql").mock(
+        return_value=httpx.Response(200, json={"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible"}]})
+    )
+    from bridge.forge.base import PullRequest
+
+    with pytest.raises(ForgeError):
+        await forge.enable_auto_merge(PullRequest(7, "u", "PR_7", "a" * 40), "merge")
+    respx_mock.post(f"{API}/graphql").mock(return_value=httpx.Response(502))
+    with pytest.raises(ForgeError):
+        await forge.enable_auto_merge(PullRequest(7, "u", "PR_7", "a" * 40), "merge")
+
+
+def check_run(run_id: int, status: str, conclusion: str | None, app_id: int = 15368) -> dict:
+    return {"id": run_id, "name": "policy-check", "status": status, "conclusion": conclusion, "app": {"id": app_id}}
+
+
+@pytest.mark.parametrize(
+    ("runs", "want"),
+    [
+        ([], "missing"),
+        ([check_run(1, "queued", None)], "pending"),
+        ([check_run(1, "in_progress", None)], "pending"),
+        ([check_run(1, "completed", "success")], "success"),
+        ([check_run(1, "completed", "failure")], "failure"),
+        ([check_run(1, "completed", "cancelled")], "failure"),
+        ([check_run(1, "completed", "skipped")], "failure"),
+        ([check_run(1, "completed", "neutral")], "failure"),
+        # The newest run wins (a re-run after a failure).
+        ([check_run(1, "completed", "failure"), check_run(2, "completed", "success")], "success"),
+        ([check_run(2, "completed", "success"), check_run(3, "in_progress", None)], "pending"),
+        # A same-named check from another app never counts (the ruleset pins GitHub Actions).
+        ([check_run(1, "completed", "success", app_id=999)], "missing"),
+    ],
+)
+@respx.mock(assert_all_mocked=True)
+async def test_github_check_run_status(respx_mock, forge: GitHubForge, runs: list[dict], want: str) -> None:
+    sha = "b" * 40
+    route = respx_mock.get(f"{BASE}/commits/{sha}/check-runs").mock(
+        return_value=httpx.Response(200, json={"total_count": len(runs), "check_runs": runs})
+    )
+    assert await forge.check_run_status(sha) == want
+    assert route.calls[0].request.url.params["check_name"] == "policy-check"
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_check_run_status_error_raises(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/commits/{'b' * 40}/check-runs").mock(return_value=httpx.Response(502))
+    with pytest.raises(ForgeError):
+        await forge.check_run_status("b" * 40)
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_merge_pr_pins_the_head_sha(respx_mock, forge: GitHubForge) -> None:
+    from bridge.forge.base import PullRequest
+
+    route = respx_mock.put(f"{BASE}/pulls/7/merge").mock(
+        return_value=httpx.Response(200, json={"sha": "d" * 40, "merged": True})
+    )
+    sha = await forge.merge_pr(PullRequest(7, "u", "PR_7", "a" * 40), "merge")
+    assert sha == "d" * 40
+    import json as _json
+
+    assert _json.loads(route.calls[0].request.content) == {"merge_method": "merge", "sha": "a" * 40}
+    respx_mock.put(f"{BASE}/pulls/7/merge").mock(return_value=httpx.Response(409))
+    with pytest.raises(ForgeError):
+        await forge.merge_pr(PullRequest(7, "u", "PR_7", "a" * 40), "merge")
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_merge_methods(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(BASE).mock(
+        return_value=httpx.Response(
+            200, json={"allow_merge_commit": False, "allow_squash_merge": True, "allow_rebase_merge": True}
+        )
+    )
+    assert await forge.merge_methods() == ("squash", "rebase")
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_github_list_pr_comments_only_the_bots(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/issues/7/comments").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"user": {"login": BOT}, "body": "mine"},
+                {"user": {"login": "someone"}, "body": "theirs <!-- aiops:policy-failed -->"},
+            ],
+        )
+    )
+    assert await forge.list_pr_comments(7) == ["mine"]

@@ -60,6 +60,8 @@ spec:
             - {name: KUSTOMIZATION_FILE, value: apps/checkout/kustomization.yaml}
             - {name: CHECKOUT_CVE_TAG, value: v1.4.2}
             - {name: BOT_LOGIN, value: "argoconna26-agent[bot]"}
+            - {name: POLICY_CHECK_CONTEXT, value: policy-check}
+            - {name: POLICY_CHECK_INTEGRATION_ID, value: "15368"}
             # Pinned at the bridge's defaults only so the optional Secret bridge-env (envFrom,
             # below) can never set them: an `env` entry beats envFrom. A test checks that every
             # setting is pinned here except the TEST_* hooks.
@@ -72,6 +74,8 @@ spec:
             - {name: STATUS_REFRESH_S, value: "60"}
             - {name: RECONCILE_APP, value: checkout}
             - {name: RECONCILE_INTERVAL_S, value: "30"}
+            - {name: ACT_CHECK_POLL_S, value: "5"}
+            - {name: ACT_CHECK_TIMEOUT_S, value: "600"}
             # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
             - name: BRIDGE_WEBHOOK_TOKEN
               valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}

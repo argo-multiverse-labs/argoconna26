@@ -49,6 +49,14 @@ class PullRequestInfo:
     labels: tuple[str, ...] = ()
 
 
+MergeMethod = Literal["merge", "squash", "rebase"]
+#: `clean_status`: GitHub refused auto-merge because the PR can be merged right now (no required
+#: check holds it), so the caller has to wait for the check itself (Task 5.4).
+AutoMergeResult = Literal["enabled", "clean_status"]
+CheckStatus = Literal["pending", "success", "failure", "missing"]
+#: The required check's name (demo.env POLICY_CHECK_CONTEXT).
+POLICY_CHECK = "policy-check"
+
 #: Every branch the bridge creates starts with this, and every guard keys on it.
 AGENT_BRANCH_PREFIX = "agent/"
 
@@ -64,8 +72,9 @@ def check_agent_branch(branch: str) -> None:
 class Forge(Protocol):
     """Every Git and forge call the bridge makes. Reads first, then writes.
 
-    `open_pr` makes one commit on a new `agent/*` branch and opens the PR. Slice 4
-    still adds `enable_auto_merge`, `merge_pr` and `check_run_status`.
+    `open_pr` makes one commit on a new `agent/*` branch and opens the PR. At `act`,
+    `enable_auto_merge` hands the merge to GitHub, and `merge_pr` is the bridge's own merge on
+    the `clean_status` fallback, called only after `check_run_status` returned `success`.
     """
 
     async def read_file(self, path: str, ref: str) -> str: ...
@@ -107,3 +116,19 @@ class Forge(Protocol):
         ...
 
     async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]: ...
+
+    async def list_pr_comments(self, number: int) -> list[str]:
+        """The bodies of the bot's own comments on a PR (other authors' are left out)."""
+        ...
+
+    async def merge_methods(self) -> tuple[MergeMethod, ...]:
+        """The merge methods the repository allows, in the order merge, squash, rebase."""
+        ...
+
+    async def enable_auto_merge(self, pr: PullRequest, method: MergeMethod) -> AutoMergeResult: ...
+
+    async def check_run_status(self, sha: str, name: str = POLICY_CHECK) -> CheckStatus: ...
+
+    async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
+        """Merge `pr` at its recorded head SHA (a moved head is refused); returns the merge SHA."""
+        ...

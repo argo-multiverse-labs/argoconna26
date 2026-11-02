@@ -16,10 +16,15 @@ class IncidentRegistry:
     (Task 4.3), so a webhook replay does nothing. Those names carry only 7 characters of
     the revision, so a key also counts as seen when its short form (`app@abcdef1`) is in
     the set.
+
+    It also holds the numbers of the fix PRs the act flow merged itself (Task 5.4): the
+    pipeline emits `change.merged` for those, so the reconciler, which shares this registry,
+    does not emit it a second time.
     """
 
     def __init__(self) -> None:
         self._keys: set[str] = set()
+        self._merges: set[int] = set()
         self._lock = threading.Lock()
 
     def _known(self, key: str) -> bool:
@@ -48,6 +53,21 @@ class IncidentRegistry:
         """Add keys, full (`app@<40 hex>`) or short (`app@<7 hex>`)."""
         with self._lock:
             self._keys.update(keys)
+
+    def announce_merge(self, number: int) -> None:
+        """Called before the bridge's own merge request, so the reconciler can never see the
+        merge first and announce it too."""
+        with self._lock:
+            self._merges.add(number)
+
+    def forget_merge(self, number: int) -> None:
+        """The merge request failed: a later merge (by a human or GitHub) is the reconciler's."""
+        with self._lock:
+            self._merges.discard(number)
+
+    def merge_announced(self, number: int) -> bool:
+        with self._lock:
+            return number in self._merges
 
     def __len__(self) -> int:
         with self._lock:

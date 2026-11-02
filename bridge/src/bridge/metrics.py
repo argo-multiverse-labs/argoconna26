@@ -24,6 +24,7 @@ log = logging.getLogger("bridge.metrics")
 LEVELS = ("suggest", "propose", "act")
 ACTIONS = ("commented", "refused", "pii_blocked", "holmes_failed", "pr_opened", "auto_merge_enabled", "merged",
            "policy_failed", "post_failed", "duplicate")
+POLICY_RESULTS = ("pass", "fail")
 DRYRUN_RELOAD_S = 60.0
 
 
@@ -89,7 +90,10 @@ class Metrics:
         self.guardrail_executions = Counter(
             "aiops_guardrail_executions_total", "Guardrail refusals, by reason", ["reason"], registry=r
         )
-        self.policy_checks = Counter("aiops_policy_checks_total", "Policy check results", ["result"], registry=r)
+        # Set (not counted) by the reconciler from the agent PRs' policy-check runs (Task 5.4).
+        self.policy_checks = Gauge(
+            "aiops_policy_checks_total", "Agent fix PRs by policy-check conclusion", ["result"], registry=r
+        )
         self.pii_leaks_caught = Counter(
             "aiops_pii_leaks_caught_total", "PII hits that blocked a post, by kind", ["kind"], registry=r
         )
@@ -112,6 +116,8 @@ class Metrics:
             self.pii_leaks_caught.labels(kind=kind)
         for action in ACTIONS:
             self.actions.labels(action=action)
+        for result in POLICY_RESULTS:
+            self.policy_checks.labels(result=result)
 
     def incident(self, level: str) -> None:
         self.incidents.labels(level=level).inc()
@@ -131,6 +137,9 @@ class Metrics:
 
     def set_fix_prs(self, outcome: str, count: int) -> None:
         self.fix_prs.labels(outcome=outcome).set(count)
+
+    def set_policy_checks(self, result: str, count: int) -> None:
+        self.policy_checks.labels(result=result).set(count)
 
     def value(self, name: str, **labels: str) -> float | None:
         """One sample's current value, or None when the series doesn't exist."""

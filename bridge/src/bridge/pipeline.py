@@ -2,8 +2,10 @@
 
 `suggest` comments the RCA on the cause's PR, or on the cause commit. `propose`
 opens one fix PR (two lines, built by `patch.build_fix`) with the RCA and evidence
-in its body, and never merges it: a human reviews and merges. `act` arrives in Task
-5.4; until then the level dispatch raises `NotImplementedError` before any LLM call.
+in its body, and never merges it: a human reviews and merges. `act` (Task 5.4) opens
+the same PR and enables auto-merge, so GitHub merges it once the required `policy-check`
+passes. When GitHub says the PR can merge right now (`clean_status`: no required check
+holds it), the bridge waits for `policy-check` itself and merges only on `success`.
 
 Model text leaves the bridge in the comment or the fix PR (title, body, commit
 message) and in the `rca_completed` event. All of it is PII-scanned before anything
@@ -32,7 +34,14 @@ from . import events, guardrails, pii, stagelog
 from .autonomy import Level, read_autonomy
 from .config import Settings
 from .events import Emitter
-from .forge import Forge, ForgeConflict, ForgeError
+from .forge import (
+    CheckStatus,
+    Forge,
+    ForgeConflict,
+    ForgeError,
+    MergeMethod,
+    PullRequest,
+)
 from .guardrails import Refusal
 from .holmes import HolmesError, HolmesResult, HolmesTimeout
 from .incidents import SHORT_REVISION, IncidentRegistry
@@ -78,6 +87,8 @@ class Deps:
     registry: IncidentRegistry
     clock: Callable[[], datetime] = _utcnow
     metrics: Metrics = field(default_factory=Metrics)
+    #: The act fallback's wait between check reads (a poll period, not a wait on a condition).
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 
 
 @dataclass(frozen=True)
@@ -342,7 +353,8 @@ class _Run:
             self.post_failed = True
             return None
 
-    async def finish(self, action: Action, url: str | None, reason: str | None, *extra: dict) -> Outcome:
+    async def record(self, action: Action, url: str | None, reason: str | None, *extra: dict) -> None:
+        """Count one action and emit its event, after `extra` events."""
         if self.post_failed:
             # Nothing reached GitHub: count and report the failure, naming what was intended.
             self.deps.metrics.action("post_failed")
@@ -352,6 +364,9 @@ class _Run:
             event = self.action_event(action, url, reason)
         for e in (*extra, event):
             await self.emit(e)
+
+    async def finish(self, action: Action, url: str | None, reason: str | None, *extra: dict) -> Outcome:
+        await self.record(action, url, reason, *extra)
         log.info("incident %s: %s (%s)%s", self.hook.key, action, url, " post failed" if self.post_failed else "")
         return Outcome(action, url, self.level, post_failed=self.post_failed)
 
@@ -529,6 +544,15 @@ class _Run:
         return _image_tag(text, self.hook.app)
 
     async def propose(self) -> Outcome:
+        opened = await self.open_fix_pr()
+        if isinstance(opened, Outcome):
+            return opened
+        pr, rca_event, created = opened
+        return await self.finish("pr_opened", pr.url, None, rca_event, created)
+
+    async def open_fix_pr(self) -> Outcome | tuple[PullRequest, dict, dict]:
+        """The propose steps up to an open fix PR. Returns the PR with its `rca.completed` and
+        `change.created` events (not yet emitted), or the incident's final Outcome."""
         guarded = await self.open_pr_guard()
         if guarded:
             return guarded
@@ -585,10 +609,101 @@ class _Run:
             pr.url, branch, self.s.github_repo, source=self.s.bridge_event_source, app=self.hook.app,
             now=self.deps.clock(),
         )
-        return await self.finish("pr_opened", pr.url, None, rca_event, created)
+        return pr, rca_event, created
+
+    # -- act (Task 5.4) ----------------------------------------------------------
+
+    async def act(self) -> Outcome:
+        """Open the fix PR as at propose, then hand the merge to GitHub's auto-merge.
+
+        Policy results are not counted here: on the usual path the check is still pending when
+        auto-merge is enabled, so the reconciler counts them, and posts the one comment on a
+        failure, for both paths alike.
+        """
+        opened = await self.open_fix_pr()
+        if isinstance(opened, Outcome):
+            return opened
+        pr, rca_event, created = opened
+        await self.record("pr_opened", pr.url, None, rca_event, created)
+        forge = self.deps.forge
+        method = await self.merge_method()
+        try:
+            result = await forge.enable_auto_merge(pr, method)
+        except ForgeError as exc:
+            # The PR stays open for a human; nothing merges it without the check.
+            log.warning("incident %s: enabling auto-merge failed: %s", self.hook.key, exc)
+            self.stage("forge", "auto-merge failed")
+            self.post_failed = True
+            return await self.finish("auto_merge_enabled", pr.url, None)
+        if result == "enabled":
+            self.stage("act", "auto-merge on")
+            return await self.finish("auto_merge_enabled", pr.url, None)
+
+        self.stage("act", "waiting on policy")
+        status = await self.wait_for_check(pr)
+        if status == "success":
+            self.stage("act", "policy passed")
+            return await self.merge(pr, method)
+        if status == "failure":
+            # Left open. The reconciler posts the comment and the policy_failed event, once.
+            self.stage("act", "policy failed")
+            log.info("incident %s: policy-check failed on %s; left for a human", self.hook.key, pr.url)
+            return Outcome("policy_failed", pr.url, self.level)
+        self.stage("act", "no policy result")
+        minutes = round(self.s.act_check_timeout_s / 60)
+        text = pr_sections()["policy"]["no_result"].format(minutes=minutes)
+        url = await self.post(forge.comment_on_pr(pr.number, text))
+        return await self.finish("policy_failed", url, f"check_{status}")
+
+    async def merge_method(self) -> MergeMethod:
+        """The repo's allowed method, preferring `merge`; `merge` when the settings can't be read."""
+        try:
+            allowed = await self.deps.forge.merge_methods()
+        except ForgeError as exc:
+            log.warning("incident %s: merge methods unknown: %s", self.hook.key, exc)
+            return "merge"
+        preferred: tuple[MergeMethod, ...] = ("merge", "squash", "rebase")
+        return next((m for m in preferred if m in allowed), "merge")
+
+    async def wait_for_check(self, pr: PullRequest) -> CheckStatus:
+        """Read `policy-check` on the PR's head every `act_check_poll_s` until it concludes, for
+        at most `act_check_timeout_s`. A failed read counts as pending: only a real success merges."""
+        waited = 0.0
+        while True:
+            try:
+                status = await self.deps.forge.check_run_status(pr.head_sha, self.s.policy_check_context)
+            except ForgeError as exc:
+                log.warning("incident %s: check read failed: %s", self.hook.key, exc)
+                status = "pending"
+            if status in ("success", "failure") or waited >= self.s.act_check_timeout_s:
+                return status
+            await self.deps.sleep(self.s.act_check_poll_s)
+            waited += self.s.act_check_poll_s
+
+    async def merge(self, pr: PullRequest, method: MergeMethod) -> Outcome:
+        """The fallback's own merge, at the PR's head SHA. The PR is marked as announced first, so
+        the reconciler counts the merge but leaves its `change.merged` to this flow."""
+        registry = self.deps.registry
+        registry.announce_merge(pr.number)
+        try:
+            sha = await self.deps.forge.merge_pr(pr, method)
+        except ForgeError as exc:
+            registry.forget_merge(pr.number)
+            log.warning("incident %s: merge failed: %s", self.hook.key, exc)
+            self.stage("forge", "merge failed")
+            self.post_failed = True
+            return await self.finish("merged", pr.url, None)
+        self.stage("act", "merged")
+        merged = events.change_merged(
+            pr.url, sha, self.s.bot_login, source=self.s.bridge_event_source, repo=self.s.github_repo,
+            app=self.hook.app, now=self.deps.clock(),
+        )
+        return await self.finish("merged", pr.url, None, merged)
 
 
-_ACTORS: dict[str, Callable[[_Run], Awaitable[Outcome]]] = {"suggest": _Run.suggest, "propose": _Run.propose}
+_ACTORS: dict[str, Callable[[_Run], Awaitable[Outcome]]] = {
+    "suggest": _Run.suggest, "propose": _Run.propose, "act": _Run.act,
+}
 
 
 async def handle_incident(hook: ArgoDegradedHook, deps: Deps) -> Outcome:
@@ -600,11 +715,7 @@ async def handle_incident(hook: ArgoDegradedHook, deps: Deps) -> Outcome:
     if failsafe_reason is None:
         deps.metrics.set_touchpoints(autonomy.touchpoints)
 
-    actor = _ACTORS.get(level)
-    if actor is None:
-        # Before any LLM call: act (Task 5.4) is not built yet.
-        raise NotImplementedError(f"autonomy level {level!r} is not implemented yet")
-    return await actor(_Run(hook, deps, level))
+    return await _ACTORS[level](_Run(hook, deps, level))
 
 
 async def rehydrate_registry(registry: IncidentRegistry, forge: Forge) -> int:
