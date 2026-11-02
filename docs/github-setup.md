@@ -245,7 +245,9 @@ live on your repository.
   us, while `on: [pull_request]` did.
 
   The second spike test opens an App PR that raises `aiops/autonomy.yaml`, and expects it to
-  stay `REVIEW_REQUIRED` and `BLOCKED` with the check green. Before running it, check that the
+  stay `BLOCKED` with the check green. (Under rulesets the PR's `reviewDecision` stays null rather
+  than `REVIEW_REQUIRED`; the code-owner signal is a review request for the promotion team with
+  `asCodeOwner: true`, which is what `policy-negative.sh tamper-autonomy` asserts.) Before running it, check that the
   block can only come from code-owner review:
   `scripts/github-ruleset.sh show | jq '.[]|select(.name=="argoconna26-spike")|.rules[]|select(.type=="pull_request")|.parameters.require_last_push_approval'`
   must print `false`.
