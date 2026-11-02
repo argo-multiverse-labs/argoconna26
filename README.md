@@ -126,7 +126,8 @@ scripts push to it. Without push rights there, point the demo at a fork of yours
 3. Copy [.env.example](.env.example) to `.env` (mode 0600) and add an LLM key.
 4. `make operator-clone`. It pushes with your own `gh` login, or with a fine-grained token for
    your fork in `GH_TOKEN`.
-5. `make build-all`, then `make seed-history` and `make bump` for the first incident.
+5. `make build-all`, then `make reset-demo` (it restarts the bridge, re-seeds the timeline and
+   seeds the first incident's cause), then `make demo-rung-1`.
 
 What each rung needs on top of the platform:
 
