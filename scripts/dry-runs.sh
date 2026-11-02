@@ -138,7 +138,7 @@ start_port_forward() {
   [[ "${KUBECONFIG:-}" == "$(_isolated_kubeconfig)" ]] || die "refusing kubectl: not the isolated kubeconfig"
   PF_PORT="$(free_port)"
   kubectl --context "$CLUSTER_CONTEXT" -n "$NS_AIOPS" port-forward "svc/${HOLMES_RELEASE}-holmes" \
-    "127.0.0.1:${PF_PORT}:80" >"$RUN_DIR/port-forward.log" 2>&1 &
+    --address 127.0.0.1 "${PF_PORT}:80" >"$RUN_DIR/port-forward.log" 2>&1 &
   PF_PID=$!
   poll "HolmesGPT on 127.0.0.1:$PF_PORT" 60 holmes_ready
 }

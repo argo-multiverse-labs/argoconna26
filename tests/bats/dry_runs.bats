@@ -106,6 +106,11 @@ steps() { grep -E '^(make|dryrun) ' "$LOG" | sed -E 's/ -C [^ ]+ --no-print-dire
   git -C "$FIXTURE/.dryruns/scratch/repo" rev-parse --verify -q origin/build/demo >/dev/null
   # no secret on any command line
   ! grep -qE 'judge-key-not-a-secret|master-not-a-secret|holmes-not-a-secret' "$LOG"
+  # kubectl's port-forward takes --address and LOCAL:REMOTE ("127.0.0.1:P:80" reads 127.0.0.1 as a port name)
+  pf_line="$(grep 'port-forward' "$LOG" | head -1)"
+  [[ "$pf_line" == *"--address 127.0.0.1"* ]]
+  [[ "$pf_line" =~ svc/holmes-holmes.*\ [0-9]+:80$ ]]
+  [[ "$pf_line" != *"127.0.0.1:"* ]]
   # the port-forward this script started is gone
   ! kill -0 "$(cat "$STATE/pf.pid")" 2>/dev/null
 }
