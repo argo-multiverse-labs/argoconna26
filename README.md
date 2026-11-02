@@ -137,6 +137,11 @@ What each rung needs on top of the platform:
 | 1 (suggest) | Also your own GitHub App with the permissions in [docs/github-setup.md](docs/github-setup.md), installed on the fork |
 | 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow) |
 
+`make retarget BRANCH=<branch>` moves the branch Argo CD, the bridge and the rulesets follow (for
+example from `build/demo` to `main` after the talk). It is built and tested against stubs; it has
+not been rehearsed against GitHub, and it refuses a destination the live rulesets do not already
+protect. See [docs/06-operations.md](docs/06-operations.md).
+
 The fork path was checked on the upstream repository and by the tests in
 `tests/bats/configure_fork.bats` and `tests/bats/consistency.bats`, not from a real fork.
 
@@ -239,6 +244,54 @@ applied); `tests/e2e/policy-negative.sh` opens App-authored PRs that should fail
 test PRs are titled `[policy negative test]` and labelled `policy-negative-test`: the operator
 opened them with the agent's identity, the agent did not.
 
+### Rehearsing and staging
+
+The rung steps above are what the scripts do. For a rehearsal, each rung has a reset that puts it
+back at its starting state and a script that runs it with typed commands (demo-magic):
+
+```bash
+make reset-rung-1 && make demo-rung-1    # disarmed, suggest, history seeded
+make reset-rung-2 && make demo-rung-2    # suggest, a fresh propose promotion PR open
+make reset-rung-3                        # propose, a fresh act promotion PR open
+make demo-rung-3                         # after the act promotion is merged: runs make night live
+make reset-demo                          # the rung-1 reset plus a re-seeded timeline
+```
+
+- Resets are forward commits and condition waits, so they repeat at any hour. `reset-rung-3` from
+  `suggest` cannot reach `propose` on its own: it opens the `propose` promotion PR and exits 6.
+  `reset-rung-1` took about 22 s in the last repeat; `reset-demo` from an armed, Degraded state
+  took 142 s (two commits, then the pin back).
+- `make demo-rung-N` prints short lines for the projector (`STAGE_COLS`, 30). `TYPE_SPEED`,
+  `NO_WAIT=true` (run without pauses, ending with assertions) and `DEMO_OPEN` (the command that
+  opens the browser tabs) are described in `scripts/demo-common.sh`.
+- `make record-rung-N` records a rung to `recordings/` at the stage pane size (`STAGE_COLS` x
+  `STAGE_ROWS`); `make gif` converts a cast.
+- `scripts/stage-day.sh morning` runs the reset, preflight, the LLM budget check and the job
+  unit check; `scripts/stage-day.sh arm-rung-3 [--admin]` takes rung 3 from its reset through the
+  promotion PR (a human step) to `preflight 3 --armed`. See [docs/06-operations.md](docs/06-operations.md).
+
+Measured on this cluster (kind, real model): rung 1 from the trigger to the comment 52 to 72 s;
+rung 2 from the merge to Healthy 50 to 51 s; rung 3 from the PR to the merge 57 to 140 s and
+from the merge to Healthy 55 to 66 s, so `make demo-rung-3` takes about 3.5 minutes end to end.
+
+### Scoring the agent
+
+`make dry-runs N=20 BATCH=5` scores the agent on re-armed incidents without posting anything. Each
+batch re-arms the incident and runs five investigations against it, so 20 runs cover four
+incidents. A scorer checks the cause commit, the config key and its values, the change reference
+(which only the timeline carries) and the fix's `policy-check` result. A second model, the judge,
+grades the explanation. The agent runs `anthropic/claude-sonnet-5-5` at temperature 1; the judge
+is sent no sampling parameters. Only a full run publishes a score (`.dryruns/summary.json` and the
+`dryrun-summary` ConfigMap, shown on the dashboard and in promotion PRs). The bar for a
+promotion is `PROMOTION_SCORE_BAR` in `demo.env` (20/20).
+
+**State today:** the full 20 has not been run, so no score is published and the dashboard and
+promotion PRs say "pending". The results so far are small and are not a score: one smoke run
+(`N=1`) matched its one incident, and an ablation with the timeline toolset off ran 2 times on
+one incident, cited the change reference 0 of 2 times and named the cause commit 0 of 2 times
+(it found the right key and values). That is anecdotal. Claiming the delivery context is why the
+agent gets the answer right needs the completed 20 and a larger ablation.
+
 ### Going back down
 
 `make demote` lowers the level by one step with a forward commit. `make disarm` puts the timeout
@@ -335,8 +388,8 @@ happen.
 | `aiops/autonomy.yaml` | The agent's current autonomy level |
 | `policy/` | Rego: golden-path labels, auto-fix rules, and the Git facts extractor |
 | `.github/` | `CODEOWNERS` and the `policy-check` workflow |
-| `scripts/` | Operator scripts, GitHub rulesets, preflight, secrets, the rung-3 job |
-| `tests/` | `bats/` for scripts, `e2e/` for runs against a real cluster and GitHub |
+| `scripts/` | Operator scripts, resets, the rung scripts, GitHub rulesets, preflight, dry-run harness, stage-day and retarget, secrets, the rung-3 job |
+| `tests/` | `bats/` for scripts, `e2e/` for runs against a real cluster and GitHub, `holmes/` for the HolmesGPT allow-list |
 | `docs/` | These docs and [github-setup.md](docs/github-setup.md) |
 
 Tests: `make test-bats` (scripts), `make policy-verify` (Rego), `cd bridge && uv run pytest -q`

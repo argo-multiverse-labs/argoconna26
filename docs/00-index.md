@@ -17,7 +17,7 @@ Start with the [README](../README.md) for what the demo shows and how to run it.
 | [03](./03-the-incident.md) | The Incident | The timeout change, why it slips past a rollout, why a naive revert looks green |
 | [04](./04-bridge-and-holmes.md) | Bridge and HolmesGPT | Webhook, investigation, guardrails, PII scan, templates, read-only RBAC, LLM budget |
 | [05](./05-policy.md) | Policy | Golden-path labels, Git facts, the auto-fix rules, the `policy-check` workflow and its trust boundary |
-| [06](./06-operations.md) | Operations | Make targets, operator clone, resets, isolated kubeconfig, tests |
+| [06](./06-operations.md) | Operations | Make targets, operator clone, resets, rung scripts, recording, dry-run harness, stage day, retarget, isolated kubeconfig, tests |
 | [github-setup](./github-setup.md) | GitHub Setup | The GitHub App, rulesets and repository settings to reproduce on a fork |
 
 ## Reading Paths

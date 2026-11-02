@@ -87,16 +87,129 @@ SHAs, and the machine-readable results (`cause`, `bump`, `change_ref`) go to fil
 
 ## Resets between runs
 
+`scripts/reset.sh` puts the demo back at a rung's starting state. Every step is a forward commit
+or a condition wait, nothing reads the time of day, and it runs under the cluster lock.
+
+| Target | Ends at |
+|--------|---------|
+| `make reset-rung-1` | Disarmed, autonomy `suggest`, PR-242 history seeded; its cause and change reference saved for `demo-rung-1` |
+| `make reset-rung-2` | Disarmed, `suggest`, a fresh `propose` promotion PR open |
+| `make reset-rung-3` | Disarmed, `propose`, a fresh `act` promotion PR open. From `suggest` it opens the `propose` promotion PR and exits 6, because a reset never raises the level |
+| `make reset-demo` | The rung-1 reset plus a re-seeded timeline. Use it before a full rehearsal |
+
+In order, a reset: syncs the operator clone; labels every `agent/*` PR `demo-reset` (so the
+dashboard's counts start at 0) and closes the open ones; disarms with the stable image pinned;
+lowers autonomy to the rung's level by `demote` only; clears the notified annotation on the
+checkout Application; opens the promotion PR for rung 2 or 3; clears bridge test hooks and
+restarts the bridge; waits for checkout and pricing Healthy; prints the elapsed seconds. Measured:
+`reset-rung-1` about 22 s; `reset-demo` from an armed, Degraded state 142 s (disarm takes two
+commits when the pods read 200).
+
+Other resets:
+
 | You want | Do |
 |----------|----|
 | A clean incident again | `make disarm IMAGE=v1.4.1`, then `make rearm` |
-| Back to the first-run history | `make disarm IMAGE=v1.4.1`, then `make seed-history`, `make bump` |
 | The agent at a lower level | `make demote` (repeat for two steps) |
 | Remove a leftover test hook | `make bridge-hooks-clear` |
-| A fresh timeline | `POST /seed?reset=true` on cdevents-sim (`seed-history` does this for the checkout history) |
+| A fresh timeline | `POST /seed?reset=true` on cdevents-sim (`reset-demo` does this) |
 | A fresh cluster | `make rebuild` |
 
 All resets are forward commits. Nothing force-pushes, and the rulesets would refuse it.
+
+## The rung scripts
+
+`make demo-rung-1`, `demo-rung-2` and `demo-rung-3` run a rung as it is shown on stage, with
+typed commands (demo-magic, pinned by `DEMO_MAGIC_SHA`) and short lines cut to `STAGE_COLS`. Start
+each from its reset.
+
+| Script | Starts from | Does |
+|--------|-------------|------|
+| `demo-rung-1.sh` | `reset-rung-1` | `make bump`, Degraded, the agent's comment on the cause commit, `make fix`, Healthy, resolved |
+| `demo-rung-2.sh` | `reset-rung-2` | Checks the promotion PR, waits for its merge, records the approval, `make rearm`, the fix PR, its merge, Healthy. If the fix PR is closed it demotes, fixes by hand and shows the rejected count |
+| `demo-rung-3.sh` | `reset-rung-3` and the `act` promotion | Runs `make night` ("running the nightly job now"), the bot's PR, `policy-check`, the merge by the bot, Healthy, then opens the PR, Checks, Argo CD history and Grafana tabs. It holds no lock, merges nothing and does not nudge Argo CD |
+
+Settings (see `scripts/demo-common.sh`): `TYPE_SPEED`, `NO_WAIT=true` (no pauses; each script then
+ends with assertions, and rung 3 runs `overnight-verify.sh` over its own window), `DEMO_OPEN` (the
+command that opens a URL; set it to a logger to keep the browser closed). Under `NO_WAIT` rung 3
+fails when `policy-check` fails. `DEMO_AUTOMERGE_FOR_TEST` and `DEMO_REJECT_FOR_TEST` let rung 2
+run unattended in tests. A refusal, a PII block or a handoff by the agent is shown as a feature.
+
+Measured (one session): rung 1 trigger to comment 52 to 72 s; rung 2 merge to Healthy 50 to 51 s;
+rung 3 PR to merge 57 to 140 s and merge to Healthy 55 to 66 s, 210 s from `make night` to Healthy.
+The History deep link the scripts open is a best guess and has not had its visual check.
+
+## Recording
+
+`make record-rung-1|2|3` runs the rung script under `asciinema` at `STAGE_COLS` x `STAGE_ROWS` and
+writes `recordings/rung-N-<timestamp>.cast` (gitignored). `RECORD_CMD` replaces the command.
+`make gif CAST=<file>` converts a cast with `agg` (the newest cast by default).
+
+## Scoring the agent: the dry-run harness
+
+`make dry-runs N=20 BATCH=5` (`scripts/dry-runs.sh`, `bridge/src/bridge/dryrun.py`) runs scored
+investigations against the real cluster and HolmesGPT without posting to GitHub or emitting events.
+It needs autonomy `suggest`, the main checkout, and the cluster lock, and it is never run during a
+rung-3 window. Before each batch it disarms to the stable tag, re-arms, and waits for the abort and
+for the live bridge to finish, so each batch is a fresh incident (the same v1.4.1 to v1.4.2 bump
+the stage shows). With N=20 and BATCH=5 that is four incidents with five runs each.
+
+- **Scoring.** `score.py` checks the cause SHA (a unique short prefix counts), the config key and
+  both values, the policy result of the fix it would build, that the answer is free of personal
+  data, and that the answer cites the timeline's change reference (`delivery_context_ok`).
+  `root_cause_matched` is the SHA, key and values together. `judge.py` has a second model grade the
+  explanation as correct, partial or wrong.
+- **Models.** The agent is `anthropic/claude-sonnet-5-5` behind the `rca` alias at temperature 1.
+  The judge is the `judge` alias and is sent no temperature or other sampling parameter, because
+  that model rejects them.
+- **Publishing.** Only a full run (N at least the denominator of `PROMOTION_SCORE_BAR`, 20/20, or
+  `DRYRUNS_PUBLISH=1`) writes `.dryruns/summary.json` and the ConfigMap `dryrun-summary`. A smaller
+  run writes `summary-smoke-<time>.json` and publishes nothing. `make dryrun-summary-restore`
+  re-applies the file (`build-all` runs it).
+- **Ablation.** `ABLATE_TIMELINE=1` reinstalls HolmesGPT with the `cdevents-timeline` toolset off
+  (`make holmes-install HOLMES_SET=...`), runs the batches, writes `results-ablation-<time>.json`
+  and no summary, and restores the toolset on exit.
+- **Cost.** Each batch lets the live bridge post one `suggest` comment on the re-armed incident.
+
+**Results so far.** The full 20 has not been run, so there is no n/20 and the dashboard and
+promotion PRs say "pending". An `N=1` smoke run matched its one incident. The ablation ran twice
+on one incident: the timeline's change reference was cited 0 of 2 times and the cause commit was
+named 0 of 2 times, with the right key and values both times. Two runs on one incident say nothing
+about cause, so treat it as a check that the scorer notices the missing timeline. A caveat for the
+slides when the 20 completes: "n of 20 across 4 incidents, 5 runs each, at temperature 1".
+
+## Stage day
+
+`scripts/stage-day.sh` prints and times each step, stops at the first failure and at every human
+step (it reads one line from stdin; EOF stops, so an unattended run never merges). Run it from the
+main checkout. Exit codes: 0 done, 1 a step failed, 2 usage, 3 stopped at a human step.
+
+| Command | Does |
+|---------|------|
+| `scripts/stage-day.sh morning` | Reset, `preflight 1` with a full dry-run score required, the LLM budget (at least `STAGE_LLM_MIN_REMAINING_USD`, default 2.00), `gh` auth, the job unit current, `preflight 3` |
+| `scripts/stage-day.sh arm-rung-3 [--admin]` | `reset-rung-3` (from `suggest`: merge the `propose` promotion, record it, reset again), `preflight 3 --pre-promotion`, the human step to approve the `act` promotion PR, merge (`--admin` is logged as `admin-bypass`), record the approval, `preflight 3 --armed` |
+
+Because the morning check requires a published score, it fails until the full 20 has run. Steps
+and timings are saved under `EVIDENCE_DIR`. These scripts have been tried against stubs and, in
+part, the cluster; the human steps need the promotion board.
+
+## Retargeting the tracked branch
+
+`make retarget BRANCH=main` (`scripts/retarget.sh`) moves what Argo CD, the bridge and the rulesets
+follow, under the cluster lock, stopping at the first failure and resuming on a re-run. It moves
+forward only: the new branch must contain the current tip. Before changing anything it refuses a
+branch that the live rulesets do not already protect, one with a higher autonomy level, or one that
+changes code-owned paths. Then: one commit rewriting every `targetRevision`, `TRACKED_BRANCH` in
+`demo.env` and the bridge Deployment, and `RULESET_BRANCHES`; re-apply the root Application and wait
+for every Application to follow; wait for the bridge rollout; re-apply the rulesets and read them
+back; open a fresh promotion PR against the new base. **Built and tested against stubs; the live
+rehearsal has not been run.** It needs a ruleset apply, so it waits for a go-ahead.
+
+## Forks
+
+`make configure-fork REPO_SLUG=you/repo BOT_LOGIN=app[bot] PROMOTION_TEAM=@you/team` rewrites the
+names (`scripts/configure-fork.sh`; offline, idempotent). `make consistency` then checks that
+nothing still names the old values. See the README.
 
 ## Checks
 
@@ -124,11 +237,16 @@ Promotion state: rung 2 needs autonomy `suggest` and exactly one open `propose` 
 `3 --pre-promotion` needs `propose` and exactly one open `act` promotion PR; `3 --armed` needs `act`
 with `approved_by` recorded (an `admin-bypass` approval is a WARN so the slide can say so).
 
+A `dryrun` section checks the published score: it fails when `.dryruns/summary.json` is not a full
+run (N below the bar, or the incident and run counts do not multiply to N) or differs from the
+ConfigMap, and it warns "pending" when neither exists. `PREFLIGHT_REQUIRE_SCORE=1` (stage-day
+morning sets it) turns pending into a failure.
+
 Checks that need the promotion-board team or code-owner review (the tracked ruleset's code-owner
 rule, the team's repo permission, the stage approver's membership, the App's installation
-permissions) print `WARN ... (deferred to L5b)` until the full `scripts/github-ruleset.sh apply` has
-turned code-owner review on. From then on they are failures, with no flag to change. To make them
-hard earlier set `PREFLIGHT_L5B=1`; `PREFLIGHT_L5B=0` keeps them deferred.
+permissions) print `WARN ... (deferred to L5b)` while code-owner review is off, and are failures once the full `scripts/github-ruleset.sh apply` has
+turned code-owner review on. The setting is read from the live rules, and an unreadable read is a
+failure, not a deferral. To make them hard earlier set `PREFLIGHT_L5B=1`; `PREFLIGHT_L5B=0` keeps them deferred.
 
 Flags: `--armed` (autonomy on the tracked branch must be `act`), `--pre-promotion` (must still be
 `propose`), `--job-run` (GH_TOKEN is the credential; skips `github_admin` and `job`) and `--quiet`.
