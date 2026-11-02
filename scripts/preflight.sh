@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Pre-flight checks. Exits 1 on any FAIL.   scripts/preflight.sh [RUNG]
+# Pre-flight checks. Exits 1 on any FAIL.   scripts/preflight.sh [RUNG] [--armed] [--pre-promotion] [--job-run] [--quiet]
+#   --armed          rung 3 is promoted: autonomy on the tracked branch must be act
+#   --pre-promotion  autonomy must still be propose (rung 3, before the promotion PR merges)
+#   --job-run        running inside the scheduled unit: GH_TOKEN (from job.env) is the credential,
+#                    and the github-admin section (Luke's admin login) is skipped
+#   --quiet          print only failures; exit status is the same
 # Sections are functions named section_<name>. V1_SECTIONS runs first, in order; any other
 # section_* function defined by a later slice runs after them (alphabetically).
 set -euo pipefail
@@ -9,9 +14,29 @@ set -euo pipefail
 PASS=0
 FAIL=0
 WARN=0
-check_pass() { printf '  \033[0;32m[PASS]\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
+RUNG=""
+ARMED=0
+PRE_PROMOTION=0
+JOB_RUN=0
+QUIET=0
+check_pass() { ((QUIET)) || printf '  \033[0;32m[PASS]\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 check_fail() { printf '  \033[0;31m[FAIL]\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
-check_warn() { printf '  \033[0;33m[WARN]\033[0m %s\n' "$1"; WARN=$((WARN + 1)); }
+check_warn() { ((QUIET)) || printf '  \033[0;33m[WARN]\033[0m %s\n' "$1"; WARN=$((WARN + 1)); }
+say() { ((QUIET)) || printf '%s\n' "$*"; }
+
+parse_args() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --armed) ARMED=1 ;;
+      --pre-promotion) PRE_PROMOTION=1 ;;
+      --job-run) JOB_RUN=1 ;;
+      --quiet) QUIET=1 ;;
+      --*) echo "preflight: unknown option $a" >&2; exit 2 ;;
+      *) RUNG="$a" ;;
+    esac
+  done
+}
 
 V1_SECTIONS=(tools context cluster nodes pods endpoints)
 
@@ -174,30 +199,67 @@ section_bridge_hooks() {
   fi
 }
 
+# job (rung 3): the GitHub-side state the scheduled job needs, from the operator credential
+# alone (GH_TOKEN inside the unit, Luke's gh login outside it). Needs no ruleset or repo-settings
+# state: github-admin (Task 4.5 Step 2) is deferred and never runs under --job-run. The App
+# installation permission checks join here as section_github_runtime when that task lands.
+section_job() {
+  local want="" lvl code
+  [[ "$RUNG" == 3 ]] || return 0
+  if ((JOB_RUN)); then
+    if [[ -z "${GH_TOKEN:-}" ]]; then
+      check_fail "job: GH_TOKEN is not set (job.env missing from the unit environment)"; return 0
+    fi
+  fi
+  if gh api user --jq .login >/dev/null 2>&1; then
+    check_pass "job: the operator credential authenticates with gh$( ((JOB_RUN)) && printf " (GH_TOKEN)")"
+  else
+    check_fail "job: gh api user failed (credential rejected or GitHub unreachable)"; return 0
+  fi
+  if ((ARMED)); then want=act; elif ((PRE_PROMOTION)); then want=propose; fi
+  if [[ -n "$want" ]]; then
+    lvl="$(tracked_autonomy_level || true)"
+    if [[ "$lvl" == "$want" ]]; then
+      check_pass "job: autonomy on $TRACKED_BRANCH is $want"
+    else
+      check_fail "job: autonomy on $TRACKED_BRANCH is '${lvl:-unreadable}', expected $want"
+    fi
+  fi
+  code="$(gh api -X GET "repos/${REPO_SLUG}/contents/.github/CODEOWNERS?ref=${TRACKED_BRANCH}" --jq .name 2>/dev/null || true)"
+  if [[ "$code" == CODEOWNERS ]]; then
+    check_pass "job: CODEOWNERS exists on $TRACKED_BRANCH"
+  else
+    check_fail "job: .github/CODEOWNERS not found on $TRACKED_BRANCH"
+  fi
+}
+
 main() {
-  local rung="${1:-}" s extra
+  local s extra
+  parse_args "$@"
   load_env
-  echo "============================================"
-  echo " ArgoCon NA 2026 demo: pre-flight${rung:+ (rung $rung)}"
-  echo "============================================"
+  say "============================================"
+  say " ArgoCon NA 2026 demo: pre-flight${RUNG:+ (rung $RUNG)}"
+  say "============================================"
   # Without the isolated context nothing else may touch the cluster.
   if ! require_context 2>/dev/null; then
     section_context
     section_cluster
-    echo; echo "Result: $PASS passed, $FAIL failed, $WARN warnings"
+    say; say "Result: $PASS passed, $FAIL failed, $WARN warnings"
     exit 1
   fi
   for s in "${V1_SECTIONS[@]}"; do
-    echo "--- $s ---"
+    say "--- $s ---"
     "section_$s"
   done
   while read -r extra; do
     [[ " ${V1_SECTIONS[*]} " == *" ${extra#section_} "* ]] && continue
-    echo "--- ${extra#section_} ---"
+    # The scheduled job runs with GH_TOKEN only: Luke's admin checks are the caller's job.
+    if ((JOB_RUN)) && [[ "$extra" == section_github_admin ]]; then continue; fi
+    say "--- ${extra#section_} ---"
     "$extra"
   done < <(compgen -A function section_ | sort)
-  echo
-  echo "Result: $PASS passed, $FAIL failed, $WARN warnings"
+  say
+  say "Result: $PASS passed, $FAIL failed, $WARN warnings"
   (( FAIL == 0 ))
 }
 

@@ -455,3 +455,22 @@ sim_seed() {
   jq -n --args '{checkout_revisions: $ARGS.positional}' "${revs[@]}" \
     | _sim_post "/seed?reset=${reset}&keep_live_hours=0"
 }
+
+# ------------------------------------------------- evidence and autonomy (Task 5.5)
+# evidence_dir : where scripts save evidence. EVIDENCE_DIR from .env (relative paths are
+# under the main checkout), else <main checkout>/.evidence (gitignored).
+evidence_dir() {
+  local d="${EVIDENCE_DIR:-}"
+  [[ -n "$d" ]] || d=".evidence"
+  case "$d" in /*) ;; *) d="$(main_root)/$d" ;; esac
+  printf '%s' "$d"
+}
+
+# tracked_autonomy_level : the level in AUTONOMY_FILE on the tracked branch on GitHub, read
+# with gh (so GH_TOKEN, when set, is the credential). Prints nothing and fails if unreadable.
+tracked_autonomy_level() {
+  local raw
+  raw="$(gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/${REPO_SLUG}/contents/${AUTONOMY_FILE}?ref=${TRACKED_BRANCH}" 2>/dev/null)" || return 1
+  yq -r '.level // ""' <<<"$raw" 2>/dev/null
+}
