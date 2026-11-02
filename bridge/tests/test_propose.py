@@ -195,6 +195,7 @@ async def test_change_created_event_emitted_with_pr_url(deps) -> None:
     assert len(created) == 1
     assert created[0]["customData"]["pr_url"] == out.url
     assert created[0]["customData"]["branch"] == BRANCH_NAME
+    assert created[0]["customData"]["app"] == "checkout"
     assert created[0]["context"]["source"] == d.settings.bridge_event_source
     actions = [e["customData"]["action"] for e in emitter.events if e["context"]["type"].endswith("agent-action.0.1.0")]
     assert actions == ["pr_opened"]

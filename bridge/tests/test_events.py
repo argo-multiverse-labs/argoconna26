@@ -149,3 +149,18 @@ async def test_emitter_without_url_or_source_drops(respx_mock) -> None:
 async def test_null_emitter_drops_everything() -> None:
     emitter = events.NullEmitter()
     await emitter.emit(events.agent_action("commented", "u", source=BRIDGE_SOURCE))
+
+
+def test_change_events_carry_app_for_the_sim() -> None:
+    """cdevents-sim files an event under customData.app; a PR URL in subject.id gives no app,
+    so without it /events?app=checkout&type=change.created is empty (Task 4.6)."""
+    created = events.change_created(
+        "https://github.com/o/r/pull/7", "agent/checkout-a-b", "o/r", source=BRIDGE_SOURCE, app="checkout", now=NOW
+    )
+    merged = events.change_merged(
+        "https://github.com/o/r/pull/7", "d" * 40, "bot", source=BRIDGE_SOURCE, app="checkout", now=NOW
+    )
+    assert created["customData"]["app"] == "checkout"
+    assert merged["customData"]["app"] == "checkout"
+    _validate_standard(created)
+    _validate_standard(merged)

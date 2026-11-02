@@ -90,26 +90,42 @@ def _repo_content(repo: str) -> dict[str, Any]:
     return {"repository": {"id": repo, "source": "https://github.com"}}
 
 
-def change_created(pr_url: str, branch: str, repo: str, *, source: str, now: datetime | None = None) -> dict:
-    """The agent opened a fix PR (Task 4.3)."""
+def change_created(
+    pr_url: str, branch: str, repo: str, *, source: str, app: str | None = None, now: datetime | None = None
+) -> dict:
+    """The agent opened a fix PR (Task 4.3). `app` is how cdevents-sim files it (the PR URL
+    in subject.id names no app)."""
+    custom: dict[str, Any] = {"pr_url": pr_url, "branch": branch}
+    if app:
+        custom["app"] = app
     return _event(
         CHANGE_CREATED,
         {"id": pr_url, "source": source, "content": {"description": f"agent fix PR from {branch}", **_repo_content(repo)}},
-        {"pr_url": pr_url, "branch": branch},
+        custom,
         source,
         now,
     )
 
 
 def change_merged(
-    pr_url: str, merge_sha: str, merged_by: str, *, source: str, repo: str | None = None, now: datetime | None = None
+    pr_url: str,
+    merge_sha: str,
+    merged_by: str,
+    *,
+    source: str,
+    repo: str | None = None,
+    app: str | None = None,
+    now: datetime | None = None,
 ) -> dict:
     """The agent's merge (or auto-merge) landed (Task 5.4)."""
     content = _repo_content(repo) if repo else {}
+    custom: dict[str, Any] = {"pr_url": pr_url, "sha": merge_sha, "merged_by": merged_by}
+    if app:
+        custom["app"] = app
     return _event(
         CHANGE_MERGED,
         {"id": pr_url, "source": source, "content": content},
-        {"pr_url": pr_url, "sha": merge_sha, "merged_by": merged_by},
+        custom,
         source,
         now,
     )

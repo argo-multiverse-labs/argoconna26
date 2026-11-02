@@ -1,4 +1,5 @@
-"""Bridge settings, read from the environment (Secret `bridge-env` in the cluster)."""
+"""Bridge settings, read from the environment: the Deployment's env, Secret `bridge-secrets`, and
+the optional Secret `bridge-env` (test hooks only, Task 4.6; not managed by Argo CD)."""
 
 from __future__ import annotations
 
@@ -31,7 +32,11 @@ class Settings(BaseSettings):
     holmes_url: str = Field(default="", validation_alias=_env("HOLMES_URL"))
     holmes_api_key: SecretStr = Field(default=SecretStr(""), validation_alias=_env("HOLMES_API_KEY"))
     holmes_model: str = Field(default="rca", validation_alias=_env("HOLMES_MODEL"))
-    holmes_timeout_s: float = Field(default=115, gt=0, validation_alias=_env("HOLMES_TIMEOUT_S"))
+    # TEST_HOLMES_TIMEOUT_S comes first: it is the Task 4.6 timeout hook, set in the optional
+    # Secret bridge-env, and a Deployment `env` entry (HOLMES_TIMEOUT_S) beats `envFrom`.
+    holmes_timeout_s: float = Field(
+        default=115, gt=0, validation_alias=_env("TEST_HOLMES_TIMEOUT_S", "HOLMES_TIMEOUT_S")
+    )
     stage_cols: int = Field(default=30, ge=8, validation_alias=_env("STAGE_COLS"))
     cdevents_url: str = Field(default="", validation_alias=_env("CDEVENTS_URL"))
     # The CloudEvents source on every bridge event; cdevents-sim keeps these off /timeline (P16).

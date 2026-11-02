@@ -526,7 +526,8 @@ class _Run:
             return await self.finish("pr_opened", None, None, rca_event)
         self.stage(self.level, "pr opened")
         created = events.change_created(
-            pr.url, branch, self.s.github_repo, source=self.s.bridge_event_source, now=self.deps.clock()
+            pr.url, branch, self.s.github_repo, source=self.s.bridge_event_source, app=self.hook.app,
+            now=self.deps.clock(),
         )
         return await self.finish("pr_opened", pr.url, None, rca_event, created)
 

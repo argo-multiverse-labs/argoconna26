@@ -72,7 +72,8 @@ class Reconciler:
     def _event(self, pr: PullRequestInfo, merged: bool) -> dict:
         if merged:
             return events.change_merged(
-                pr.url, pr.merge_sha or "", pr.merged_by or "unknown", source=self.source, repo=self.repo
+                pr.url, pr.merge_sha or "", pr.merged_by or "unknown", source=self.source, repo=self.repo,
+                app=self.app,
             )
         return events.agent_action("rejected", pr.url, source=self.source, app=self.app)
 

@@ -278,3 +278,12 @@ async def test_token_failure_fails_closed(settings_: Settings, exc: Exception) -
         forge = GitHubForge("example-org/example-repo", _FailingTokens(exc), api_url="https://api.github.test", http=http)
         _, refusals = await evaluate(make_rca(cause_commit_sha=OLD_CAUSE), make_hook(), forge, settings_)
     assert set(reasons(refusals)) == {"cause_not_in_history", "key_not_found"}
+
+
+def test_test_holmes_timeout_overrides_deployment_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Deployment env entry beats envFrom, so the Task 4.6 timeout hook uses its own name."""
+    monkeypatch.setenv("HOLMES_TIMEOUT_S", "115")
+    monkeypatch.setenv("TEST_HOLMES_TIMEOUT_S", "1")
+    assert Settings().holmes_timeout_s == 1
+    monkeypatch.delenv("TEST_HOLMES_TIMEOUT_S")
+    assert Settings().holmes_timeout_s == 115

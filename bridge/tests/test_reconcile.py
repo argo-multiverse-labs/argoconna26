@@ -112,6 +112,7 @@ async def test_outcome_event_emitted_once() -> None:
     assert sorted(emitter.types()) == sorted([events.CHANGE_MERGED, events.AGENT_ACTION])
     merged = next(e for e in emitter.events if e["context"]["type"] == events.CHANGE_MERGED)
     assert merged["customData"]["merged_by"] == "luke" and merged["customData"]["sha"] == f"{1001:040x}"
+    assert merged["customData"]["app"] == "checkout"
     assert merged["context"]["source"] == SOURCE
     rejected = next(e for e in emitter.events if e["context"]["type"] == events.AGENT_ACTION)
     assert rejected["customData"]["action"] == "rejected"
