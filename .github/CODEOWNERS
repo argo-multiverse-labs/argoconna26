@@ -1,0 +1,6 @@
+# Changes to the agent's autonomy level, the policy it is checked against, and the
+# workflows that run the check need a review from the promotion board.
+# There is deliberately no "*" line: ordinary changes need no code-owner review.
+/aiops/autonomy.yaml  @argo-multiverse-labs/promotion-board
+/policy/              @argo-multiverse-labs/promotion-board
+/.github/             @argo-multiverse-labs/promotion-board
