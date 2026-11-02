@@ -63,6 +63,16 @@ test-bats: ## Run the bats suite
 consistency: ## Hardcoded versions or names that differ from versions.env / demo.env
 	@$(ROOT)/scripts/check-consistency.sh $(ROOT)
 
+# Run it from your own fork (Task 6.7a): rewrites demo.env, the Applications' repoURL, CODEOWNERS,
+# the policy's agent login and the bridge Deployment. Give any of the three on the command line.
+.PHONY: configure-fork
+configure-fork: ## Point the demo at your fork: make configure-fork REPO_SLUG=you/repo BOT_LOGIN=app[bot] PROMOTION_TEAM=@you/team
+	@args=()
+	[[ "$(origin REPO_SLUG)" != "command line" ]] || args+=(--repo-slug "$(REPO_SLUG)")
+	[[ "$(origin BOT_LOGIN)" != "command line" ]] || args+=(--bot-login "$(BOT_LOGIN)")
+	[[ "$(origin PROMOTION_TEAM)" != "command line" ]] || args+=(--promotion-team "$(PROMOTION_TEAM)")
+	$(ROOT)/scripts/configure-fork.sh --root $(ROOT) "$${args[@]}"
+
 ################################################################################
 # Cluster lifecycle                                                            #
 ################################################################################
