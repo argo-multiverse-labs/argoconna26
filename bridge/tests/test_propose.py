@@ -618,3 +618,13 @@ def test_fix_pr_timeline_keeps_change_ref_when_capped() -> None:
     [timeline] = [line for line in body.splitlines() if line.startswith("- Timeline: ")]
     assert "CHG-R6723Q" in timeline
     assert len(timeline) <= ITEM_MAX + len("- Timeline: ") + 10, timeline
+
+
+def test_fix_pr_timeline_label_word_and_second_ref() -> None:
+    ctx = "Timeline change CHG-KBMAEZ merged at 10:02. An earlier bump CHG-2SLM3T was unrelated."
+    r = rca().model_copy(update={"delivery_context": ctx})
+    fix = build_fix(r, CONFIGMAP, ROLLOUT_TEXT, ANNOTATION, rollout_path=ROLLOUT)
+    body = render_fix_pr_body(r, fix, level="propose")
+    line = next(ln for ln in body.splitlines() if "CHG-KBMAEZ" in ln)
+    assert "Timeline change" not in line
+    assert "CHG-2SLM3T" not in body

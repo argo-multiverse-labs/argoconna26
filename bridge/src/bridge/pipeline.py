@@ -105,7 +105,8 @@ _GH_REF = re.compile(r"\b(GH)-(?=\d)", re.IGNORECASE)
 _SCHEME_SEP = re.compile(r"(?<=[A-Za-z0-9+.-]):(?=//)")
 _WWW = re.compile(r"\b(www)\.", re.IGNORECASE)
 # The template already labels the line "Timeline:"; the model often starts the field with it too.
-_TIMELINE_PREFIX = re.compile(r"^\s*timeline\s*[:\-\u2013\u2014]\s*", re.IGNORECASE)
+# Also a bare label word ("Timeline change CHG-..."), but not a longer word ("Timelines").
+_TIMELINE_PREFIX = re.compile(r"^\s*timeline(?:\s*[:\-\u2013\u2014]\s*|\s+)", re.IGNORECASE)
 
 
 def plain(value: object) -> str:
@@ -151,7 +152,7 @@ def _cap(text: str, limit: int) -> str:
 # The operator's change reference (scripts/common.sh new_change_ref). tests/e2e/rung1.sh
 # greps the Timeline line for it, so capping must never drop it.
 CHANGE_REF = re.compile(r"\bCHG-[A-Z2-7]{6}\b")
-KEPT_REFS_MAX = 2
+KEPT_REFS_MAX = 1  # only the cause's ref (the first in the text), never an unrelated later one
 
 
 def short_text(value: object, limit: int, keep: re.Pattern[str] | None = None) -> str:
