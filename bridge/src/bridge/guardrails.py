@@ -142,8 +142,9 @@ async def _check_from(file: str, key: str, from_value: str, forge: Forge, ref: s
     try:
         text = await forge.read_file(file, ref)
         found, current = _find_key(text, key)
-    except ForgeError:
-        return Refusal("key_not_found", f"could not read {file} on {ref}")
+    except ForgeError as exc:
+        why = f"HTTP {exc.status}" if exc.status else "no response"
+        return Refusal("key_not_found", f"could not read {file} on {ref} ({why})")
     except yaml.YAMLError:
         return Refusal("key_not_found", f"{file} is not valid YAML")
     if not found:

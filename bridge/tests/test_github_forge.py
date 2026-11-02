@@ -59,6 +59,29 @@ async def test_read_file_404_is_not_found(respx_mock, forge: GitHubForge) -> Non
 
 
 @respx.mock(assert_all_mocked=True)
+async def test_read_retries_a_transient_server_error(respx_mock, forge: GitHubForge) -> None:
+    """A GitHub 5xx on a read is retried, so one blip is not a refusal on stage (slice-4 C8)."""
+    encoded = base64.encodebytes(b"level: suggest\n").decode()
+    route = respx_mock.get(f"{BASE}/contents/aiops/autonomy.yaml").mock(
+        side_effect=[
+            httpx.Response(502),
+            httpx.ConnectError("blip"),
+            httpx.Response(200, json={"encoding": "base64", "content": encoded}),
+        ]
+    )
+    assert await forge.read_file("aiops/autonomy.yaml", "build/demo") == "level: suggest\n"
+    assert route.call_count == 3
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_writes_are_not_retried(respx_mock, forge: GitHubForge) -> None:
+    route = respx_mock.post(f"{BASE}/issues/7/comments").mock(return_value=httpx.Response(502))
+    with pytest.raises(ForgeError):
+        await forge._request("POST", "/issues/7/comments", json={"body": "x"})
+    assert route.call_count == 1
+
+
+@respx.mock(assert_all_mocked=True)
 async def test_server_error_is_forge_error(respx_mock, forge: GitHubForge) -> None:
     respx_mock.get(f"{BASE}/contents/aiops/autonomy.yaml").mock(return_value=httpx.Response(502))
     with pytest.raises(ForgeError):

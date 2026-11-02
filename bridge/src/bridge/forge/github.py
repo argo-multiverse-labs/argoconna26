@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import re
 from typing import Any, Literal, Protocol
@@ -85,13 +86,27 @@ class GitHubForge:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    # A read (GET) that fails on the network, a 5xx or a 429 is tried again after these delays.
+    # Writes are never retried: a POST that timed out may have happened.
+    read_retry_delays_s: tuple[float, ...] = (0.5, 1.0)
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        headers = await self._headers(f"{method} {path}")
-        url = f"{self._api}/repos/{self.repo}{path}"
-        try:
-            response = await self._http.request(method, url, headers=headers, **kwargs)
-        except httpx.HTTPError as exc:
-            raise ForgeError(f"{method} {path}: {type(exc).__name__}") from None
+        delays = self.read_retry_delays_s if method == "GET" else ()
+        for attempt in range(len(delays) + 1):
+            last = attempt == len(delays)
+            headers = await self._headers(f"{method} {path}")
+            url = f"{self._api}/repos/{self.repo}{path}"
+            try:
+                response = await self._http.request(method, url, headers=headers, **kwargs)
+            except httpx.HTTPError as exc:
+                if not last:
+                    await asyncio.sleep(delays[attempt])
+                    continue
+                raise ForgeError(f"{method} {path}: {type(exc).__name__}") from None
+            if not last and (response.status_code >= 500 or response.status_code == 429):
+                await asyncio.sleep(delays[attempt])
+                continue
+            break
         if response.status_code == 404:
             raise ForgeNotFound(f"{method} {path}: 404", 404)
         if response.status_code >= 400:
