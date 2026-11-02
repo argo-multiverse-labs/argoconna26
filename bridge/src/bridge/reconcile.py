@@ -113,6 +113,10 @@ class Reconciler:
         # change.merged goes out for every merge, labelled or not: the merge really landed on the
         # tracked branch, and the label's timing must not decide whether the timeline shows it.
         fresh = [(p, True) for p in merged if p.number not in self.seen]
+        # A merge the act flow announced and then forgot (its own request lost the race to
+        # GitHub's auto-merge) may have been skipped by an earlier pass as announced; report it now.
+        released = self.registry.take_released() if self.registry is not None else set()
+        fresh += [(p, True) for p in merged if p.number in self.seen and p.number in released]
         fresh += [(p, False) for p in rejected if p.number not in self.seen]
         self.seen.update(p.number for p, _ in fresh)
         if not self.baselined:

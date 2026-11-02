@@ -25,6 +25,7 @@ class IncidentRegistry:
     def __init__(self) -> None:
         self._keys: set[str] = set()
         self._merges: set[int] = set()
+        self._released: set[int] = set()
         self._lock = threading.Lock()
 
     def _known(self, key: str) -> bool:
@@ -61,9 +62,19 @@ class IncidentRegistry:
             self._merges.add(number)
 
     def forget_merge(self, number: int) -> None:
-        """The merge request failed: a later merge (by a human or GitHub) is the reconciler's."""
+        """The merge request failed: a later merge (by a human or GitHub) is the reconciler's.
+        The number is also kept as released, because a reconciler pass may already have seen the
+        PR merged while the request was in flight (GitHub's auto-merge winning the race) and
+        skipped it as announced; `take_released` lets that reconciler report it after all."""
         with self._lock:
             self._merges.discard(number)
+            self._released.add(number)
+
+    def take_released(self) -> set[int]:
+        """The merges forgotten since the last call (each is returned once)."""
+        with self._lock:
+            released, self._released = self._released, set()
+            return released
 
     def merge_announced(self, number: int) -> bool:
         with self._lock:

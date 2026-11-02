@@ -611,3 +611,58 @@ async def test_github_list_pr_comments_only_the_bots(respx_mock, forge: GitHubFo
         )
     )
     assert await forge.list_pr_comments(7) == ["mine"]
+
+
+async def test_change_merged_survives_a_pass_between_announce_and_a_failed_merge() -> None:
+    """catch_up announces, then its merge_pr loses the race to GitHub's auto-merge. A reconciler
+    pass that runs while that request is in flight sees the PR merged and skips it (announced);
+    forget_merge then hands it back, and the next pass must emit change.merged, once."""
+    from bridge.incidents import IncidentRegistry
+
+    registry = IncidentRegistry()
+    forge = FakeForge(agent_prs=[pr(1)])
+    emitter = RecordingEmitter()
+    rec = Reconciler(forge, Metrics(), emitter, app=APP, source=SOURCE, registry=registry)
+    await rec.run_once()  # baseline: open
+    registry.announce_merge(1)  # catch_up, before merge_pr
+    forge.agent_prs[0] = pr(1, "closed", merged=True)  # GitHub's auto-merge lands first
+    await rec.run_once()  # the interleaved pass: skipped as announced
+    assert events.CHANGE_MERGED not in emitter.types()
+    registry.forget_merge(1)  # merge_pr failed (405)
+    await rec.run_once()
+    assert emitter.types().count(events.CHANGE_MERGED) == 1
+    await rec.run_once()
+    assert emitter.types().count(events.CHANGE_MERGED) == 1
+
+
+async def test_forgotten_merge_of_an_open_pr_is_reported_once_when_a_person_merges_it() -> None:
+    from bridge.incidents import IncidentRegistry
+
+    registry = IncidentRegistry()
+    forge = FakeForge(agent_prs=[pr(1)])
+    emitter = RecordingEmitter()
+    rec = Reconciler(forge, Metrics(), emitter, app=APP, source=SOURCE, registry=registry)
+    await rec.run_once()
+    registry.announce_merge(1)
+    registry.forget_merge(1)  # the merge failed and the PR stayed open
+    await rec.run_once()
+    assert events.CHANGE_MERGED not in emitter.types()
+    forge.agent_prs[0] = pr(1, "closed", merged=True)
+    await rec.run_once()
+    await rec.run_once()
+    assert emitter.types().count(events.CHANGE_MERGED) == 1
+
+
+async def test_a_successful_announced_merge_is_never_reported_by_the_reconciler() -> None:
+    from bridge.incidents import IncidentRegistry
+
+    registry = IncidentRegistry()
+    forge = FakeForge(agent_prs=[pr(1)])
+    emitter = RecordingEmitter()
+    rec = Reconciler(forge, Metrics(), emitter, app=APP, source=SOURCE, registry=registry)
+    await rec.run_once()
+    registry.announce_merge(1)
+    forge.agent_prs[0] = pr(1, "closed", merged=True)
+    for _ in range(3):
+        await rec.run_once()
+    assert events.CHANGE_MERGED not in emitter.types()
