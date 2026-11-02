@@ -10,7 +10,8 @@
 # health is Degraded when the tip is armed (200), is not a revert and touched the
 # kustomization (an image bump on an armed config), otherwise Healthy. FORCE_HEALTH=<state>
 # in the stub dir overrides it. It also lists one Ready checkout pod, and a curl stub plays
-# Prometheus for check_fleet_disarmed: the pod reads 2000 (FORCE_GAUGE=<value> overrides),
+# Prometheus for check_fleet_disarmed: the pod reads 2000 (FORCE_GAUGE=<value> overrides; a
+# GAUGE_200_UNTIL_PUSH file makes it read 200 until the first push),
 # the success rate is 100 and the SLO 99. It also plays cdevents-sim: bodies POSTed to
 # 127.0.0.1:30082/events land in $STUBS/sim-events.jsonl (one per line) and /seed bodies in
 # $STUBS/sim-seed.log; the calls log has SIM_events / SIM_seed lines in order. A file named SIM_DOWN
@@ -162,6 +163,8 @@ case "\$*" in
   *checkout_config_upstream_timeout_ms*)
     echo FLEET >> "$CALLS"
     v=2000; [ -s "$STUBS/FORCE_GAUGE" ] && v=\$(cat "$STUBS/FORCE_GAUGE")
+    # GAUGE_200_UNTIL_PUSH: pods started while armed read 200 until the first push rolls them.
+    if [ -e "$STUBS/GAUGE_200_UNTIL_PUSH" ] && ! grep -q '^PUSH' "$CALLS"; then v=200; fi
     echo "{\"data\":{\"result\":[{\"metric\":{\"pod\":\"checkout-abc-1\"},\"value\":[0,\"\$v\"]}]}}" ;;
   *checkout_slo_target_percent*) echo '{"data":{"result":[{"metric":{},"value":[0,"99"]}]}}' ;;
   *checkout_requests_total*) echo '{"data":{"result":[{"metric":{},"value":[0,"100"]}]}}' ;;

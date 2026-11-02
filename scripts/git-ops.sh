@@ -287,12 +287,17 @@ op_disarm() {
   #   armed one, and pods that started while armed (the stable pods Rollouts recreates after
   #   an abort read 200) would be reused. So bump first, wait for fresh pods, then pin in a
   #   second commit (pin_after). With --git-only there are no pods yet, so no bump is needed.
+  #   Only the value armed (seed-history's pre-armed PR-242: no image change, so no canary ran)
+  #   and every Ready pod already reads the healthy value: nothing to roll, one commit.
   local pin_after=0
   cv_now="$(config_version_get)"
   if [[ -n "$image" ]]; then
     if [[ "$cv_now" != "$CONFIG_VERSION_START" ]]; then
       yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
       cv_new="$CONFIG_VERSION_START"
+    elif ((value_changed && !git_only && !image_changed)) \
+      && FLEET_WAIT_S=1 check_fleet_disarmed >/dev/null 2>&1; then
+      : # pre-armed only: the pods read the healthy value already
     elif ((value_changed && !git_only)); then
       cv_new="$(config_version_bump)"
       pin_after=1

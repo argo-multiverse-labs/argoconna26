@@ -238,6 +238,7 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
 
 @test "disarm --image with only the value armed and cv at 7 restarts pods through cv 8, then pins 7" {
   arm_origin                                           # 200, cv 7, tag v1.4.1
+  touch "$STUBS/GAUGE_200_UNTIL_PUSH"                  # pods started while armed read 200
   before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
   run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
   [ "$status" -eq 0 ]
@@ -245,6 +246,18 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   [ "$(cfg_value)" = "2000" ]
   [ "$(cv_value)" = "7" ]
   [ "$("$REAL_GIT" --git-dir="$ORIGIN" show refs/heads/build/demo~1:$ROLL | yq -r '.spec.template.metadata.annotations["example.dev/config-version"]')" = "8" ]
+}
+
+@test "disarm --image on a pre-armed tip whose pods all read 2000 is one commit, no cv bump" {
+  arm_origin                                           # seed-history's PR-242: 200 in Git, pods still 2000
+  before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 1)) ]
+  [ "$(cfg_value)" = "2000" ]
+  [ "$(cv_value)" = "7" ]
+  [ "$(commit_files refs/heads/build/demo)" = "$CFG " ]
+  grep -q '^FLEET' "$CALLS"
 }
 
 @test "disarm --image --git-only pins in one commit without a bump (no pods yet)" {
@@ -558,6 +571,7 @@ event_for() { sim_events | jq -c --arg s "$1" 'select(.subject.id == $s)'; }
 
 @test "disarm's config-version pin commit posts its own change event" {
   arm_origin                                           # 200, cv 7: disarm bumps to 8, then pins 7
+  touch "$STUBS/GAUGE_200_UNTIL_PUSH"                  # the pods read 200, so they must roll
   run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
   [ "$status" -eq 0 ]
   pin="$(origin_tip)"
