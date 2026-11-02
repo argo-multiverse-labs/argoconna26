@@ -28,6 +28,9 @@ class DryForge:
     async def read_file(self, path: str, ref: str) -> str:
         return await self.inner.read_file(path, ref)
 
+    async def branch_head(self, branch: str) -> str:
+        return await self.inner.branch_head(branch)
+
     async def resolve_sha(self, sha_or_prefix: str) -> str | None:
         return await self.inner.resolve_sha(sha_or_prefix)
 
@@ -57,6 +60,7 @@ class DryForge:
         body: str,
         changes: dict[str, str],
         commit_message: str,
+        base_sha: str | None = None,
     ) -> PullRequest:
         check_agent_branch(branch)
         return PullRequest(0, self._skip("open pr", branch), "", "")

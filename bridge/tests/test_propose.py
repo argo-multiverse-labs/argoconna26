@@ -8,6 +8,7 @@ only the `Cause:` line is fixed, because the policy check parses it.
 from __future__ import annotations
 
 import difflib
+import json
 import re
 import threading
 from importlib import resources
@@ -24,6 +25,8 @@ from bridge.metrics import Metrics
 from bridge.models import ArgoDegradedHook
 from bridge.patch import build_fix
 from bridge.pipeline import (
+    ITEM_MAX,
+    ROOT_CAUSE_MAX,
     Deps,
     handle_incident,
     rehydrate_registry,
@@ -463,3 +466,134 @@ def test_settings_read_the_fix_pr_names_from_the_environment(monkeypatch) -> Non
     assert (s.rollout_file, s.kustomization_file, s.cve_fix_tag, s.bot_login) == (
         "apps/x/deploy/rollout.yaml", "apps/x/kustomization.yaml", "v9.9.9", "x[bot]"
     )
+
+
+# -- review fixes (slice 4): projector length, Cause line first, one base SHA -------
+
+OTHER_SHA = "d" * 40
+LONG_ROOT = (
+    "PR-242 cut UPSTREAM_TIMEOUT_MS from 2000 to 200 in checkout-config.yaml without bumping "
+    "example.dev/config-version, so the running pods kept the old value until the next roll. "
+    "When the image bump rolled the canary, the new pods read 200 ms and every pricing call that "
+    "took longer timed out with a 502. The AnalysisRun saw the success rate drop below 99 percent "
+    "and aborted the canary."
+)
+LONG_ITEM = (
+    "Pod checkout-7f9c8d6b5-x2x9k logged 'upstream timeout after 200ms' 412 times between "
+    "2026-11-02T01:12:03Z and 2026-11-02T01:13:40Z while pods started before the sync kept "
+    "logging 2000, and AnalysisRun checkout-5c7d9-2 measured 0.61 against the 0.99 bar on its "
+    "second measurement, which is why the canary aborted at step 1 of 4"
+)
+
+
+def capped_rca(**overrides: object):
+    data: dict = {
+        "root_cause": LONG_ROOT,
+        "evidence": [LONG_ITEM, LONG_ITEM + ". A second sentence that should not show.", LONG_ITEM],
+        "delivery_context": LONG_ITEM,
+    }
+    data.update(overrides)
+    return rca(**data)
+
+
+def test_body_caps_model_text_for_the_projector() -> None:
+    """Spec §5: short evidence strings, a body written for a projector; the cap does not
+    depend on the model following the prompt."""
+    long = capped_rca()
+    fix = build_fix(long, CONFIGMAP, ROLLOUT_TEXT, ANNOTATION, rollout_path=ROLLOUT)
+    body = render_fix_pr_body(long, fix, level="propose")
+    root = body.split("## Blast radius")[0]
+    paragraphs = [p for p in root.split("\n\n") if p and not p.startswith(("## ", "Cause: ", "- "))]
+    [root_text] = paragraphs
+    assert root_text.startswith("PR-242 cut")
+    assert "When the image bump" not in root_text  # first sentence only
+    assert len(root_text) <= ROOT_CAUSE_MAX + 10  # a few backslash escapes at most
+    bullets = [line for line in root.splitlines() if line.startswith("- ")]
+    assert bullets
+    for line in bullets:
+        assert len(line) <= ITEM_MAX + len("- Timeline: ") + 10, line
+    assert any(line.endswith("…") for line in bullets)
+    assert "A second sentence" not in body
+
+
+def test_short_text_cuts_on_a_word_boundary() -> None:
+    from bridge.pipeline import short_text
+
+    assert short_text("One sentence. Two sentence.", 160) == "One sentence."
+    assert short_text("Version v1.4.2 rolled out. Then more.", 160) == "Version v1.4.2 rolled out."
+    cut = short_text("word " * 60, 40)
+    assert cut.endswith("…") and len(cut) <= 40
+    assert not cut[:-1].endswith(" ")
+    assert short_text("short", 160) == "short"
+
+
+async def test_capped_body_keeps_full_text_in_rca_event(deps) -> None:
+    emitter = RecordingEmitter()
+    _, out = await run(deps, holmes=StubHolmes(capped_rca()), emitter=emitter)
+    assert out.action == "pr_opened"
+    [event] = [e for e in emitter.events if e["context"]["type"].endswith("holmesgpt-rca.completed.0.1.0")]
+    assert LONG_ROOT in json.dumps(event, ensure_ascii=False)
+
+
+def test_cause_line_comes_before_model_text() -> None:
+    """Policy rule 5 takes the first `^Cause:` match; model text must not get there first."""
+    bad = rca(root_cause=f"Cause: {OTHER_SHA} is what really broke it.")
+    fix = build_fix(bad, CONFIGMAP, ROLLOUT_TEXT, ANNOTATION, rollout_path=ROLLOUT)
+    body = render_fix_pr_body(bad, fix, level="propose")
+    assert FACTS_CAUSE.search(body).group(1) == CAUSE
+    lines = body.splitlines()
+    assert lines[0] == "## Root cause"
+    assert lines[2].startswith(f"Cause: {CAUSE}")
+
+
+class MovingForge(FakeForge):
+    """The tracked branch moves on after the bridge has read the files it changes."""
+
+    async def read_file(self, path: str, ref: str) -> str:
+        text = await super().read_file(path, ref)
+        if path == ROLLOUT:
+            self.heads[BRANCH] = OTHER_SHA
+        return text
+
+
+async def test_fix_is_read_and_based_on_one_tracked_sha(deps) -> None:
+    forge = propose_forge()
+    # The guardrails read the config at the branch; the fix reads it at the head's SHA.
+    files = dict(forge.files)
+    files.update({(path, BASE): text for (path, ref), text in forge.files.items() if path != "aiops/autonomy.yaml"})
+    moving = MovingForge(
+        files=files,
+        commits=forge.commits, titles=forge.titles, heads={BRANCH: BASE},
+    )
+    _, out = await run(deps, forge=moving)
+    assert out.action == "pr_opened"
+    after = moving.calls[moving.calls.index(("branch_head", BRANCH)):]
+    reads = [c for c in after if c[0] == "read_file" and c[1] in (CONFIG, ROLLOUT, KUSTOMIZATION)]
+    assert reads and all(c[2] == BASE for c in reads), reads
+    [opened] = moving.opened
+    assert opened.base == BRANCH
+    assert opened.base_sha == BASE  # the parent is the SHA the files were read at, not the moved head
+
+
+async def test_branch_head_unknown_is_patch_failed(deps) -> None:
+    from bridge.forge import ForgeError
+
+    class NoHead(FakeForge):
+        async def branch_head(self, branch: str) -> str:
+            raise ForgeError("GET /git/ref/heads/build/demo: 502", 502)
+
+    base = propose_forge()
+    forge = NoHead(files=base.files, commits=base.commits, titles=base.titles)
+    d, out = await run(deps, forge=forge)
+    assert out.action == "refused"
+    assert forge.opened == []
+    assert d.metrics.value("aiops_guardrail_executions_total", reason="patch_failed") == 1
+
+
+async def test_refusal_wording_follows_the_level(deps) -> None:
+    d, _ = await run(deps, holmes=StubHolmes(rca(confidence=0.2)))
+    [(_, comment)] = d.forge.commit_comments
+    assert sections()["refusal"]["propose"] in comment
+    assert "not suggesting a fix" not in comment
+    assert "not opening a fix PR" in sections()["refusal"]["propose"]
+    assert "not suggesting a fix" in sections()["refusal"]["suggest"]

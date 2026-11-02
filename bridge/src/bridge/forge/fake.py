@@ -24,6 +24,7 @@ class OpenedPR:
     changes: dict[str, str]
     commit_message: str
     pr: PullRequest
+    base_sha: str | None = None
 
 
 @dataclass
@@ -34,7 +35,8 @@ class FakeForge:
     (sha, path) to the keys that commit changed in that file. `prs` maps a SHA to
     PR numbers. `titles` maps a SHA to its commit title. Writes are recorded in `commit_comments` and `pr_comments`.
     Set `fail_reads` to an exception to make every read raise it, and `fail_writes`
-    to make every comment raise it.
+    to make every comment raise it. `heads` maps a branch to its head SHA; a branch not
+    in it resolves to its own name, so `files` keyed by branch name still read.
     """
 
     files: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -50,6 +52,7 @@ class FakeForge:
     agent_prs: list[PullRequestInfo] = field(default_factory=list)
     opened: list[OpenedPR] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
+    heads: dict[str, str] = field(default_factory=dict)
 
     def _read(self, *call: object) -> None:
         self.calls.append(call)
@@ -62,6 +65,10 @@ class FakeForge:
             return self.files[(path, ref)]
         except KeyError:
             raise ForgeNotFound(f"{path}@{ref}") from None
+
+    async def branch_head(self, branch: str) -> str:
+        self._read("branch_head", branch)
+        return self.heads.get(branch, branch)
 
     async def resolve_sha(self, sha_or_prefix: str) -> str | None:
         self._read("resolve_sha", sha_or_prefix)
@@ -107,6 +114,7 @@ class FakeForge:
         body: str,
         changes: dict[str, str],
         commit_message: str,
+        base_sha: str | None = None,
     ) -> PullRequest:
         self.calls.append(("open_pr", branch))
         check_agent_branch(branch)
@@ -118,7 +126,7 @@ class FakeForge:
             raise ForgeConflict(f"branch {branch} already exists", 422)
         n = len(self.opened) + 1
         pr = PullRequest(n, f"https://forge.test/pull/{n}", f"PR_{n}", f"{n:040x}", branch)
-        self.opened.append(OpenedPR(base, branch, title, body, dict(changes), commit_message, pr))
+        self.opened.append(OpenedPR(base, branch, title, body, dict(changes), commit_message, pr, base_sha))
         return pr
 
     async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:

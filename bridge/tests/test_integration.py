@@ -376,10 +376,14 @@ async def test_propose_end_to_end_opens_pr(respx_mock, settings: Settings, stage
     respx_mock.get(f"{REPO_API}/contents/aiops/autonomy.yaml", params={"ref": BRANCH}).mock(
         return_value=httpx.Response(200, json=content(AUTONOMY.replace("level: suggest", "level: propose")))
     )
-    respx_mock.get(f"{REPO_API}/contents/{ROLLOUT}", params={"ref": BRANCH}).mock(
+    # The fix's files are read at the tracked head's SHA, which becomes the commit's parent.
+    respx_mock.get(f"{REPO_API}/contents/{CONFIG}", params={"ref": TRACKED_HEAD}).mock(
+        return_value=httpx.Response(200, json=content(CONFIGMAP))
+    )
+    respx_mock.get(f"{REPO_API}/contents/{ROLLOUT}", params={"ref": TRACKED_HEAD}).mock(
         return_value=httpx.Response(200, json=content(ROLLOUT_TEXT))
     )
-    respx_mock.get(f"{REPO_API}/contents/{KUSTOMIZATION}", params={"ref": BRANCH}).mock(
+    respx_mock.get(f"{REPO_API}/contents/{KUSTOMIZATION}", params={"ref": TRACKED_HEAD}).mock(
         return_value=httpx.Response(200, json=content(KUSTOMIZATION_TEXT))
     )
     respx_mock.get(f"{REPO_API}/git/ref/heads/{BRANCH}").mock(
@@ -412,6 +416,7 @@ async def test_propose_end_to_end_opens_pr(respx_mock, settings: Settings, stage
     [tree_call] = trees.calls
     assert sorted(e["path"] for e in json.loads(tree_call.request.content)["tree"]) == [CONFIG, ROLLOUT]
     assert commits.call_count == 1
+    assert json.loads(commits.calls[0].request.content)["parents"] == [TRACKED_HEAD]
     [ref_call] = refs.calls
     assert json.loads(ref_call.request.content)["ref"] == f"refs/heads/agent/checkout-{CAUSE[:7]}-{SYNC[:7]}"
     [pull_call] = pulls.calls

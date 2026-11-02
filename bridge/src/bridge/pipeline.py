@@ -49,6 +49,11 @@ Action = Literal[
     "policy_failed", "duplicate",
 ]
 EVIDENCE_BULLETS = 2  # plus the Timeline bullet: at most three on the projector
+# Spec §5: short evidence strings, a body written for a projector. Model text in the fix PR
+# is cut to its first sentence and to these lengths, whatever the prompt got back; the full
+# text stays in the rca.completed event.
+ROOT_CAUSE_MAX = 200
+ITEM_MAX = 160
 REVISIONS_SHOWN = 5  # the fix PR's synced-revisions table
 ANOTHER_REVISION = "Another degraded revision {revision} seen; see this PR."
 REHYDRATE_TIMEOUT_S = 15.0
@@ -129,6 +134,22 @@ def title_text(value: object) -> str:
     text = _ISSUE_REF.sub("#\u200b", text)
     text = _GH_REF.sub("\\1\u200b-", text)
     return _MENTION.sub("@\u200b", text)
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+
+def short_text(value: object, limit: int) -> str:
+    """The first sentence of `value`, cut on a word boundary with an ellipsis if it is still
+    longer than `limit` characters. Applied before `plain`, which only adds escapes."""
+    text = " ".join(str(value).split())
+    text = _SENTENCE_END.split(text, maxsplit=1)[0]
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    if " " in cut:
+        cut = cut[: cut.rindex(" ")]
+    return cut.rstrip(" ,;:-") + "…"
 
 
 def timeline_line(delivery_context: str) -> str:
@@ -222,9 +243,10 @@ def render_fix_pr_body(
         "fix_pr_body.md.j2",
         s=pr_sections(),
         rca=rca,
+        root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
         cause_title=cause_title,
-        evidence=rca.evidence[:EVIDENCE_BULLETS],
-        timeline=timeline_line(rca.delivery_context),
+        evidence=[short_text(e, ITEM_MAX) for e in rca.evidence[:EVIDENCE_BULLETS]],
+        timeline=short_text(timeline_line(rca.delivery_context), ITEM_MAX),
         blast_changes=changes,
         blast_leaves=leaves,
         argo_url=argo_url,
@@ -379,7 +401,7 @@ class _Run:
         """Post the refusal: on the cause once it checked out, otherwise on the synced
         revision, so a wrong answer never lands on an innocent commit."""
         body = render("refusal_comment.md.j2", refusals=refusals, argo_url=argo_url(self.s, self.hook),
-                      level=self.level)
+                      level=self.level, sentence=pr_sections()["refusal"][self.level])
         blocked = await self.pii_gate(body, rca_event)
         if blocked:
             return blocked
@@ -452,23 +474,27 @@ class _Run:
         url = await self.post(self.deps.forge.comment_on_pr(pr.number, text))
         return await self.finish("duplicate", url, "open_pr")
 
-    async def build(self, rca: RCA) -> FixChange | Refusal:
-        """The two-line fix, read from the tracked branch; a failure is a `patch_failed` refusal."""
-        forge, ref = self.deps.forge, self.s.tracked_branch
+    async def build(self, rca: RCA) -> tuple[FixChange, str] | Refusal:
+        """The two-line fix and the tracked-branch SHA it was read at; a failure is a
+        `patch_failed` refusal. Both files are read at one SHA, which becomes the fix
+        commit's parent, so a push that lands meanwhile is merged by the PR, not reverted."""
+        forge = self.deps.forge
         try:
+            ref = await forge.branch_head(self.s.tracked_branch)
             config_text = await forge.read_file(rca.proposed_patch.file, ref)
             rollout_text = await forge.read_file(self.s.rollout_file, ref)
         except ForgeError:
             return Refusal("patch_failed", "could not read the files to change")
         try:
-            return build_fix(rca, config_text, rollout_text, self.s.config_version_annotation,
-                             rollout_path=self.s.rollout_file)
+            fix = build_fix(rca, config_text, rollout_text, self.s.config_version_annotation,
+                            rollout_path=self.s.rollout_file)
         except PatchError as exc:
             return Refusal("patch_failed", str(exc))
+        return fix, ref
 
-    async def image_tag(self) -> str | None:
+    async def image_tag(self, ref: str) -> str | None:
         try:
-            text = await self.deps.forge.read_file(self.s.kustomization_file, self.s.tracked_branch)
+            text = await self.deps.forge.read_file(self.s.kustomization_file, ref)
         except ForgeError:
             return None
         return _image_tag(text, self.hook.app)
@@ -485,10 +511,11 @@ class _Run:
         rca_event = self.rca_event(rca)
         if refusals:
             return await self.refuse(rca, refusals, rca_event)
-        fix = await self.build(rca)
-        if isinstance(fix, Refusal):
-            self.count_refusals([fix])
-            return await self.refuse(rca, [fix], rca_event)
+        built = await self.build(rca)
+        if isinstance(built, Refusal):
+            self.count_refusals([built])
+            return await self.refuse(rca, [built], rca_event)
+        fix, base_sha = built
 
         patch = rca.proposed_patch
         title = title_text(f"fix({self.hook.app}): restore {patch.key} to {patch.to_value} and roll config")
@@ -501,7 +528,7 @@ class _Run:
             history=self.hook.history,
             synced_revision=self.hook.sync_revision,
             annotation=self.s.config_version_annotation,
-            image_tag=await self.image_tag(),
+            image_tag=await self.image_tag(base_sha),
             cve_tag=self.s.cve_fix_tag or None,
             kustomization=self.s.kustomization_file,
         )
@@ -513,7 +540,7 @@ class _Run:
         try:
             pr = await self.deps.forge.open_pr(
                 base=self.s.tracked_branch, branch=branch, title=title, body=body,
-                changes=fix.files, commit_message=commit_message,
+                changes=fix.files, commit_message=commit_message, base_sha=base_sha,
             )
         except ForgeConflict:
             # The branch exists: this revision already has a fix branch (a replay).
@@ -587,5 +614,5 @@ def outcome_for_status(outcome: Outcome) -> dict[str, object]:
 
 __all__ = [
     "Deps", "Outcome", "fix_branch", "handle_incident", "outcome_for_status", "plain", "rehydrate_at_startup",
-    "rehydrate_registry", "render", "render_fix_pr_body",
+    "rehydrate_registry", "render", "render_fix_pr_body", "short_text",
 ]

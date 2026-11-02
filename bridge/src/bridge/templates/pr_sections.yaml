@@ -1,4 +1,5 @@
-# The fix-PR body's headings and fixed sentences (Task 4.3).
+# The fix-PR body's headings and fixed sentences (Task 4.3), and the refusal comment's
+# sentence for each level.
 #
 # Every heading and sentence here is a proposal for the promotion board to rewrite in
 # their own words; fix_pr_body.md.j2 and the tests read them from this file. The one
@@ -21,3 +22,8 @@ blast_radius:
 footer:
   propose: "Opened by the agent at autonomy level propose. A human reviews and merges."
   act: "Opened by the agent at autonomy level act. Auto-merge is allowed only if policy-check passes; a human reviews it after the fact."
+# The refusal comment's sentence (refusal_comment.md.j2), by autonomy level.
+refusal:
+  suggest: "The investigation finished, but its answer did not pass the guardrails, so the agent is not suggesting a fix."
+  propose: "The investigation finished, but its answer did not pass the guardrails, so the agent is not opening a fix PR."
+  act: "The investigation finished, but its answer did not pass the guardrails, so the agent is not opening a fix PR."

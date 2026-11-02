@@ -85,6 +85,13 @@ class GitHubForge:
             raise ForgeError(f"read_file {path}: not a file")
         return base64.b64decode(data.get("content", "")).decode("utf-8")
 
+    async def branch_head(self, branch: str) -> str:
+        r = await self._request("GET", f"/git/ref/heads/{self._q(branch)}")
+        sha = str((r.json().get("object") or {}).get("sha", "")).lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ForgeError(f"branch_head {branch}: no SHA")
+        return sha
+
     async def resolve_sha(self, sha_or_prefix: str) -> str | None:
         prefix = sha_or_prefix.strip().lower()
         if not _HEX.match(prefix):
@@ -151,18 +158,21 @@ class GitHubForge:
         body: str,
         changes: dict[str, str],
         commit_message: str,
+        base_sha: str | None = None,
     ) -> PullRequest:
         """One commit through the Git Data API on a new `agent/*` branch, then the PR.
 
-        Blobs, then a tree on the base tree, then the commit, then the ref. A taken branch name
-        raises ForgeConflict before any PR exists. If the PR call fails after the ref was made,
-        the branch is deleted again so a retry can reuse the name.
+        Blobs, then a tree on the base tree, then the commit, then the ref. The commit's parent
+        is `base_sha` when given (the SHA the caller read the files at), so a change that lands
+        on `base` meanwhile is merged by the PR, never reverted by it; otherwise `base`'s head.
+        A taken branch name raises ForgeConflict before any PR exists. If the PR call fails
+        after the ref was made, the branch is deleted again so a retry can reuse the name.
         """
         check_agent_branch(branch)
         if not changes:
             raise ValueError("open_pr needs at least one entry in changes")
-        ref = await self._request("GET", f"/git/ref/heads/{self._q(base)}")
-        base_sha = str(ref.json()["object"]["sha"])
+        if base_sha is None:
+            base_sha = await self.branch_head(base)
         base_commit = await self._request("GET", f"/git/commits/{base_sha}")
         base_tree = str(base_commit.json()["tree"]["sha"])
         entries = []

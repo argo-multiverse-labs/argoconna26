@@ -420,3 +420,32 @@ async def test_dry_forge_open_pr_sends_nothing_and_lists_through(respx_mock) -> 
     assert pr.url.startswith("dry-run:") and pr.number == 0
     assert [p.number for p in listed] == [1]
     assert dry.would == [("open pr", "agent/checkout-a")]
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_branch_head_reads_the_ref(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/git/ref/heads/build/demo").mock(
+        return_value=httpx.Response(200, json={"object": {"sha": BASE_SHA}})
+    )
+    assert await forge.branch_head("build/demo") == BASE_SHA
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_open_pr_on_a_given_base_sha_uses_it_as_the_parent(respx_mock, forge: GitHubForge) -> None:
+    """The fix is built from files read at one SHA; the commit's parent is that SHA, even if
+    the branch has moved since, so a concurrent change is merged, never reverted."""
+    _, _, commits, _, pulls = _mock_open_flow(respx_mock)
+    await forge.open_pr("build/demo", "agent/checkout-x", "t", "b", {CONFIG: "x\n"}, "m", base_sha=BASE_SHA)
+    commit_req = json.loads(commits.calls[0].request.content)
+    assert commit_req["parents"] == [BASE_SHA]
+    ref_calls = [c for c in respx_mock.calls if c.request.url.path.endswith("/git/ref/heads/build/demo")]
+    assert ref_calls == []
+    assert json.loads(pulls.calls[0].request.content)["base"] == "build/demo"
+
+
+async def test_fake_and_dry_forge_branch_head_and_base_sha() -> None:
+    fake = FakeForge(heads={"build/demo": SHA})
+    assert await fake.branch_head("build/demo") == SHA
+    await fake.open_pr("build/demo", "agent/checkout-a", "t", "b", {CONFIG: "x\n"}, "m", base_sha=SHA)
+    assert fake.opened[0].base_sha == SHA
+    assert await DryForge(fake).branch_head("build/demo") == SHA

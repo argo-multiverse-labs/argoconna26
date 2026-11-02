@@ -70,6 +70,10 @@ class Forge(Protocol):
 
     async def read_file(self, path: str, ref: str) -> str: ...
 
+    async def branch_head(self, branch: str) -> str:
+        """The full SHA a branch points at now."""
+        ...
+
     async def resolve_sha(self, sha_or_prefix: str) -> str | None: ...
 
     async def is_ancestor(self, sha: str, ref: str) -> bool: ...
@@ -92,7 +96,11 @@ class Forge(Protocol):
         body: str,
         changes: dict[str, str],
         commit_message: str,
-    ) -> PullRequest: ...
+        base_sha: str | None = None,
+    ) -> PullRequest:
+        """`base_sha`, when given, is the commit's parent (the SHA the changed files were read
+        at); otherwise the base branch's current head."""
+        ...
 
     async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:
         """Open bot PRs from `agent/<app>-*` branches, or from any `agent/*` branch when `app` is None."""

@@ -1,8 +1,8 @@
 ## {{ s.sections.root_cause }}
 
-{{ rca.root_cause | plain }}
-
 Cause: {{ rca.cause_commit_sha }}{% if cause_title %} ({{ cause_title | plain }}){% endif %}
+
+{{ root_cause | plain }}
 
 {% for item in evidence %}- {{ item | plain }}
 {% endfor %}- {{ s.timeline_label }}: {{ timeline | plain }}
