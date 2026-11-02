@@ -113,9 +113,11 @@ case "$1 $2" in
     jq '.state = "MERGED"' "$S/pr/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pr/$n.json" ;;
   "api orgs/"*"/teams/"*"/memberships/"*)
     # members: one login per line (default: stub-reviewer); anyone else is a 404.
+    # membership-error: a transient failure to answer with instead (for example "Server Error (HTTP 502)").
     login="${2##*/}"
+    if [ -s "$S/membership-error" ]; then echo "gh: $(cat "$S/membership-error")" >&2; exit 1; fi
     if grep -qx -- "$login" "$S/members" 2>/dev/null || { [ ! -f "$S/members" ] && [ "$login" = stub-reviewer ]; }; then
-      echo '{"state":"active"}' | emit
+      if [ -s "$S/membership-state" ]; then emit <"$S/membership-state"; else echo '{"state":"active"}' | emit; fi
     else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi ;;
   "api repos/argo-multiverse-labs/argoconna26/pulls/"*)
     path="$2"; n="${path#*/pulls/}"; n="${n%%/*}"

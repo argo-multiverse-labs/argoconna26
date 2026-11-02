@@ -125,7 +125,7 @@ gh_open_promotion_prs() { # -> PR numbers, one per line
 # leave an approving review). Only the URL leaves this function; logins are used for the checks
 # and dropped.
 approving_review_url() {
-  local reviews candidates login url org="${PROMOTION_TEAM#@}" found=""
+  local reviews candidates login url state err org="${PROMOTION_TEAM#@}" found=""
   local team="${org#*/}"
   org="${org%%/*}"
   reviews="$(gh api "repos/${REPO_SLUG}/pulls/$1/reviews?per_page=100")" || return 1
@@ -134,12 +134,21 @@ approving_review_url() {
          | select(.user.type != "Bot" and .user.login != $bot)]
     | [group_by(.user.login)[] | last | select(.state == "APPROVED" and .commit_id == $head)]
     | sort_by(.id) | .[] | "\(.user.login) \(.html_url)"' <<<"$reviews")" || return 1
+  err="$(mktemp)"
   while read -r login url; do
     [[ -n "$login" ]] || continue
-    if [[ "$(gh api "orgs/$org/teams/$team/memberships/$login" --jq .state 2>/dev/null)" == active ]]; then
-      found="$url"
+    # Only an active membership counts. A 404 means not a member; any other failure (a 5xx, a
+    # rate limit, a token without read:org) means "could not check", so return 1 and let the
+    # caller stop before it writes anything, rather than record a board approval as admin-bypass.
+    if ! state="$(gh api "orgs/$org/teams/$team/memberships/$login" --jq .state 2>"$err")"; then
+      if grep -q 'HTTP 404' "$err"; then continue; fi
+      log_error "could not read $PROMOTION_TEAM membership: $(head -c 200 "$err")"
+      rm -f "$err"
+      return 1
     fi
+    [[ "$state" != active ]] || found="$url"
   done <<<"$candidates"
+  rm -f "$err"
   [[ -z "$found" ]] || printf '%s\n' "$found"
 }
 

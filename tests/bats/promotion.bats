@@ -142,6 +142,32 @@ approve() { review "$1" APPROVED; }
   [ "$(tip_autonomy .promotion.approved_by)" = "admin-bypass" ]
 }
 
+@test "record-approval writes nothing when the team membership cannot be read, and a re-run records the board" {
+  promo ensure propose
+  approve 1
+  promo merge 1
+  echo "Server Error (HTTP 502)" >"$PROMO_STATE/membership-error"
+  before="$(origin_log | head -1)"
+  run promo record-approval 1
+  [ "$status" -ne 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "null" ]
+  [ "$(origin_log | head -1)" = "$before" ]
+  rm -f "$PROMO_STATE/membership-error"
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "promotion-board member (review $URL1)" ]
+}
+
+@test "a pending team membership is not a board approval" {
+  promo ensure propose
+  approve 1
+  promo merge 1 --admin
+  echo '{"state":"pending"}' >"$PROMO_STATE/membership-state"
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "admin-bypass" ]
+}
+
 @test "record-approval refuses a PR that is not merged" {
   promo ensure propose
   run promo record-approval 1
