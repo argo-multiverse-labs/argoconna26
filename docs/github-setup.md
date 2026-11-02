@@ -93,7 +93,8 @@ from `RULESET_BRANCHES` and re-apply; the script does that for you in `verify-in
 - **Rules:** `pull_request` with `required_approving_review_count: 0`,
   `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: false`,
   `required_review_thread_resolution: false`, and `require_code_owner_review` set to `false`
-  with `apply --minimal` (CODEOWNERS does not exist yet) and `true` with a plain `apply`.
+  with `apply --minimal` (for a repository that has no CODEOWNERS yet; this one does) and `true`
+  with a plain `apply`.
   `apply --with-policy-check` also adds the required `policy-check` status (section 4);
   `apply --minimal --with-policy-check` adds it while code-owner review stays off.
 - **Bypass actors:** exactly one: the built-in **Repository role "Admin"** (`actor_type:
@@ -208,7 +209,8 @@ chmod +x .git/hooks/pre-commit
 
 ## 4. What later slices add
 
-These are not applied yet; the script's full mode and the preflight grow as the demo does.
+These are modes and options of the script. `scripts/github-ruleset.sh show` tells you which one is
+live on your repository.
 
 - **Code-owner review** (`apply` without `--minimal`): `require_code_owner_review: true` on
   `argoconna26-tracked`, with a `CODEOWNERS` file that makes the promotion team the owner of the
@@ -217,10 +219,11 @@ These are not applied yet; the script's full mode and the preflight grow as the 
   Write permission on the repo) in the organization first.
 - **The required `policy-check` status** (`apply --with-policy-check`): a
   `required_status_checks` rule on the tracked branches naming the context `policy-check` from
-  GitHub Actions (`integration_id: 15368`). The workflow that produces it lives on the tracked
-  branch. Don't apply it before that workflow exists there, or every PR waits for a check that
-  never runs. `apply --minimal --with-policy-check` adds the check with code-owner review still
-  off, for a fork (or this repo) that has the workflow but not yet the promotion-board team.
+  GitHub Actions (`integration_id: 15368`). The workflow that produces it is
+  `.github/workflows/policy.yml`, and it lives on the tracked branch. Don't apply it before that
+  workflow exists there, or every PR waits for a check that never runs.
+  `apply --minimal --with-policy-check` adds the check with code-owner review still off, for a
+  fork (or this repo) that has the workflow but not yet the promotion-board team.
 - **Merge-mechanics spike** (`apply --spike rehearse/<name>` and `apply --spike-remove`): a
   temporary fourth ruleset, `argoconna26-spike`, with those full rules on one scratch
   `rehearse/*` branch only, to test the App's auto-merge before the real branches carry them.
