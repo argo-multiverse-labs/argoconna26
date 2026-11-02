@@ -37,7 +37,8 @@ sd() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/stage-day.sh" "$@"); }
 preflight 1 (score required)
 gh auth status
 make job-install
-preflight 3" ]
+preflight 3
+promotion ensure propose" ]
   [[ "$output" == *"morning done"* ]]
   [[ "$output" == *"http://kiosk.example/"* ]]
 }

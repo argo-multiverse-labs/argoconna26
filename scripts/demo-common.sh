@@ -13,13 +13,52 @@
 # Environment:
 #   TYPE_SPEED   typing speed for demo-magic (default 40; an empty value types instantly)
 #   NO_WAIT      true: no pauses, and the script runs its assertions at the end (default false)
-#   DEMO_OPEN    command that opens a URL in the browser (default xdg-open)
+#   DEMO_PACE    talk (default) or auto. Used by the scene scripts (demo-scene-N, demo-full):
+#                talk stops for Enter only at scene_break, fourth_wall and speaker_beat, so the
+#                speakers talk while the script waits on a condition. auto sets NO_WAIT=true:
+#                nothing reads stdin and the e2e assertions run. The demo-rung-N scripts keep
+#                their own pauses (every demo-magic wait) unless a scene script runs them.
+#   NARRATION_DIR  where narrate looks (default <main checkout>/narration)
+#   DEMO_OPEN   command that opens a URL in the browser (default xdg-open)
 #   READY_TIMEOUT_S, READY_NOTE   per call of until_ready (see there)
 #   DEMO_AUTOMERGE_FOR_TEST=1, DEMO_REJECT_FOR_TEST=1   honoured only with NO_WAIT=true, and
 #                only by demo-rung-2.sh. Rung 3 never starts the helper: at act the merge must
 #                be GitHub's auto-merge (or the bridge's catch-up), never a person.
+#
+# Scenes (O31). A scene script calls `scene_init NAME`, then scene_break, scene_say, fourth_wall
+# and speaker_beat around the body of the matching rung script (those bodies are functions, so
+# the failure branches are the rungs' own). Inside a scene, a failure branch that leaves the
+# platform unfinished (handoff, no fix PR, policy left for review) exits 10, which demo-full
+# treats as "stop here"; a refusal or a PII block ends after the human fix, exit 0.
+#
+#   scene_break TITLE        blank line, the title as one line, then Enter (talk pace)
+#   fourth_wall TITLE        "-- TITLE --" (stepping out of the story), then Enter
+#   speaker_beat WHO TOPIC   hand over to WHO (luke, hilliary, both): prints "> Who", keeps TOPIC
+#                            in .operator/stage.log, then Enter. Outside a scene it is only the
+#                            Enter. (The plan calls this `beat WHO TOPIC`; `beat TEXT` is already
+#                            the one-line printer in common.sh, so this one has another name.)
+#   scene_say KEY            narrate "$SCENE" KEY; nothing outside a scene
+#   narrate SCENE KEY        print one section of narration/SCENE.txt
+#
+# Narration interface. narration/ is local only (excluded through .git/info/exclude; never in
+# .gitignore, never committed). narration/<SCENE>.txt is split in sections: a section starts
+# with a line `[KEY]`, and the non-blank lines after it, up to the next `[...]` line, belong to
+# KEY. narrate prints those lines with demo-magic's `p` (the prompt, then the comment). A line
+# starts with `# `; one that does not gets it. A line too long for the stage is folded at spaces
+# to fit STAGE_COLS. A missing file or a missing KEY prints nothing and returns 0.
+#
+#   [push]
+#   # An innocent release goes out.
+#   [wait-teach]
+#   # [Hilliary: read-only by default; dry runs]
+#
+# Hilliary's lines are placeholders only, in exactly this form (tests/bats/demo_scenes.bats
+# checks every line that mentions Hilliary): `# [Hilliary: <beat topic>]`.
+# The keys each scene uses: grep -ho 'scene_say [a-z0-9-]*' scripts/demo-*.sh
+#
 # Exit codes: 1 a failed assertion or an unexpected outcome, 3 wrong context, 4 a wait timed
-# out, 5 cluster lock held, 6 autonomy not act (rung 3), plus those of the commands it runs.
+# out, 5 cluster lock held, 6 autonomy not act (rung 3) or below propose (scene 3), 10 a scene
+# ended early on a failure branch, plus those of the commands it runs.
 
 set -euo pipefail
 
@@ -43,6 +82,12 @@ OPERATOR_STATE="$(main_root)/.operator"
 _want_type_speed="${TYPE_SPEED-40}"
 _want_no_wait="${NO_WAIT:-false}"
 [[ "$_want_no_wait" == true || "$_want_no_wait" == false ]] || die "NO_WAIT must be true or false"
+DEMO_PACE="${DEMO_PACE:-talk}"
+case "$DEMO_PACE" in
+  talk) ;;
+  auto) _want_no_wait=true ;;
+  *) die "DEMO_PACE must be talk or auto" ;;
+esac
 TYPE_SPEED=
 # shellcheck source=scripts/demo-magic.sh
 . "$DEMO_DIR/demo-magic.sh"
@@ -56,7 +101,14 @@ stty() { command stty "$@" 2>/dev/null || true; }
 
 # demo-magic's wait reads a key. With NO_WAIT=true there is nobody to press it.
 eval "_dm_$(declare -f wait)"
-wait() { [[ "$NO_WAIT" == true ]] || _dm_wait; }
+# Scene scripts gate it: a wait reads a key only while a scene pause (_pause) has it open, so the
+# typed commands and the narration lines of a scene never stop on their own.
+SCENE="" _PACE_GATED=0 _PAUSE_OPEN=0
+wait() {
+  [[ "$NO_WAIT" == true ]] && return 0
+  if [[ "$_PACE_GATED" == 1 && "$_PAUSE_OPEN" != 1 ]]; then return 0; fi
+  _dm_wait
+}
 # Inside these scripts `wait` is the pause; a background job would be awaited with `builtin wait`.
 
 # ---------------------------------------------------------------- prompts
@@ -68,7 +120,114 @@ as_oncall_sre() { DEMO_PROMPT="\033[0;35msre\\$ \033[0m"; DEMO_PROMPT_PLAIN='sre
 as_platform_engineer
 
 # rung_break TITLE : one plain line that starts a rung.
-rung_break() { beat "== $1 =="; }
+rung_break() { [[ -n "$SCENE" ]] || beat "== $1 =="; }
+
+# ---------------------------------------------------------------- scenes (O31)
+OVERNIGHT_VERIFY="${OVERNIGHT_VERIFY:-$DEMO_DIR/../tests/e2e/overnight-verify.sh}"
+PROMOTION_PR_SH="${PROMOTION_PR_SH:-$DEMO_DIR/promotion-pr.sh}"
+
+# scene_init NAME : this script is the scene NAME; waits now stop only at the scene pauses.
+scene_init() { SCENE="$1" _PACE_GATED=1; }
+
+_pause() {
+  _PAUSE_OPEN=1
+  wait
+  _PAUSE_OPEN=0
+}
+
+scene_break() { # TITLE
+  printf '\n'
+  beat "$1"
+  _pause
+}
+
+fourth_wall() { # TITLE
+  local framed="-- $1 --"
+  ((${#framed} <= STAGE_COLS)) || framed="$1"
+  beat "$framed"
+  _pause
+}
+
+speaker_beat() { # WHO TOPIC
+  local who="$1" topic="${2:-}"
+  if [[ -n "$SCENE" ]]; then
+    _stage_keep "beat: $who: $topic"
+    beat "> ${who^}"
+  fi
+  _pause
+}
+
+# narrate SCENE KEY : see the header. Always returns 0.
+narrate() {
+  local scene="$1" key="$2" file line chunk width
+  local -a lines=()
+  file="${NARRATION_DIR:-$(main_root)/narration}/$scene.txt"
+  [[ -r "$file" ]] || return 0
+  mapfile -t lines < <(awk -v want="[$key]" '
+    { h = $0; sub(/[[:space:]]+$/, "", h) }
+    h ~ /^\[[^]]*\]$/ { on = (h == want); next }
+    on && NF { print }' "$file")
+  width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
+  ((width >= 8)) || width=8
+  for line in "${lines[@]}"; do
+    line="${line#"# "}"
+    line="${line#"#"}"
+    while IFS= read -r chunk; do
+      chunk="${chunk%"${chunk##*[![:space:]]}"}"
+      p "# $chunk"
+    done < <(printf '%s\n' "$line" | fold -s -w "$width")
+  done
+  return 0
+}
+
+scene_say() { [[ -z "$SCENE" ]] || narrate "$SCENE" "$1"; } # KEY
+
+# leave_early : a failure branch ends the rung here. On stage a rung script exits 0; inside a
+# scene, 10 tells demo-full to stop.
+leave_early() { if [[ -n "$SCENE" ]]; then exit 10; fi; exit 0; }
+
+# show_verify RUN_TS : run the after-the-fact verifier, show one short PASS/FAIL line per check
+# and keep them in .operator/last-verify for the epilogue. Returns 1 when the verifier fails.
+show_verify() {
+  local out rc=0 line
+  out="$("$OVERNIGHT_VERIFY" "SINCE=$1" "UNTIL=$(date +%s)" 2>&1)" || rc=$?
+  mkdir -p "$OPERATOR_STATE"
+  : >"$OPERATOR_STATE/last-verify"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    beat "${line:0:STAGE_COLS}"
+    printf '%s\n' "${line:0:STAGE_COLS}" >>"$OPERATOR_STATE/last-verify"
+  done < <(sed -nE 's/^(PASS|FAIL) ([A-Za-z0-9_-]+).*/\1 \2/p' <<<"$out")
+  if ((rc != 0)); then
+    beat "verify: FAIL"
+    return 1
+  fi
+}
+
+# promote_to LEVEL PR : verified, merged by people, recorded (Hilliary approves as the board).
+# With NO_WAIT=true and DEMO_AUTOMERGE_FOR_TEST=1 an open promotion PR is merged here with
+# --admin (logged as admin-bypass), which stands in for the board in a run nobody watches.
+act_with_approval() { tracked_level_is act && [[ -n "$(autonomy_approved_by)" ]]; }
+
+promote_to() {
+  local level="$1" pr="$2" state
+  "$PROMOTION_PR_SH" verify "$pr" # one line (P23); exit 8 and a refusal line when the PR changed
+  open_tab "$(gh pr view "$pr" --repo "$REPO_SLUG" --json url --jq .url)"
+  speaker_beat hilliary "approves the promotion"
+  scene_say board
+  state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state 2>/dev/null || true)"
+  if [[ "$state" == OPEN ]] && automerge_for_test; then "$PROMOTION_PR_SH" merge "$pr" --admin >/dev/null; fi
+  READY_TIMEOUT_S="${PROMO_WAIT_S:-1800}" until_ready "promotion merged" pr_not_open "$pr"
+  [[ "$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]] \
+    || refuse 1 "promotion PR closed" "promotion PR $pr was closed, not merged"
+  beat "promotion merged"
+  "$PROMOTION_PR_SH" record-approval "$pr" # one line: recorded: board approval | admin bypass
+  if [[ "$level" == act ]]; then
+    until_ready "act, approved" act_with_approval
+  else
+    until_ready "propose, approved" propose_with_approval
+  fi
+}
 
 # typed COMMAND : demo-magic's pe, after checking that prompt plus command fit the stage pane.
 # The typed commands run through demo-magic's eval in this shell. Under `make demo-rung-N` a
@@ -226,7 +385,7 @@ refusal_reason() { sed -n 's/^- \([a-z_]*\): .*/\1/p' <<<"$OUT_BODY" | head -n1;
 
 # human_fix : Hilliary's beat, then the human fix (make fix, one pushed: line) until Healthy.
 human_fix() {
-  wait # Hilliary's beat
+  speaker_beat hilliary "before the human fix"
   as_platform_engineer
   typed "make fix"
   until_ready "Healthy" app_health_is checkout Healthy
@@ -238,6 +397,7 @@ human_fix() {
 # exit 0. Under NO_WAIT=true the run still fails: the assertions need the RCA or PR path.
 # Returns 1 when the outcome is an RCA comment or a fix PR, for the caller to carry on.
 unhappy_outcome() {
+  local early=0
   case "$OUT_KIND" in
     refused)
       beat "refused: $(refusal_reason)"
@@ -251,10 +411,12 @@ unhappy_outcome() {
       ;;
     handoff)
       beat "handoff: cut to clip"
+      early=1
       ;;
     other)
       beat "unknown bot comment"
       open_tab "$OUT_URL"
+      early=1
       ;;
     *) return 1 ;;
   esac
@@ -262,6 +424,7 @@ unhappy_outcome() {
     log_error "FAIL: agent $OUT_KIND, not a fix"
     exit 1
   fi
+  if ((early)); then leave_early; fi
   exit 0
 }
 

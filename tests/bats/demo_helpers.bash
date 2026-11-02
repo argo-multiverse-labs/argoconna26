@@ -46,6 +46,7 @@ demo_setup() { # LEVEL : the tracked autonomy level the scenario starts at
 case "$*" in
   *"config current-context"*) echo kind-argoconna26 ;;
   *annotate*) echo "kubectl annotate ${*: -2}" >>"$LOG" ;;
+  *"get applications"*) echo '{"items":[]}' ;;
   *"{.status.sync.revision} {.status.sync.status}"*)
     if [[ -e "$ST/merged" ]]; then echo "$MERGE Synced Succeeded"; else echo "$(cat "$ST/rev") Synced Succeeded"; fi ;;
   *"{.status.sync.revision}"*) if [[ -e "$ST/merged" ]]; then echo "$MERGE"; else cat "$ST/rev"; fi ;;
@@ -84,7 +85,7 @@ case "$1 $2" in
   "auth token") echo tok ;;
   "pr view")
     f="$(prfile)"
-    if [[ -e "$ST/auto-merge-by" && "$*" == *state* && "$(jq -r .state "$f")" == OPEN ]]; then
+    if [[ -e "$ST/auto-merge-by" && "$f" == "$ST/pr-7.json" && "$*" == *state* && "$(jq -r .state "$f")" == OPEN ]]; then
       set_pr ".state = \"MERGED\" | .mergeCommit = {oid: \"$MERGE\"} | .mergedBy = {login: \"$(cat "$ST/auto-merge-by")\"}"; touch "$ST/merged"
     fi
     out <"$f" ;;
@@ -125,7 +126,14 @@ STUB
 echo "promo $*" >>"$LOG"
 case "$1" in
   verify) if ((${VERIFY_RC:-0} == 0)); then echo "promotion PR: clean"; else echo "refused: promotion PR changed"; exit "$VERIFY_RC"; fi ;;
-  record-approval) echo propose >"$ST/level"; echo admin-bypass >"$ST/approved"; echo "recorded: admin bypass" ;;
+  record-approval) if [[ "$2" == 13 ]]; then echo act >"$ST/level"; else echo propose >"$ST/level"; fi
+                   echo admin-bypass >"$ST/approved"; echo "recorded: admin bypass" ;;
+  merge) f="$ST/pr-$2.json"; jq '.state = "MERGED"' "$f" >"$f.new" && mv "$f.new" "$f" ;;
+  ensure) # a fresh promotion PR: act is 13, propose 12
+    n=12; [[ "$2" == act ]] && n=13
+    jq -n --argjson n "$n" '{number: $n, state: "OPEN", url: ("https://github.com/x/y/pull/" + ($n | tostring))}' >"$ST/pr-$n.json"
+    printf 'pr=%s\nhead=x\nbranch=promote-x\n' "$n" >"$FIXTURE/.operator/promotion-$2"
+    echo "promotion PR open" ;;
 esac
 STUB
   write_stub overnight-verify <<'STUB'

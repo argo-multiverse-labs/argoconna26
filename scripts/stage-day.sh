@@ -4,7 +4,9 @@
 #
 #   scripts/stage-day.sh morning               11-09 morning: reset, preflight 1 (a full dry-run
 #                                              score required), LLM budget,
-#                                              gh auth, the job unit current + preflight 3
+#                                              gh auth, the job unit current + preflight 3, then
+#                                              leaves the propose promotion PR open (make demo-full
+#                                              needs nothing else)
 #   scripts/stage-day.sh arm-rung-3 [--admin]  between rung 2 and rung 3 (or just before the
 #                                              talk): reset-rung-3 (from suggest it first opens
 #                                              the propose promotion: merge it, record, reset
@@ -172,7 +174,9 @@ cmd_morning() {
   step "gh auth status" gh_auth_ok
   step "make job-install (the unit is current)" make_target job-install
   step "preflight 3 (section job)" "$PREFLIGHT" 3
-  printf '\nNext, by hand:\n  kiosk URL for the Grafana tab: %s\n  tabs: Argo CD, GitHub PR, Grafana; terminal 28 pt light theme, Do Not Disturb on\n  rung 3 later: %s arm-rung-3\n' \
+  # Last, so the checks above see the plain rung-1 start. Scene 2 of demo-full needs this PR open.
+  step "open the propose promotion PR" "$PROMOTION" ensure propose
+  printf '\nNext, by hand:\n  kiosk URL for the Grafana tab: %s\n  tabs: Argo CD, GitHub PR, Grafana; terminal 28 pt light theme, Do Not Disturb on\n  the talk: make demo-full (the propose promotion PR is open; scene 3 opens the act one)\n  rung 3 alone later: %s arm-rung-3\n' \
     "$("$GRAFANA_URL" --kiosk 2>/dev/null || echo '(grafana-run-url.sh failed)')" "scripts/stage-day.sh"
   finish 0 "morning done"
 }

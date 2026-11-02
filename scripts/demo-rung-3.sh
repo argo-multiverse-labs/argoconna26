@@ -11,12 +11,13 @@
 # Nothing here holds the cluster lock (make night refuses under it), merges a PR, or nudges Argo
 # (O13/O29). DEMO_AUTOMERGE_FOR_TEST and DEMO_REJECT_FOR_TEST are ignored on this rung.
 # With NO_WAIT=true the script ends with overnight-verify.sh for the run it just made.
+# Sourced by demo-scene-3.sh, which calls rung3_main under a scene (narration, scene pauses).
 set -euo pipefail
-(($# == 0)) || { echo "usage: demo-rung-3.sh   (env: TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  (($# == 0)) || { echo "usage: demo-rung-3.sh   (env: TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
+fi
 # shellcheck source=scripts/demo-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/demo-common.sh"
-
-OVERNIGHT_VERIFY="${OVERNIGHT_VERIFY:-$DEMO_DIR/../tests/e2e/overnight-verify.sh}"
 
 # unit_value KEY TEXT : the last "KEY: value" line of the unit's journal text.
 unit_value() { sed -n "s/^$1: //p" <<<"$2" | tail -n1; }
@@ -34,7 +35,7 @@ open_tabs() { # PR_URL : the fixed order
   open_tab "$(grafana_kiosk_url)"
 }
 
-main() {
+rung3_main() {
   local run_ts journal cause bump ref conclusion merge_sha
   tracked_level_is act || refuse 6 "autonomy not act" "autonomy on $TRACKED_BRANCH is not act; promote first"
 
@@ -57,10 +58,11 @@ main() {
     beat "no fix PR, only a comment"
     open_tab "$OUT_URL"
     [[ "$NO_WAIT" == true ]] && exit 1
-    exit 0
+    leave_early
   fi
 
   beat "bot PR #$OUT_PR"
+  scene_say pr
   READY_TIMEOUT_S="${POLICY_WAIT_S:-600}" until_ready "policy-check" pr_policy_check_done "$OUT_PR"
   conclusion="$(policy_check_conclusion "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
   if [[ "$conclusion" != success ]]; then
@@ -68,27 +70,34 @@ main() {
     open_tab "$OUT_URL/checks" # the policy working, shown as a feature
     # Under NO_WAIT the run needs the PR path through to Healthy: a failed check is a FAIL.
     [[ "$NO_WAIT" == true ]] && { log_error "FAIL: policy ${conclusion:-none}"; exit 1; }
-    exit 0
+    leave_early
   fi
   beat "policy-check: pass"
+  scene_say policy-pass
 
   READY_TIMEOUT_S="${MERGED_WAIT_S:-900}" until_ready "auto-merge" pr_not_open "$OUT_PR"
   [[ "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]] \
     || refuse 1 "PR closed, not merged" "fix PR $OUT_PR was closed, not merged"
   bot_merged "$OUT_PR" || refuse 1 "merged by a person" "fix PR $OUT_PR was not merged by $BOT_LOGIN"
   beat "auto-merged"
+  scene_say merged
   merge_sha="$(pr_merged_sha "$OUT_PR")"
   READY_TIMEOUT_S="${SYNC_WAIT_S:-120}" until_ready "synced" app_synced_at checkout "$merge_sha"
   beat "synced"
   READY_NOTE="canary, about 60s" READY_TIMEOUT_S="${HEALTHY_WAIT_S:-240}" until_ready "Healthy" app_health_is checkout Healthy
   beat "healthy"
+  scene_say healthy
   open_tabs "$OUT_URL"
+  if [[ -n "$SCENE" ]]; then
+    scene_say verify
+    show_verify "$run_ts" || { [[ "$NO_WAIT" == true ]] && exit 1; leave_early; }
+  fi
 
   if [[ "$NO_WAIT" == true ]]; then
     check "fix PR is two lines" assert_fix_pr_diff "$OUT_PR"
     check "fix PR cites the cause" assert_fix_pr_body "$(pr_body "$OUT_PR")" "$cause" act "$ref"
-    check "overnight-verify" quiet "$OVERNIGHT_VERIFY" "SINCE=$run_ts" "UNTIL=$(date +%s)"
+    [[ -n "$SCENE" ]] || check "overnight-verify" quiet "$OVERNIGHT_VERIFY" "SINCE=$run_ts" "UNTIL=$(date +%s)"
   fi
 }
 
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then rung3_main; fi

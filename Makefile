@@ -444,7 +444,7 @@ disarm: ## Timeout back to 2000 (IMAGE=vX.Y.Z also pins the tag; GIT_ONLY=1 skip
 # Resets between rehearsals (scripts/reset.sh; forward commits only)           #
 ################################################################################
 
-.PHONY: reset-rung-1 reset-rung-2 reset-rung-3 reset-demo
+.PHONY: reset-rung-1 reset-rung-2 reset-rung-3 reset-demo reset-to-scene-0 reset-to-scene-1 reset-to-scene-2 reset-to-scene-3
 reset-rung-1: ## Back to the rung-1 start: disarmed, suggest, history seeded, timeline kept
 	@$(ROOT)/scripts/reset.sh 1
 reset-rung-2: ## Back to the rung-2 start: disarmed, suggest, a fresh propose promotion PR
@@ -453,6 +453,13 @@ reset-rung-3: ## Back to the rung-3 start: disarmed, propose, a fresh act promot
 	@$(ROOT)/scripts/reset.sh 3
 reset-demo: ## Rung-1 reset plus a re-seeded timeline (every full rehearsal starts the same)
 	@$(ROOT)/scripts/reset.sh demo
+
+# Jumping in at a scene (demo-full runs them in order with no reset between). reset-rung-3 also
+# opens the fresh act promotion PR scene 3 needs, and exits 6 from suggest (see stage-day.sh).
+reset-to-scene-0: reset-demo ## Back to before the cold open (reset-demo)
+reset-to-scene-1: reset-rung-1 ## Back to the start of scene 1 (reset-rung-1)
+reset-to-scene-2: reset-rung-2 ## Back to the start of scene 2 (reset-rung-2)
+reset-to-scene-3: reset-rung-3 ## Back to the start of scene 3 (reset-rung-3: propose, a fresh act promotion PR)
 
 ################################################################################
 # Autonomy: promotion PRs and demotion (scripts/promotion-pr.sh)               #
@@ -490,6 +497,26 @@ demo-rung-2: ## Rung 2 (propose) with demo-magic; start from make reset-rung-2
 demo-rung-3: ## Rung 3 (act), live through make night; start from make reset-rung-3 and the act promotion
 	@$(ROOT)/scripts/demo-rung-3.sh
 
+# The scenes (O31): scripts/demo-<scene>.sh. DEMO_PACE=talk|auto, TYPE_SPEED, NO_WAIT; narration
+# comes from narration/<scene>.txt when it exists (local only).
+.PHONY: demo-cold-open demo-prologue demo-scene-1 demo-scene-2 demo-scene-3 demo-epilogue demo-close demo-full
+demo-cold-open: ## Cold open: the 5:00 p.m. mandate, the 2:15 a.m. page
+	@$(ROOT)/scripts/demo-cold-open.sh
+demo-prologue: ## Prologue: Synced. Healthy. On fire.
+	@$(ROOT)/scripts/demo-prologue.sh
+demo-scene-1: ## Scene 1 (rung 1, suggest): look, don't touch
+	@$(ROOT)/scripts/demo-scene-1.sh
+demo-scene-2: ## Scene 2 (rung 2, propose): hands made of version control
+	@$(ROOT)/scripts/demo-scene-2.sh
+demo-scene-3: ## Scene 3 (rung 3, act): back in bed?
+	@$(ROOT)/scripts/demo-scene-3.sh
+demo-epilogue: ## Epilogue: what's real, then make demote
+	@$(ROOT)/scripts/demo-epilogue.sh
+demo-close: ## Close: the timeline, "it's in Slack", the repo
+	@$(ROOT)/scripts/demo-close.sh
+demo-full: ## The whole talk in order, no resets (start from stage-day.sh morning; DEMO_PACE=auto runs unattended)
+	@$(ROOT)/scripts/demo-full.sh
+
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts
 	@mkdir -p $(SNAP_DIR)
@@ -524,15 +551,17 @@ STAGE_ROWS    ?= 40
 RECORDINGS_DIR ?= $(MAIN_ROOT)/recordings
 GIF_IDLE      ?= 2
 
-define record_rung
+# record_cast NAME TARGET : recordings/NAME-<ts>.cast of `make TARGET`.
+define record_cast
 command -v asciinema >/dev/null || { echo "asciinema is not installed" >&2; exit 1; }
 mkdir -p "$(RECORDINGS_DIR)"
-cast="$(RECORDINGS_DIR)/rung-$(1)-$$(date -u +%Y%m%dT%H%M%SZ).cast"
+cast="$(RECORDINGS_DIR)/$(1)-$$(date -u +%Y%m%dT%H%M%SZ).cast"
 asciinema rec --return --window-size "$(STAGE_COLS)x$(STAGE_ROWS)" \
-  --command "$${RECORD_CMD:-NO_WAIT=false $(MAKE) --no-print-directory -C $(ROOT) demo-rung-$(1)}" \
+  --command "$${RECORD_CMD:-NO_WAIT=false $(MAKE) --no-print-directory -C $(ROOT) $(2)}" \
   "$$cast"
 echo "recorded: $$cast"
 endef
+record_rung = $(call record_cast,rung-$(1),demo-rung-$(1))
 
 .PHONY: record-rung-1
 record-rung-1: ## Record rung 1 on the stage pane size (recordings/rung-1-<ts>.cast)
@@ -545,6 +574,22 @@ record-rung-2: ## Record rung 2 on the stage pane size (recordings/rung-2-<ts>.c
 .PHONY: record-rung-3
 record-rung-3: ## Record rung 3 on the stage pane size (recordings/rung-3-<ts>.cast)
 	@$(call record_rung,3)
+
+.PHONY: record-scene-1
+record-scene-1: ## Record scene 1 on the stage pane size (recordings/scene-1-<ts>.cast)
+	@$(call record_cast,scene-1,demo-scene-1)
+
+.PHONY: record-scene-2
+record-scene-2: ## Record scene 2 on the stage pane size (recordings/scene-2-<ts>.cast)
+	@$(call record_cast,scene-2,demo-scene-2)
+
+.PHONY: record-scene-3
+record-scene-3: ## Record scene 3 on the stage pane size (recordings/scene-3-<ts>.cast)
+	@$(call record_cast,scene-3,demo-scene-3)
+
+.PHONY: record-full
+record-full: ## Record the whole talk on the stage pane size (recordings/full-<ts>.cast)
+	@$(call record_cast,full,demo-full)
 
 .PHONY: gif
 gif: ## Convert a cast to a GIF with agg (CAST=<file>, default the newest cast)

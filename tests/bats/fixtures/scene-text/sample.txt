@@ -1,0 +1,5 @@
+[intro]
+# A sample line for the narration tests.
+
+[teach]
+# [Hilliary: read-only by default; dry runs]
