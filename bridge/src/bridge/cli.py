@@ -447,21 +447,28 @@ async def run_open_test_pr(
         files[path] = base64.b64decode(f.json()["content"]).decode()
     edits = scenario_edits(scenario, files)
 
+    ref_path = f"/git/refs/heads/{quote(branch, safe='/')}"
+    # GitHub may refuse the App's workflow edit at any of the three writes (the tree, the commit
+    # or the ref). For tamper-workflow any 4xx there is the refusal under test.
     t = await gh.call("POST", "/git/trees", json={
         "base_tree": base_tree,
         "tree": [{"path": p, "mode": "100644", "type": "blob", "content": txt} for p, txt in sorted(edits.items())],
     })
-    t.raise_for_status()
-    n = await gh.call("POST", "/git/commits", json={
-        "message": f"policy negative test: {scenario}", "tree": t.json()["sha"], "parents": [head]})
-    n.raise_for_status()
-    commit = str(n.json()["sha"])
-    r = await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit})
-    ref_path = f"/git/refs/heads/{quote(branch, safe='/')}"
+    r = t
+    if t.status_code < 300:
+        n = await gh.call("POST", "/git/commits", json={
+            "message": f"policy negative test: {scenario}", "tree": t.json()["sha"], "parents": [head]})
+        r = n
+        if n.status_code < 300:
+            commit = str(n.json()["sha"])
+            r = await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit})
+    if scenario != "tamper-workflow":
+        r.raise_for_status()
 
     if scenario == "tamper-workflow":
         if 400 <= r.status_code < 500:
-            res.refused_status, res.refused_message = r.status_code, _message(r)
+            step = r.request.url.path.rsplit("/", 1)[-1]  # trees | commits | refs
+            res.refused_status, res.refused_message = r.status_code, f"{step}: {_message(r)}"
             left = await gh.call("GET", f"/git/ref/heads/{quote(branch, safe='/')}")
             if left.status_code < 300:
                 await gh.call("DELETE", ref_path)
@@ -473,7 +480,6 @@ async def run_open_test_pr(
             r.raise_for_status()
         return res
 
-    r.raise_for_status()
     res.head = commit
     body = TEST_PR_BODY
     if scenario in ("image-change", "tamper-autofix"):

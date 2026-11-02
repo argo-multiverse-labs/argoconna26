@@ -12,7 +12,8 @@
 #                      message for the missing label, so golden-path also ran from the base policy
 #   tamper-workflow    the App's commit touching .github/workflows/policy.yml is refused with a 4xx
 #                      (no workflows permission, P21) and no PR exists
-#   tamper-autonomy    an App-authored PR that sets level: act: policy-check fails ("rule 1:")
+#   tamper-autonomy    an App-authored PR that sets level: act: policy-check fails ("rule 1:");
+#                      needs autonomy below act on the tracked branch
 #
 # What GitHub itself must block depends on the live rules on the tracked branch (read, never
 # changed, from GET /repos/{r}/rules/branches/{branch}):
@@ -204,6 +205,12 @@ case_tamper_workflow() {
 }
 
 case_tamper_autonomy() {
+  local lvl
+  lvl="$(tracked_autonomy_level || true)"
+  if [[ "$lvl" == act || -z "$lvl" ]]; then
+    failc tamper-autonomy "autonomy on $TRACKED_BRANCH is '${lvl:-unreadable}': the agent can only try to raise it from below act (make demote first)"
+    return 0
+  fi
   open_pr tamper-autonomy || return 0
   if wait_check tamper-autonomy; then
     expect_failure_with tamper-autonomy '(^|[^0-9A-Za-z])rule 1: ' '"rule 1:"'

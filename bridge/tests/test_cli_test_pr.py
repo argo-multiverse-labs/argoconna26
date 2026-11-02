@@ -298,3 +298,29 @@ async def test_try_merge_without_rest_never_puts(_no_unmocked_http) -> None:
         res = await _try(rest=False)
     assert res.auto_merge_enabled is False and "clean status" in res.auto_merge_error
     assert res.rest_status is None and not put.called
+
+
+async def test_tamper_workflow_refused_at_tree_creation(_no_unmocked_http) -> None:
+    """GitHub refuses the App's tree that touches .github/workflows/ (403), before any commit or ref."""
+    import respx
+
+    msg = "Resource not accessible by integration"
+    with respx.mock(assert_all_called=False) as r:
+        tree, commit, ref, pulls, _ = _mock_repo(r)
+        tree.mock(return_value=httpx.Response(403, json={"message": msg}))
+        r.get(f"{R}/git/ref/heads/agent/test-tamper-workflow-T1").mock(return_value=httpx.Response(404, json={}))
+        res = await _open("tamper-workflow")
+    assert res.number is None
+    assert res.refused_status == 403 and msg in res.refused_message
+    assert "tree" in res.refused_message
+    assert not commit.called and not ref.called and not pulls.called
+
+
+async def test_other_scenarios_still_raise_on_a_tree_error(_no_unmocked_http) -> None:
+    import respx
+
+    with respx.mock(assert_all_called=False) as r:
+        tree, *_ = _mock_repo(r)
+        tree.mock(return_value=httpx.Response(403, json={"message": "nope"}))
+        with pytest.raises(httpx.HTTPStatusError):
+            await _open("image-change")
