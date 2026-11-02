@@ -1,5 +1,10 @@
 """Bridge settings, read from the environment: the Deployment's env, Secret `bridge-secrets`, and
-the optional Secret `bridge-env` (test hooks only, Task 4.6; not managed by Argo CD)."""
+the optional Secret `bridge-env` (test hooks only, Task 4.6; not managed by Argo CD).
+
+`bridge-env` is loaded with envFrom, which loses to any `env` entry of the same name. The
+Deployment pins every setting under the first name listed here, so the Secret can only
+reach the two test hooks, whose first name starts with TEST_ (TEST_HOOKS). A test checks
+that against the manifest. /status and preflight show when a hook is active."""
 
 from __future__ import annotations
 
@@ -9,6 +14,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def _env(*names: str) -> AliasChoices:
     return AliasChoices(*names)
+
+
+DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+DEFAULT_HOLMES_TIMEOUT_S = 115.0
+# Settings fields a TEST_* variable can override (Task 4.6 failure paths).
+TEST_HOOKS = ("confidence_threshold", "holmes_timeout_s")
 
 
 class Settings(BaseSettings):
@@ -23,7 +34,7 @@ class Settings(BaseSettings):
     webhook_token: SecretStr = Field(
         default=SecretStr(""), validation_alias=_env("BRIDGE_WEBHOOK_TOKEN", "WEBHOOK_TOKEN")
     )
-    github_repo: str = Field(default="", validation_alias=_env("GITHUB_REPO", "REPO_SLUG"))
+    github_repo: str = Field(default="", validation_alias=_env("REPO_SLUG", "GITHUB_REPO"))
     github_api_url: str = Field(default="https://api.github.com", validation_alias=_env("GITHUB_API_URL"))
     tracked_branch: str = Field(default="build/demo", validation_alias=_env("TRACKED_BRANCH"))
     github_app_id: str = Field(default="", validation_alias=_env("GITHUB_APP_ID"))
@@ -35,7 +46,7 @@ class Settings(BaseSettings):
     # TEST_HOLMES_TIMEOUT_S comes first: it is the Task 4.6 timeout hook, set in the optional
     # Secret bridge-env, and a Deployment `env` entry (HOLMES_TIMEOUT_S) beats `envFrom`.
     holmes_timeout_s: float = Field(
-        default=115, gt=0, validation_alias=_env("TEST_HOLMES_TIMEOUT_S", "HOLMES_TIMEOUT_S")
+        default=DEFAULT_HOLMES_TIMEOUT_S, gt=0, validation_alias=_env("TEST_HOLMES_TIMEOUT_S", "HOLMES_TIMEOUT_S")
     )
     stage_cols: int = Field(default=30, ge=8, validation_alias=_env("STAGE_COLS"))
     cdevents_url: str = Field(default="", validation_alias=_env("CDEVENTS_URL"))
@@ -46,8 +57,12 @@ class Settings(BaseSettings):
     dryrun_summary_path: str = Field(
         default="/etc/bridge/dryrun/summary.json", validation_alias=_env("DRYRUN_SUMMARY_PATH")
     )
-    # No upper bound: a value above 1 refuses every answer (the Task 4.6 forced-refusal hook).
-    confidence_threshold: float = Field(default=0.7, ge=0, validation_alias=_env("CONFIDENCE_THRESHOLD"))
+    # No upper bound: a value above 1 refuses every answer (the Task 4.6 forced-refusal hook,
+    # TEST_CONFIDENCE_THRESHOLD; the Deployment pins CONFIDENCE_THRESHOLD to the default).
+    confidence_threshold: float = Field(
+        default=DEFAULT_CONFIDENCE_THRESHOLD, ge=0,
+        validation_alias=_env("TEST_CONFIDENCE_THRESHOLD", "CONFIDENCE_THRESHOLD"),
+    )
     config_allowlist: list[str] = Field(
         default_factory=lambda: ["apps/*/config/*.yaml"], validation_alias=_env("CONFIG_ALLOWLIST")
     )
@@ -72,3 +87,11 @@ class Settings(BaseSettings):
     # The fix-PR outcome reconciler (Task 4.3a) polls agent/<app>-* PRs this often.
     reconcile_app: str = Field(default="checkout", validation_alias=_env("RECONCILE_APP"))
     reconcile_interval_s: float = Field(default=30, gt=0, validation_alias=_env("RECONCILE_INTERVAL_S"))
+
+    @property
+    def test_hooks_active(self) -> bool:
+        """True when a test hook moved the threshold or the HolmesGPT timeout off its default."""
+        return (
+            self.confidence_threshold != DEFAULT_CONFIDENCE_THRESHOLD
+            or self.holmes_timeout_s != DEFAULT_HOLMES_TIMEOUT_S
+        )

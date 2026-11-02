@@ -202,6 +202,9 @@ def test_status_shape(client: TestClient) -> None:
         "holmes_reachable",
         "github_token_ok",
         "dry_forge",
+        "confidence_threshold",
+        "holmes_timeout_s",
+        "test_hooks_active",
     }
     assert s["queue_depth"] == 0
     assert s["last_incident"]["key"] == f"checkout@{'a' * 40}"
@@ -225,3 +228,21 @@ def test_non_sha_revisions_rejected_422(client: TestClient, handler: RecordingHa
     r = client.post("/hooks/argocd", json=hook_body(**overrides), headers=AUTH)
     assert r.status_code == 422
     assert handler.calls == []
+
+
+def test_status_shows_the_effective_test_hooks(settings: Settings, handler) -> None:
+    """A leftover bridge-env hook must be visible: /status shows the effective threshold and
+    timeout and whether either differs from the default (slice-4 review)."""
+    with TestClient(create_app(settings, handler=handler)) as c:
+        s = c.get("/status").json()
+    assert s["confidence_threshold"] == 0.7
+    assert s["holmes_timeout_s"] == 115
+    assert s["test_hooks_active"] is False
+    hooked = settings.model_copy(update={"confidence_threshold": 1.01})
+    with TestClient(create_app(hooked, handler=handler)) as c:
+        s = c.get("/status").json()
+    assert s["confidence_threshold"] == 1.01
+    assert s["test_hooks_active"] is True
+    timed = settings.model_copy(update={"holmes_timeout_s": 1.0})
+    with TestClient(create_app(timed, handler=handler)) as c:
+        assert c.get("/status").json()["test_hooks_active"] is True

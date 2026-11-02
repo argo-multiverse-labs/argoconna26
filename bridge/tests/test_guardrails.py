@@ -287,3 +287,19 @@ def test_test_holmes_timeout_overrides_deployment_value(monkeypatch: pytest.Monk
     assert Settings().holmes_timeout_s == 1
     monkeypatch.delenv("TEST_HOLMES_TIMEOUT_S")
     assert Settings().holmes_timeout_s == 115
+
+
+def test_confidence_hook_has_a_test_name_that_beats_the_pinned_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Deployment pins CONFIDENCE_THRESHOLD, so the forced-refusal hook is TEST_CONFIDENCE_THRESHOLD."""
+    monkeypatch.setenv("CONFIDENCE_THRESHOLD", "0.7")
+    monkeypatch.setenv("TEST_CONFIDENCE_THRESHOLD", "1.01")
+    assert Settings().confidence_threshold == pytest.approx(1.01)
+    monkeypatch.delenv("TEST_CONFIDENCE_THRESHOLD")
+    assert Settings().confidence_threshold == pytest.approx(0.7)
+
+
+def test_repo_slug_beats_github_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Deployment sets REPO_SLUG; a GITHUB_REPO from envFrom must not win over it."""
+    monkeypatch.setenv("REPO_SLUG", "argo-multiverse-labs/argoconna26")
+    monkeypatch.setenv("GITHUB_REPO", "someone/else")
+    assert Settings().github_repo == "argo-multiverse-labs/argoconna26"

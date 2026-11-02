@@ -148,6 +148,32 @@ section_llm() {
   fi
 }
 
+# bridge_hooks (every rung): the test-hook Secret bridge-env must not exist, and the running
+# bridge must report no test hook active. A failure-paths run that was killed leaves it behind,
+# and then every live incident is refused or handed off (Task 4.6). Key names only, never values.
+section_bridge_hooks() {
+  local json keys status
+  if ! _api_up; then
+    check_fail "API server unreachable: bridge-env not checked"; return 0
+  fi
+  if ! json="$(k get secret bridge-env -n "$NS_AIOPS" --ignore-not-found -o json 2>/dev/null)"; then
+    check_fail "cannot read Secret bridge-env in $NS_AIOPS"; return 0
+  fi
+  if [[ -z "$json" ]]; then
+    check_pass "no bridge-env Secret (no bridge test hooks)"
+  else
+    keys="$(jq -r '(.data // {}) | keys | join(" ")' <<<"$json")"
+    check_fail "Secret bridge-env exists (${keys:-no keys}): run make bridge-hooks-clear"
+  fi
+  if ! status="$(curl -sf --max-time 5 "127.0.0.1:${PORT_BRIDGE}/status")"; then
+    check_warn "bridge /status does not answer on port $PORT_BRIDGE: test hooks not checked"
+  elif jq -e '.test_hooks_active == false' >/dev/null <<<"$status"; then
+    check_pass "bridge /status: no test hook active"
+  else
+    check_fail "bridge /status: test hooks active (confidence_threshold $(jq -r .confidence_threshold <<<"$status"), holmes_timeout_s $(jq -r .holmes_timeout_s <<<"$status")): run make bridge-hooks-clear"
+  fi
+}
+
 main() {
   local rung="${1:-}" s extra
   load_env

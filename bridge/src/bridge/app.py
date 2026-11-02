@@ -286,6 +286,10 @@ def create_app(
             "holmes_reachable": state.holmes_reachable,
             "github_token_ok": state.github_token_ok,
             "dry_forge": settings.dry_forge,
+            # A leftover bridge-env test hook would refuse or hand off every live incident.
+            "confidence_threshold": settings.confidence_threshold,
+            "holmes_timeout_s": settings.holmes_timeout_s,
+            "test_hooks_active": settings.test_hooks_active,
         }
 
     return app

@@ -235,6 +235,12 @@ bridge-log: ## Follow the bridge's stage lines (the short lines for the projecto
 	@$(CTX)
 	k logs -n "$$NS_AIOPS" deploy/bridge -f | grep --line-buffered '▸'
 
+.PHONY: bridge-hooks-check bridge-hooks-clear
+bridge-hooks-check: ## Fail while the bridge's test-hook Secret bridge-env exists (names keys, never values)
+	@$(ROOT)/scripts/bridge-hooks.sh check
+bridge-hooks-clear: ## Delete the test-hook Secret bridge-env and restart the bridge (resets call this)
+	@$(ROOT)/scripts/bridge-hooks.sh clear
+
 .PHONY: redeploy-bridge redeploy-sim
 redeploy-bridge: images ## Rebuild the bridge image and restart its pods when they run a stale one
 	@$(LOCKED)
