@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 
@@ -17,12 +18,35 @@ class ForgeNotFound(ForgeError):
     """The file, commit or ref does not exist."""
 
 
+class ForgeConflict(ForgeError):
+    """The write collides with something that exists (for example the branch name is taken)."""
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    number: int
+    url: str
+    node_id: str
+    head_sha: str
+
+
+#: Every branch the bridge creates starts with this, and every guard keys on it.
+AGENT_BRANCH_PREFIX = "agent/"
+
+
+def check_agent_branch(branch: str) -> None:
+    """Refuse any branch name outside `agent/<name>`, before a single call is made."""
+    name = branch[len(AGENT_BRANCH_PREFIX) :] if branch.startswith(AGENT_BRANCH_PREFIX) else ""
+    if not name or ".." in branch:
+        raise ValueError(f"the bridge only opens PRs from {AGENT_BRANCH_PREFIX}<name> branches, not {branch!r}")
+
+
 @runtime_checkable
 class Forge(Protocol):
     """Every Git and forge call the bridge makes. Reads first, then writes.
 
-    Slice 4 adds `open_pr`, `list_open_agent_prs`, `enable_auto_merge`,
-    `merge_pr` and `check_run_status`.
+    `open_pr` makes one commit on a new `agent/*` branch and opens the PR. Slice 4
+    still adds `enable_auto_merge`, `merge_pr` and `check_run_status`.
     """
 
     async def read_file(self, path: str, ref: str) -> str: ...
@@ -40,3 +64,15 @@ class Forge(Protocol):
     async def comment_on_commit(self, sha: str, body: str) -> str: ...
 
     async def comment_on_pr(self, number: int, body: str) -> str: ...
+
+    async def open_pr(
+        self,
+        base: str,
+        branch: str,
+        title: str,
+        body: str,
+        changes: dict[str, str],
+        commit_message: str,
+    ) -> PullRequest: ...
+
+    async def list_open_agent_prs(self, app: str) -> list[PullRequest]: ...

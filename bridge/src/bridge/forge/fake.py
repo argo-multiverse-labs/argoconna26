@@ -4,7 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .base import ForgeNotFound
+from .base import (
+    AGENT_BRANCH_PREFIX,
+    ForgeConflict,
+    ForgeNotFound,
+    PullRequest,
+    check_agent_branch,
+)
+
+
+@dataclass
+class OpenedPR:
+    base: str
+    branch: str
+    title: str
+    body: str
+    changes: dict[str, str]
+    commit_message: str
+    pr: PullRequest
 
 
 @dataclass
@@ -28,6 +45,7 @@ class FakeForge:
     fail_writes: BaseException | None = None
     commit_comments: list[tuple[str, str]] = field(default_factory=list)
     pr_comments: list[tuple[int, str]] = field(default_factory=list)
+    opened: list[OpenedPR] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
 
     def _read(self, *call: object) -> None:
@@ -77,3 +95,30 @@ class FakeForge:
             raise self.fail_writes
         self.pr_comments.append((number, body))
         return f"https://forge.test/pull/{number}#comment-{len(self.pr_comments)}"
+
+    async def open_pr(
+        self,
+        base: str,
+        branch: str,
+        title: str,
+        body: str,
+        changes: dict[str, str],
+        commit_message: str,
+    ) -> PullRequest:
+        self.calls.append(("open_pr", branch))
+        check_agent_branch(branch)
+        if not changes:
+            raise ValueError("open_pr needs at least one entry in changes")
+        if self.fail_writes is not None:
+            raise self.fail_writes
+        if any(o.branch == branch for o in self.opened):
+            raise ForgeConflict(f"branch {branch} already exists", 422)
+        n = len(self.opened) + 1
+        pr = PullRequest(n, f"https://forge.test/pull/{n}", f"PR_{n}", f"{n:040x}")
+        self.opened.append(OpenedPR(base, branch, title, body, dict(changes), commit_message, pr))
+        return pr
+
+    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
+        self._read("list_open_agent_prs", app)
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+        return [o.pr for o in self.opened if o.branch.startswith(prefix)]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from .. import stagelog
-from .base import Forge
+from .base import Forge, PullRequest, check_agent_branch
 
 log = logging.getLogger("bridge.forge")
 
@@ -47,3 +47,18 @@ class DryForge:
 
     async def comment_on_pr(self, number: int, body: str) -> str:
         return self._skip("comment", f"pr {number}")
+
+    async def open_pr(
+        self,
+        base: str,
+        branch: str,
+        title: str,
+        body: str,
+        changes: dict[str, str],
+        commit_message: str,
+    ) -> PullRequest:
+        check_agent_branch(branch)
+        return PullRequest(0, self._skip("open pr", branch), "", "")
+
+    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
+        return await self.inner.list_open_agent_prs(app)

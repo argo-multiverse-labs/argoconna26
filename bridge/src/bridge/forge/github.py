@@ -10,8 +10,17 @@ from urllib.parse import quote
 import httpx
 
 from ..github_auth import GitHubAuthError
-from .base import ForgeError, ForgeNotFound
+from .base import (
+    AGENT_BRANCH_PREFIX,
+    ForgeConflict,
+    ForgeError,
+    ForgeNotFound,
+    PullRequest,
+    check_agent_branch,
+)
 
+# The App's login (demo.env BOT_LOGIN); list_open_agent_prs trusts only PRs it authored.
+DEFAULT_BOT_LOGIN = "argoconna26-agent[bot]"
 _HEX = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -28,11 +37,13 @@ class GitHubForge:
         api_url: str = "https://api.github.com",
         http: httpx.AsyncClient | None = None,
         timeout_s: float = 20.0,
+        bot_login: str = DEFAULT_BOT_LOGIN,
     ) -> None:
         if repo.count("/") != 1:
             raise ValueError("repo must be owner/name")
         self.repo = repo
         self._tokens = token_provider
+        self.bot_login = bot_login
         self._api = api_url.rstrip("/")
         self._http = http or httpx.AsyncClient(timeout=timeout_s)
 
@@ -129,3 +140,84 @@ class GitHubForge:
     async def comment_on_pr(self, number: int, body: str) -> str:
         r = await self._request("POST", f"/issues/{int(number)}/comments", json={"body": body})
         return str(r.json().get("html_url", ""))
+
+    async def open_pr(
+        self,
+        base: str,
+        branch: str,
+        title: str,
+        body: str,
+        changes: dict[str, str],
+        commit_message: str,
+    ) -> PullRequest:
+        """One commit through the Git Data API on a new `agent/*` branch, then the PR.
+
+        Blobs, then a tree on the base tree, then the commit, then the ref. A taken branch name
+        raises ForgeConflict before any PR exists. If the PR call fails after the ref was made,
+        the branch is deleted again so a retry can reuse the name.
+        """
+        check_agent_branch(branch)
+        if not changes:
+            raise ValueError("open_pr needs at least one entry in changes")
+        ref = await self._request("GET", f"/git/ref/heads/{self._q(base)}")
+        base_sha = str(ref.json()["object"]["sha"])
+        base_commit = await self._request("GET", f"/git/commits/{base_sha}")
+        base_tree = str(base_commit.json()["tree"]["sha"])
+        entries = []
+        for path, content in changes.items():
+            blob = await self._request("POST", "/git/blobs", json={"content": content, "encoding": "utf-8"})
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": str(blob.json()["sha"])})
+        tree = await self._request("POST", "/git/trees", json={"base_tree": base_tree, "tree": entries})
+        commit = await self._request(
+            "POST",
+            "/git/commits",
+            json={"message": commit_message, "tree": str(tree.json()["sha"]), "parents": [base_sha]},
+        )
+        commit_sha = str(commit.json()["sha"])
+        try:
+            await self._request("POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit_sha})
+        except ForgeError as exc:
+            if exc.status == 422:  # "Reference already exists"
+                raise ForgeConflict(f"branch {branch} already exists", 422) from None
+            raise
+        try:
+            r = await self._request("POST", "/pulls", json={"title": title, "head": branch, "base": base, "body": body})
+        except ForgeError:
+            try:
+                await self._request("DELETE", f"/git/refs/heads/{self._q(branch)}")
+            except ForgeError:
+                pass  # best effort; the original failure is what the caller needs
+            raise
+        pr = r.json()
+        return PullRequest(
+            number=int(pr["number"]),
+            url=str(pr.get("html_url", "")),
+            node_id=str(pr.get("node_id", "")),
+            head_sha=str((pr.get("head") or {}).get("sha", commit_sha)),
+        )
+
+    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
+        """Open PRs from `agent/<app>-*` branches whose author is the bot."""
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+        found: list[PullRequest] = []
+        page = 1
+        while True:
+            r = await self._request("GET", "/pulls", params={"state": "open", "per_page": 100, "page": page})
+            batch = r.json()
+            for pr in batch:
+                head = pr.get("head") or {}
+                if not str(head.get("ref", "")).startswith(prefix):
+                    continue
+                if (pr.get("user") or {}).get("login") != self.bot_login:
+                    continue
+                found.append(
+                    PullRequest(
+                        number=int(pr["number"]),
+                        url=str(pr.get("html_url", "")),
+                        node_id=str(pr.get("node_id", "")),
+                        head_sha=str(head.get("sha", "")),
+                    )
+                )
+            if len(batch) < 100:
+                return found
+            page += 1
