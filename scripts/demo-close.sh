@@ -12,6 +12,7 @@ open_tab "$(grafana_kiosk_url)"
 scene_say timeline
 speaker_beat sre "it's in Slack, the callback"
 scene_say slack
+speaker_beat both "character drop; the landing line"
 scene_say drop
 beat "${REPO_SLUG%%/*}/"
 beat "${REPO_SLUG#*/}"

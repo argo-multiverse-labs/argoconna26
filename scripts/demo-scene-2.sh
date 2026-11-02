@@ -3,7 +3,7 @@
 # then the act promotion PR is opened offstage for scene 3 (when the level is propose; after an
 # on-stage reject + demote it is suggest, and scene 3 says so). Start from the end of scene 1
 # (or `make reset-to-scene-2`). Narration keys: intro, promotion, board, incident-again, identity,
-# fix-pr, review, merged, rejected, act-offstage.
+# fix-pr, review, merged, rejected, demote, act-offstage.
 set -euo pipefail
 (($# == 0)) || { echo "usage: demo-scene-2.sh   (env: DEMO_PACE, TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
 # shellcheck source=scripts/demo-rung-2.sh

@@ -34,5 +34,6 @@ if ! tracked_level_is act; then
   promote_to act "$act_pr"
   if [[ "$NO_WAIT" == true ]]; then check "approver is a role" approved_by_is_role; fi
 fi
+open_tab "https://github.com/$REPO_SLUG/blob/$TRACKED_BRANCH/policy/autofix.rego" # the guardrail, before it acts
 scene_say policy
 rung3_main # types make night, then the teach narration runs under the wait (no stop)

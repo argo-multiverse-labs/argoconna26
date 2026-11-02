@@ -27,8 +27,9 @@ rejected_branch() {
   local want
   want="$(awk -v a="$1" 'BEGIN {printf "%d", a + 1}')"
   beat "rejected: demoting"
-  scene_say rejected
+  scene_say rejected # still the On-call SRE's turn (the review): rejects it, and why
   speaker_beat pe "the safety valve"
+  scene_say demote # the Platform Engineer's callback
   typed "make demote"
   until_ready "autonomy suggest" tracked_level_is suggest
   until_ready "rejected count up" bridge_metric_at_least "$REJECTED_SERIES" "$want"

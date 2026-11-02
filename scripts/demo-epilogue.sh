@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Epilogue, "What's real": panel 4 (touch-points per level), the verifier output from scene 3
 # (kept in .operator/last-verify), the honest framing, and `make demote` back to suggest as the
-# safety valve. Narration keys: panel, verifier, real, simulated, valve, safe.
+# safety valve. Narration keys: panel, verifier, real, real-list, simulated, valve, safe.
 set -euo pipefail
 (($# == 0)) || { echo "usage: demo-epilogue.sh   (env: DEMO_PACE, TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
 # shellcheck source=scripts/demo-common.sh
@@ -38,10 +38,14 @@ open_tab "$(grafana_kiosk_url)"
 scene_say verifier
 replay_verify
 fourth_wall "Real, and stood in"
+speaker_beat sre "what's real"
 scene_say real
+speaker_beat pe "real, and stood in"
+scene_say real-list
 scene_say simulated
-speaker_beat both "the safety valve"
+speaker_beat sre "the safety valve"
 scene_say valve
+speaker_beat pe "make demote"
 as_platform_engineer
 demote_to_suggest
 scene_say safe
