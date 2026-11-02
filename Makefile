@@ -498,3 +498,46 @@ verify-idempotent: ## rm-kind, build-all, build-all, compare, preflight
 	$(MAKE) --no-print-directory compare
 	$(MAKE) --no-print-directory preflight
 	log_info "verify-idempotent: OK"
+
+################################################################################
+# Recordings (backup clips; recordings/ is git-ignored)                        #
+################################################################################
+
+# The cast is sized to the stage pane (STAGE_COLS from demo.env). asciinema 3 takes
+# --window-size COLSxROWS where asciinema 2 had --cols/--rows. RECORD_CMD replaces the
+# recorded command (used by the smoke test, which needs no cluster).
+STAGE_ROWS    ?= 40
+RECORDINGS_DIR ?= $(MAIN_ROOT)/recordings
+GIF_IDLE      ?= 2
+
+define record_rung
+command -v asciinema >/dev/null || { echo "asciinema is not installed" >&2; exit 1; }
+mkdir -p "$(RECORDINGS_DIR)"
+cast="$(RECORDINGS_DIR)/rung-$(1)-$$(date -u +%Y%m%dT%H%M%SZ).cast"
+asciinema rec --return --window-size "$(STAGE_COLS)x$(STAGE_ROWS)" \
+  --command "$${RECORD_CMD:-NO_WAIT=false $(MAKE) --no-print-directory -C $(ROOT) demo-rung-$(1)}" \
+  "$$cast"
+echo "recorded: $$cast"
+endef
+
+.PHONY: record-rung-1
+record-rung-1: ## Record rung 1 on the stage pane size (recordings/rung-1-<ts>.cast)
+	@$(call record_rung,1)
+
+.PHONY: record-rung-2
+record-rung-2: ## Record rung 2 on the stage pane size (recordings/rung-2-<ts>.cast)
+	@$(call record_rung,2)
+
+.PHONY: record-rung-3
+record-rung-3: ## Record rung 3 on the stage pane size (recordings/rung-3-<ts>.cast)
+	@$(call record_rung,3)
+
+.PHONY: gif
+gif: ## Convert a cast to a GIF with agg (CAST=<file>, default the newest cast)
+	@command -v agg >/dev/null || { echo "agg is not installed" >&2; exit 1; }
+	cast="$(or $(CAST),$(shell ls -t $(RECORDINGS_DIR)/*.cast 2>/dev/null | head -n 1))"
+	[[ -n "$$cast" && -f "$$cast" ]] || { echo "no cast: pass CAST=<file>" >&2; exit 1; }
+	gif="$(or $(GIF),$${cast%.cast}.gif)"
+	agg --idle-time-limit "$(GIF_IDLE)" --last-frame-duration 3 "$$cast" "$$gif"
+	[[ -s "$$gif" ]] || { echo "empty gif: $$gif" >&2; exit 1; }
+	echo "gif: $$gif"
