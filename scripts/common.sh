@@ -157,6 +157,20 @@ _lock_is_held() { # true when some open file description holds the flock
   ! ( flock -n 9 ) 9<"$1" 2>/dev/null
 }
 
+# _lock_openers FILE : "PID (command)" for every process with FILE open, so an orphan that
+# inherited the lock fd (its parent killed without cleanup) is easy to find; "none found" if none.
+_lock_openers() {
+  local f fd pid out=()
+  f="$(readlink -f "$1")"
+  for fd in /proc/[0-9]*/fd/*; do
+    [[ "$(readlink "$fd" 2>/dev/null)" == "$f" ]] || continue
+    pid="${fd#/proc/}" pid="${pid%%/*}"
+    [[ " ${out[*]} " == *" $pid ("* ]] && continue
+    out+=("$pid ($(cat "/proc/$pid/comm" 2>/dev/null || echo '?'))")
+  done
+  if ((${#out[@]})); then printf '%s' "${out[*]}"; else printf 'none found'; fi
+}
+
 cluster_lock() {
   local lockfile holder_pid holder_info
   lockfile="$(_lock_file)"
@@ -175,8 +189,8 @@ cluster_lock() {
   eval "exec ${CLUSTER_LOCK_FD}>>\"\$lockfile\""
   if ! flock -n "$CLUSTER_LOCK_FD"; then
     holder_info="$(head -n1 "$lockfile" 2>/dev/null || true)"
-    log_error "cluster lock is held by: ${holder_info:-unknown holder}"
     eval "exec ${CLUSTER_LOCK_FD}>&-"
+    log_error "cluster lock is held by: ${holder_info:-unknown holder}; open by: $(_lock_openers "$lockfile")"
     exit 5
   fi
   printf '%s %s\n' "$$" "$(ps -o args= -p "$$" 2>/dev/null | cut -c1-120)" > "$lockfile"

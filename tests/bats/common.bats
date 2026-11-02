@@ -199,6 +199,25 @@ OUTER
   [ "$status" -eq 5 ]
 }
 
+@test "the exit-5 message names an orphan that still holds the lock after its parent died" {
+  # The holder starts a background child that inherits the lock fd, then exits without cleanup.
+  bash -c "cd '$FIXTURE'; . '$REPO_ROOT/scripts/common.sh'; cluster_lock; sleep 60 & echo \$! >'$BATS_TEST_TMPDIR/orphan'; exit 0"
+  ORPHAN="$(cat "$BATS_TEST_TMPDIR/orphan")"
+  run in_fixture 'cluster_lock'
+  kill "$ORPHAN" 2>/dev/null || true
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"open by: $ORPHAN"* ]]
+}
+
+@test "a background child started with the lock fd closed does not keep the lock" {
+  bash -c "cd '$FIXTURE'; . '$REPO_ROOT/scripts/common.sh'; cluster_lock; sleep 60 {CLUSTER_LOCK_FD}>&- & echo \$! >'$BATS_TEST_TMPDIR/child'; exit 0"
+  CHILD="$(cat "$BATS_TEST_TMPDIR/child")"
+  run in_fixture 'cluster_lock; echo got-it'
+  kill "$CHILD" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *got-it* ]]
+}
+
 # ---------------------------------------------------------------- check_fleet_disarmed
 # kubectl stub: one Ready checkout pod; curl stub: Prometheus answers from files.
 fleet_setup() {

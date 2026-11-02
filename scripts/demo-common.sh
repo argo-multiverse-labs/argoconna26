@@ -287,7 +287,7 @@ start_pr_helper() {
       [[ "$(policy_check_conclusion "$(gh pr view "$pr" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")" == success ]]
       gh pr merge "$pr" --repo "$REPO_SLUG" --merge >/dev/null
     fi
-  ) >/dev/null 2>&1 &
+  ) >/dev/null 2>&1 {CLUSTER_LOCK_FD}>&- & # never inherits the cluster lock's fd
   HELPER_PID=$!
   trap stop_pr_helper EXIT
 }
