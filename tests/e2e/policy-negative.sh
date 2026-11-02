@@ -24,7 +24,9 @@
 #   - with the required policy-check status live: enable auto-merge with the App token (as the
 #     bridge does), then mergeStateStatus is BLOCKED and the PR is still unmerged 60 s after the
 #     check concluded; for tamper-autonomy also a REST merge with the App token gets a 4xx
-#   - with code-owner review live: tamper-autonomy's reviewDecision is REVIEW_REQUIRED
+#   - with code-owner review live: tamper-autonomy has a code-owner review request for the
+#     promotion-board team (reviewRequests asCodeOwner). Under rulesets reviewDecision stays null,
+#     so it is not the signal (Task 4.5a Step 2); the block itself is the BLOCKED/unmerged check
 # Without them those assertions print DEFERRED and no merge is attempted at all (nothing would
 # stop it). What always holds: the check fails with the right rule from the base-ref policy, and
 # nobody merges the PR (still unmerged 60 s after the check concluded).
@@ -231,6 +233,18 @@ case_tamper_workflow() {
   fi
 }
 
+# code_owner_requested PR TEAM_SLUG : GitHub requested a review from the team as code owner.
+code_owner_requested() {
+  local owner="${REPO_SLUG%%/*}" name="${REPO_SLUG#*/}"
+  # shellcheck disable=SC2016 # GraphQL variables, not shell
+  gh api graphql -f owner="$owner" -f name="$name" -F n="$1" -f query='
+    query($owner: String!, $name: String!, $n: Int!) {
+      repository(owner: $owner, name: $name) { pullRequest(number: $n) {
+        reviewRequests(first: 20) { nodes { asCodeOwner requestedReviewer { ... on Team { slug } } } } } } }' \
+    --jq "[.data.repository.pullRequest.reviewRequests.nodes[] | select(.asCodeOwner and .requestedReviewer.slug == \"$2\")] | length > 0" \
+    2>/dev/null | grep -qx true
+}
+
 case_tamper_autonomy() {
   local lvl
   lvl="$(tracked_autonomy_level || true)"
@@ -242,15 +256,14 @@ case_tamper_autonomy() {
   if wait_check tamper-autonomy; then
     expect_failure_with tamper-autonomy '(^|[^0-9A-Za-z])rule 1: ' '"rule 1:"'
     if ((CODE_OWNER)); then
-      local d
-      d="$(gh pr view "$PR" --repo "$REPO_SLUG" --json reviewDecision --jq .reviewDecision)"
-      if [[ "$d" == REVIEW_REQUIRED ]]; then
-        pass tamper-autonomy "reviewDecision REVIEW_REQUIRED (code-owner review on $AUTONOMY_FILE)"
+      local team="${PROMOTION_TEAM##*/}"
+      if code_owner_requested "$PR" "$team"; then
+        pass tamper-autonomy "code-owner review requested from $team on $AUTONOMY_FILE"
       else
-        failc tamper-autonomy "reviewDecision is '$d', expected REVIEW_REQUIRED"
+        failc tamper-autonomy "no code-owner review request for $team"
       fi
     else
-      deferred tamper-autonomy "reviewDecision REVIEW_REQUIRED needs code-owner review on $TRACKED_BRANCH (L4/L5b)"
+      deferred tamper-autonomy "the code-owner review request needs code-owner review on $TRACKED_BRANCH (L4/L5b)"
     fi
     github_blocks tamper-autonomy --rest
   fi
