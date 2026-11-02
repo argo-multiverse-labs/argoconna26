@@ -389,6 +389,22 @@ naive-revert: ## Revert the last image bump: green but wrong
 disarm: ## Timeout back to 2000 (IMAGE=vX.Y.Z also pins the tag; GIT_ONLY=1 skips the wait)
 	@$(ROOT)/scripts/git-ops.sh disarm $(if $(IMAGE),--image $(IMAGE)) $(if $(GIT_ONLY),--git-only)
 
+################################################################################
+# Autonomy: promotion PRs and demotion (scripts/promotion-pr.sh)               #
+################################################################################
+
+.PHONY: promotion-pr-ensure
+promotion-pr-ensure: ## Close any open promotion PR and open a fresh one (LEVEL=propose|act)
+	@$(ROOT)/scripts/promotion-pr.sh ensure $(or $(LEVEL),$(error LEVEL=propose|act is required))
+
+.PHONY: promotion-record-approval
+promotion-record-approval: ## After the merge, record who approved in autonomy.yaml (PR=<number>)
+	@$(ROOT)/scripts/promotion-pr.sh record-approval $(or $(PR),$(error PR=<number> is required))
+
+.PHONY: demote
+demote: ## Lower the autonomy level by one step (a forward commit, direct push)
+	@$(ROOT)/scripts/promotion-pr.sh demote
+
 .PHONY: disarm-git-only
 disarm-git-only: ## (build-all) Push the disarm before Argo's first sync; skips without an operator clone
 	@$(ROOT)/scripts/git-ops.sh disarm --git-only
