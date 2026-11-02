@@ -408,3 +408,76 @@ async def test_prompt_anchored_to_received_at(deps) -> None:
     await handle_incident(make_hook(), deps(holmes=holmes))
     [prompt] = holmes.prompts
     assert "2026-11-09T17:32:05Z" in prompt and "2026-11-09T17:43:05Z" in prompt
+
+
+# -- projector length (slice-3 C6): the rung-1 comment is capped like the fix PR body -------
+
+LONG_ROOT = (
+    "PR-242 cut UPSTREAM_TIMEOUT_MS from 2000 to 200 in checkout-config.yaml without bumping "
+    "example.dev/config-version, so the running pods kept the old value until the next roll and "
+    "nobody noticed for three days because nothing restarted. When the image bump rolled the "
+    "canary, the new pods read 200 ms."
+)
+LONG_PODS = (
+    "Pods checkout-7f9c8d6b5-x2x9k, checkout-7f9c8d6b5-q8w2n, checkout-7f9c8d6b5-zz7lp and "
+    "checkout-7f9c8d6b5-m4k1c started after the sync and log 'upstream timeout after 200ms', "
+    "while checkout-6d8b7c9f4-a1b2c and checkout-6d8b7c9f4-d3e4f started before it and log 2000"
+)
+LONG_CONTEXT_REF_LATE = (
+    "The cause merged three days before the abort as a config-only change with no config-version "
+    "bump, was synced by Argo CD without rolling any pods, and was then picked up when the image "
+    "bump rolled the canary; its change reference is CHG-R6723Q"
+)
+
+
+def comment_body(d: Deps) -> str:
+    [(_, body)] = d.forge.commit_comments
+    return body
+
+
+def bullets(body: str) -> list[str]:
+    return [line for line in body.splitlines() if line.startswith("- ")]
+
+
+async def test_comment_caps_root_cause_and_evidence_for_the_projector(deps) -> None:
+    from bridge.pipeline import ITEM_MAX, ROOT_CAUSE_MAX
+
+    d = deps(holmes=StubHolmes(rca(root_cause=LONG_ROOT, evidence=[LONG_PODS, LONG_PODS],
+                                   delivery_context=LONG_PODS)))
+    out = await handle_incident(make_hook(), d)
+    assert out.action == "commented"
+    body = comment_body(d)
+    root_text = body.split("\n\n")[1]
+    assert root_text.startswith("PR-242 cut")
+    assert "When the image bump" not in root_text  # first sentence only
+    assert len(root_text) <= ROOT_CAUSE_MAX + 10  # a few backslash escapes at most
+    lines = bullets(body)
+    assert len(lines) == 3
+    for line in lines:
+        assert len(line) <= ITEM_MAX + len("- Timeline: ") + 10, line
+        assert line.endswith("…"), line
+    assert any(line.startswith(f"Cause: {CAUSE}") for line in body.splitlines())
+
+
+async def test_comment_timeline_keeps_change_ref_when_capped(deps) -> None:
+    """tests/e2e/rung1.sh greps the `- Timeline:` line for the run's change_ref."""
+    from bridge.pipeline import ITEM_MAX
+
+    d = deps(holmes=StubHolmes(rca(delivery_context=LONG_CONTEXT_REF_LATE)))
+    await handle_incident(make_hook(), d)
+    [timeline] = [line for line in bullets(comment_body(d)) if line.startswith("- Timeline: ")]
+    assert "CHG-R6723Q" in timeline
+    assert len(timeline) <= ITEM_MAX + len("- Timeline: "), timeline
+
+
+async def test_comment_timeline_keeps_change_ref_from_a_later_sentence(deps) -> None:
+    d = deps(holmes=StubHolmes(rca(delivery_context="Config-only change, merged 3 days ago. Ref CHG-W4M4C4.")))
+    await handle_incident(make_hook(), d)
+    [timeline] = [line for line in bullets(comment_body(d)) if line.startswith("- Timeline: ")]
+    assert "CHG-W4M4C4" in timeline
+
+
+async def test_comment_timeline_short_context_unchanged(deps) -> None:
+    d = deps()
+    await handle_incident(make_hook(), d)
+    assert f"- Timeline: {MODEL_CONTEXT}" in comment_body(d).splitlines()

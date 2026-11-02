@@ -597,3 +597,24 @@ async def test_refusal_wording_follows_the_level(deps) -> None:
     assert "not suggesting a fix" not in comment
     assert "not opening a fix PR" in sections()["refusal"]["propose"]
     assert "not suggesting a fix" in sections()["refusal"]["suggest"]
+
+
+def test_short_text_keeps_a_change_ref_it_would_cut() -> None:
+    from bridge.pipeline import CHANGE_REF, short_text
+
+    text = "word " * 60 + "CHG-R6723Q"
+    cut = short_text(text, 60, keep=CHANGE_REF)
+    assert "CHG-R6723Q" in cut and len(cut) <= 60
+    assert "…" in cut
+    later = short_text("Merged 3 days ago. Ref CHG-W4M4C4.", 160, keep=CHANGE_REF)
+    assert later.startswith("Merged 3 days ago.") and "CHG-W4M4C4" in later
+    assert short_text("Ref CHG-W4M4C4 merged.", 160, keep=CHANGE_REF) == "Ref CHG-W4M4C4 merged."
+
+
+def test_fix_pr_timeline_keeps_change_ref_when_capped() -> None:
+    long = capped_rca(delivery_context=LONG_ITEM + " under change CHG-R6723Q")
+    fix = build_fix(long, CONFIGMAP, ROLLOUT_TEXT, ANNOTATION, rollout_path=ROLLOUT)
+    body = render_fix_pr_body(long, fix, level="propose")
+    [timeline] = [line for line in body.splitlines() if line.startswith("- Timeline: ")]
+    assert "CHG-R6723Q" in timeline
+    assert len(timeline) <= ITEM_MAX + len("- Timeline: ") + 10, timeline

@@ -50,8 +50,8 @@ Action = Literal[
 ]
 EVIDENCE_BULLETS = 2  # plus the Timeline bullet: at most three on the projector
 # Spec §5: short evidence strings, a body written for a projector. Model text in the fix PR
-# is cut to its first sentence and to these lengths, whatever the prompt got back; the full
-# text stays in the rca.completed event.
+# and the rung-1 comment is cut to its first sentence and to these lengths, whatever the prompt
+# got back; the full text stays in the rca.completed event.
 ROOT_CAUSE_MAX = 200
 ITEM_MAX = 160
 REVISIONS_SHOWN = 5  # the fix PR's synced-revisions table
@@ -139,17 +139,44 @@ def title_text(value: object) -> str:
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=\S)")
 
 
-def short_text(value: object, limit: int) -> str:
-    """The first sentence of `value`, cut on a word boundary with an ellipsis if it is still
-    longer than `limit` characters. Applied before `plain`, which only adds escapes."""
-    text = " ".join(str(value).split())
-    text = _SENTENCE_END.split(text, maxsplit=1)[0]
+def _cap(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     cut = text[: limit - 1]
     if " " in cut:
         cut = cut[: cut.rindex(" ")]
     return cut.rstrip(" ,;:-") + "…"
+
+
+# The operator's change reference (scripts/common.sh new_change_ref). tests/e2e/rung1.sh
+# greps the Timeline line for it, so capping must never drop it.
+CHANGE_REF = re.compile(r"\bCHG-[A-Z2-7]{6}\b")
+KEPT_REFS_MAX = 2
+
+
+def short_text(value: object, limit: int, keep: re.Pattern[str] | None = None) -> str:
+    """The first sentence of `value`, cut on a word boundary with an ellipsis if it is still
+    longer than `limit` characters. Applied before `plain`, which only adds escapes.
+
+    Tokens matching `keep` anywhere in `value` that the cut would drop are appended in
+    parentheses, and the text is cut shorter to make room, so the result stays within `limit`.
+    """
+    text = " ".join(str(value).split())
+    first = _SENTENCE_END.split(text, maxsplit=1)[0]
+    kept = list(dict.fromkeys(keep.findall(text)))[:KEPT_REFS_MAX] if keep else []
+    missing: list[str] = []
+    while True:  # each pass can only add to `missing`, so this ends
+        suffix = f" ({', '.join(missing)})" if missing else ""
+        prefix = _cap(first, limit - len(suffix))
+        now = [ref for ref in kept if ref not in prefix]
+        if now == missing:
+            return prefix + suffix
+        missing = now
+
+
+def timeline_text(delivery_context: str) -> str:
+    """The Timeline bullet's text: no doubled label, capped, the change reference kept."""
+    return short_text(timeline_line(delivery_context), ITEM_MAX, keep=CHANGE_REF)
 
 
 def timeline_line(delivery_context: str) -> str:
@@ -246,7 +273,7 @@ def render_fix_pr_body(
         root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
         cause_title=cause_title,
         evidence=[short_text(e, ITEM_MAX) for e in rca.evidence[:EVIDENCE_BULLETS]],
-        timeline=short_text(timeline_line(rca.delivery_context), ITEM_MAX),
+        timeline=timeline_text(rca.delivery_context),
         blast_changes=changes,
         blast_leaves=leaves,
         argo_url=argo_url,
@@ -426,8 +453,9 @@ class _Run:
         body = render(
             "rca_comment.md.j2",
             rca=rca,
-            timeline=timeline_line(rca.delivery_context),
-            evidence=rca.evidence[:EVIDENCE_BULLETS],
+            root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
+            timeline=timeline_text(rca.delivery_context),
+            evidence=[short_text(e, ITEM_MAX) for e in rca.evidence[:EVIDENCE_BULLETS]],
             patch=rca.proposed_patch,
             cause_title=await self.cause_title(rca.cause_commit_sha),
             argo_url=argo_url(self.s, self.hook),
