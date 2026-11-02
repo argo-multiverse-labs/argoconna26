@@ -8,12 +8,12 @@
 # Rung-specific sections need the rung (1, 2 or 3): fleet, github_admin (2 and 3), github_runtime, job (3).
 # Without a rung only the platform sections run.
 #
-# L5b gate (Task 6.5): the checks that need the promotion-board team and code-owner review (the
+# L5b checks (Task 4.5): the checks that need the promotion-board team and code-owner review (the
 # tracked ruleset's code-owner rule, the team's repo permission, the stage approver's membership,
-# the App installation permissions) are WARN lines "deferred to L5b" until the full
-# `github-ruleset.sh apply` has turned code-owner review on. They become hard checks by themselves
-# when that rule is live on the tracked branch, or at once with PREFLIGHT_L5B=1. PREFLIGHT_L5B=0
-# keeps them deferred.
+# the App installation permissions) are hard checks by default (PREFLIGHT_L5B=1). On a repository
+# that has not applied the full `github-ruleset.sh apply` yet (a fresh fork), PREFLIGHT_L5B=auto
+# makes them WARN lines "deferred to L5b" until the code-owner rule is live on the tracked branch,
+# and PREFLIGHT_L5B=0 always defers them.
 #
 # Test/tuning overrides: PREFLIGHT_FLEET_WAIT_S (how long to wait for the fleet gauge series, default 20),
 # PREFLIGHT_MIN_FREE_GB (default 5), SYSTEMD_USER_DIR, XDG_RUNTIME_DIR. PREFLIGHT_REQUIRE_SCORE=1
@@ -377,14 +377,14 @@ section_local() {
 }
 
 # ------------------------------------------------------------------ GitHub helpers
-# True when the full `github-ruleset.sh apply` is live: the tracked branch's rules carry
-# code-owner review. PREFLIGHT_L5B=1 / 0 forces it. Read with whichever credential gh holds.
+# True when the L5b checks are hard. PREFLIGHT_L5B=1 (the default) / 0 forces it; under auto it is
+# true when the tracked branch's rules carry code-owner review. Read with whichever credential gh holds.
 # Fails closed: when the rules cannot be read (no access, rate limit, 5xx) that is a FAIL of its
 # own and the L5b checks run as hard checks; only a successful read without the rule defers them.
 _L5B=""
 l5b_active() {
   local rules
-  case "${PREFLIGHT_L5B:-auto}" in 1) return 0 ;; 0) return 1 ;; esac
+  case "${PREFLIGHT_L5B:-1}" in 1) return 0 ;; 0) return 1 ;; auto) ;; *) die "PREFLIGHT_L5B must be 1, 0 or auto" ;; esac
   if [[ -z "$_L5B" ]]; then
     if ! rules="$(gh api "repos/${REPO_SLUG}/rules/branches/${TRACKED_BRANCH}" 2>/dev/null)" \
         || ! jq -e 'type == "array"' <<<"$rules" >/dev/null 2>&1; then
@@ -396,7 +396,7 @@ l5b_active() {
   [[ "$_L5B" == yes ]]
 }
 
-# l5b_check MESSAGE : a failure that only counts once L5b is live; before that, a WARN.
+# l5b_check MESSAGE : a failure, or a WARN while the L5b checks are deferred (PREFLIGHT_L5B=0|auto).
 l5b_check() {
   if l5b_active; then check_fail "$1"; else check_warn "$1 (deferred to L5b)"; fi
 }

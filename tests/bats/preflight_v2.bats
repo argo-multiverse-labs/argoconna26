@@ -440,10 +440,10 @@ install_unit() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/night.sh" job-install >/d
 }
 
 # --------------------------------------------------------------- github-runtime: the App (L5b gate)
-@test "runtime: the App check is a WARN deferred to L5b while code-owner review is off, and never calls uv" {
+@test "runtime: under PREFLIGHT_L5B=auto the App check is a WARN while code-owner review is off, and never calls uv" {
   pre_l5b
   rm "$STATE/app-check.json"
-  run "$ONLY" github_runtime 1
+  PREFLIGHT_L5B=auto run "$ONLY" github_runtime 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"[WARN]"*"App installation token and permissions not checked (deferred to L5b)"* ]]
 }
@@ -537,14 +537,42 @@ install_unit() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/night.sh" job-install >/d
   [ "$status" -eq 0 ]
 }
 
-@test "github-admin before L5b: code-owner review, the team and the membership are WARN lines deferred to L5b" {
+@test "github-admin under PREFLIGHT_L5B=auto before L5b: code-owner review, the team and the membership are WARN lines" {
   pre_l5b
-  STAGE_APPROVER_LOGIN=zq-login-x run "$ONLY" github_admin 2
+  STAGE_APPROVER_LOGIN=zq-login-x PREFLIGHT_L5B=auto run "$ONLY" github_admin 2
   [ "$status" -eq 0 ]
   [[ "$output" == *"[WARN]"*"does not require code-owner review (deferred to L5b)"* ]]
   [[ "$output" == *"[WARN]"*"has no push access to the repo (or does not exist) (deferred to L5b)"* ]]
   [[ "$output" == *"[WARN]"*"membership of promotion-board is 'absent', not active (deferred to L5b)"* ]]
   [[ "$output" == *"[PASS]"*"requires policy-check"* ]]
+}
+
+@test "github-admin by default: a missing code-owner rule, team or membership is a FAIL, never deferred" {
+  pre_l5b
+  STAGE_APPROVER_LOGIN=zq-login-x run "$ONLY" github_admin 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"does not require code-owner review"* ]]
+  [[ "$output" == *"[FAIL]"*"has no push access"* ]]
+  [[ "$output" == *"[FAIL]"*"membership of promotion-board"* ]]
+  [[ "$output" != *"deferred to L5b"* ]]
+}
+
+@test "runtime by default: the App check runs hard even when code-owner review is off" {
+  pre_l5b
+  echo '{"token_minted":true,"permissions":{"contents":"write","workflows":"write"}}' >"$STATE/app-check.json"
+  run "$ONLY" github_runtime 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"permissions it must not"* ]]
+}
+
+@test "--job-run uses GH_TOKEN from the job env for every gh call" {
+  mv "$STUBS/gh" "$STUBS/gh.base"
+  make_stub "$STUBS" gh 'echo "${GH_TOKEN:-<none>}" >>"'"$STATE"'/gh-tokens"; exec "'"$STUBS"'/gh.base" "$@"'
+  autonomy act "promotion-board member (review https://example.test/r/1)"
+  GH_TOKEN=tok-job run "$ONLY" "github_admin github_runtime" 3 --armed --job-run
+  [ "$status" -eq 0 ]
+  [ -s "$STATE/gh-tokens" ]
+  [ -z "$(grep -vx tok-job "$STATE/gh-tokens" || true)" ]
 }
 
 @test "github-admin: PREFLIGHT_L5B=1 turns the deferred checks into failures" {
@@ -596,7 +624,7 @@ install_unit() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/night.sh" job-install >/d
 @test "runtime: a failed read of the tracked rules is a FAIL and the L5b checks run hard, not deferred" {
   rm -f "$STATE/rules.json"
   rm -f "$STATE/app-check.json"
-  run "$ONLY" github_runtime 1
+  PREFLIGHT_L5B=auto run "$ONLY" github_runtime 1
   [ "$status" -eq 1 ]
   [[ "$output" == *"[FAIL]"*"cannot read the rules on build/demo"* ]]
   [[ "$output" != *"deferred to L5b"* ]]

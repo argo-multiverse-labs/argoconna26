@@ -186,7 +186,7 @@ What each rung needs on top of the platform:
 |------|-------|
 | The platform, the incident and `make naive-revert` | Push rights to your fork |
 | 1 (suggest) | Also your own GitHub App with the permissions in [docs/github-setup.md](docs/github-setup.md), installed on the fork |
-| 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow) |
+| 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow). Until those exist, run preflight with `PREFLIGHT_L5B=auto` |
 
 `make retarget BRANCH=<branch>` moves the branch Argo CD, the bridge and the rulesets follow (for
 example from `build/demo` to `main` after the talk). It is built and tested against stubs; it has

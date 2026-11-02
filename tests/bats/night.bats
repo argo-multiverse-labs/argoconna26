@@ -21,7 +21,7 @@ setup() {
     *contents/aiops/autonomy.yaml*) printf "level: %s\npromotion:\n  approved_by: admin-bypass\n" "${AUTONOMY:-act}" ;;
     "pr list"*) echo "[{\"number\":7,\"headRefName\":\"promote/act-20261102000000-ab12\"}]" ;;
     *contents/.github/CODEOWNERS*) echo CODEOWNERS ;;
-    *rules/branches/*) if [[ -n "${RULES_JSON:-}" ]]; then printf "%s\n" "$RULES_JSON"; else echo "[{\"type\":\"required_status_checks\",\"parameters\":{\"required_status_checks\":[{\"context\":\"policy-check\",\"integration_id\":15368}]}}]"; fi ;;
+    *rules/branches/*) if [[ -n "${RULES_JSON:-}" ]]; then printf "%s\n" "$RULES_JSON"; else echo "[{\"type\":\"pull_request\",\"parameters\":{\"require_code_owner_review\":true}},{\"type\":\"required_status_checks\",\"parameters\":{\"required_status_checks\":[{\"context\":\"policy-check\",\"integration_id\":15368}]}}]"; fi ;;
     "api user"*)
       echo "gh GH_TOKEN=${GH_TOKEN:-}" >>"$LOG"
       if [[ -n "${GH_CHECK:-}" && "GH_TOKEN=${GH_TOKEN:-}" != "$(cat "$GH_CHECK")" ]]; then exit 1; fi
@@ -30,7 +30,9 @@ setup() {
   make_stub "$STUBS" kubectl 'echo kind-argoconna26'
   make_stub "$STUBS" preflight 'echo "preflight $*" >>"$LOG"; exit "${PREFLIGHT_RC:-0}"'
   # jq is the real one: preflight reads the rules JSON with it.
-  for t in kind uv docker; do make_stub "$STUBS" "$t" 'exit 0'; done
+  for t in kind docker; do make_stub "$STUBS" "$t" 'exit 0'; done
+  # uv: only preflight's App check (bridge.cli app-check) calls it here; a clean installation.
+  make_stub "$STUBS" uv 'echo "{\"token_minted\":true,\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}"'
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS" NIGHT_PREFLIGHT="$STUBS/preflight"
   export STAGE_STRICT=1
 }
@@ -198,7 +200,7 @@ exec_start() { sed -n 's/^ExecStart=\/usr\/bin\/env bash -o pipefail -c //p' "$S
 
 # ---------------------------------------------------------------- preflight job section
 # Runs preflight's main with every section but github_runtime replaced by a no-op (github_admin
-# by a marker). The App-permission part of github_runtime is deferred to L5b and stays so here.
+# by a marker). The App check is hard by default (PREFLIGHT_L5B=1); the uv stub answers it.
 run_job_preflight() {
   bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/preflight.sh'
     keep=\$(declare -f section_github_runtime)

@@ -344,12 +344,12 @@ run (N below the bar, or the incident and run counts do not multiply to N) or di
 ConfigMap, and it warns "pending" when neither exists. `PREFLIGHT_REQUIRE_SCORE=1` (stage-day
 morning sets it) turns pending into a failure.
 
-Checks that need the promotion-board team or code-owner review (the team's permission, the
-approver's membership, the App's permissions) are failures while code-owner review is on, which
-it is. They print `WARN ... (deferred to L5b)` only on a repository where code-owner review is
-off, such as a fresh fork. The setting is read from the live rules, and an unreadable read is a
-failure, not a deferral. `PREFLIGHT_L5B=1` makes them hard regardless; `PREFLIGHT_L5B=0` defers
-them.
+Checks that need the promotion-board team or code-owner review (the code-owner rule itself, the
+team's permission, the approver's membership, the App's permissions) are failures by default
+(`PREFLIGHT_L5B=1`). On a fork that has not created its team and run the full
+`scripts/github-ruleset.sh apply` yet, `PREFLIGHT_L5B=auto` prints them as `WARN ... (deferred to
+L5b)` until the code-owner rule is live; the rule is read from the live rules, and an unreadable
+read is a failure, not a deferral. `PREFLIGHT_L5B=0` always defers them.
 
 Flags: `--armed` (autonomy on the tracked branch must be `act`), `--pre-promotion` (must still be
 `propose`), `--job-run` (GH_TOKEN is the credential; skips `github_admin` and `job`) and `--quiet`.
