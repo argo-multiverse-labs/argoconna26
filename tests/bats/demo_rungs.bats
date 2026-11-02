@@ -82,6 +82,15 @@ happy_rung3() {
   grep -q '^open https://github.com/x/y/commit' "$LOG"
 }
 
+@test "typed make commands never print make's directory lines (run under make demo-rung-N)" {
+  happy_rung1
+  run rung 1
+  [ "$status" -eq 0 ]
+  grep -qx 'make bump --no-print-directory' "$LOG"
+  grep -qx 'make fix --no-print-directory' "$LOG"
+  [[ "$output" != *"pe$ make bump --no-print-directory"* ]] # the screen shows the plain command
+}
+
 @test "under NO_WAIT=true, rung 1 fails when the bot comment is a refusal" {
   happy_rung1
   set_comment "$(refusal_body)"

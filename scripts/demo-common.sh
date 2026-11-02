@@ -71,6 +71,10 @@ as_platform_engineer
 rung_break() { beat "== $1 =="; }
 
 # typed COMMAND : demo-magic's pe, after checking that prompt plus command fit the stage pane.
+# The typed commands run through demo-magic's eval in this shell. Under `make demo-rung-N` a
+# nested make would print "make[1]: Entering directory ..." lines, wider than STAGE_COLS.
+make() { command make "$@" --no-print-directory; }
+
 typed() {
   if ((${#DEMO_PROMPT_PLAIN} + ${#1} > STAGE_COLS)); then
     refuse 1 "typed line too long" "typed command is too long for the stage: $1"
