@@ -10,7 +10,7 @@ This PR changes one file, `aiops/autonomy.yaml`. Once it is merged, the bridge r
 
 ## What we checked
 
-- **Dry runs:** ${VERDICT}
+- **Dry runs:** ${VERDICT}${DRY_RUN_DETAIL}
 - **Time at `${FROM_LEVEL}`:** ${TIME_AT_LEVEL}. The wait is compressed for the demo; in practice we would want at least ${WEEKS} weeks.
 - **Who approves:** ${APPROVER}. The person who opened this PR cannot approve it.
 

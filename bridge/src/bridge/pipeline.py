@@ -360,13 +360,53 @@ def _image_tag(kustomization_text: str, app: str) -> str | None:
 # -- the pipeline ------------------------------------------------------------
 
 
+def pii_findings(*texts: str) -> set[tuple[pii.Kind, str]]:
+    """Every PII hit in `texts` as (kind, matched text), after the scan's normalization."""
+    payloads = tuple(pii.normalize(t) for t in texts)
+    return {(h.kind, text[h.span[0]:h.span[1]]) for text in payloads for h in pii.scan(text)}
+
+
+@dataclass(frozen=True)
+class FixTexts:
+    """The fix PR's title, commit message and body, all model text included (PII-scanned)."""
+
+    title: str
+    commit_message: str
+    body: str
+
+
+@dataclass
+class Evaluation:
+    """One incident taken up to the rendered output, with nothing sent (the dry-run harness,
+    Task 6.2). `holmes_failed` is `timeout` or `bad_output` when there is no RCA; `rca` is the
+    guardrail-normalized answer; `body` is what `suggest` would post (the RCA comment, or the
+    refusal); `pii` holds every hit across everything that would leave the bridge; `fix`,
+    `fix_base_sha` and `fix_texts` are the fix PR as rung 3 would open it, when one could be built."""
+
+    level: Level
+    holmes_failed: Literal["timeout", "bad_output"] | None = None
+    raw_rca: RCA | None = None
+    rca: RCA | None = None
+    tool_calls: list[str] = field(default_factory=list)
+    latency_s: float = 0.0
+    refusals: list[Refusal] = field(default_factory=list)
+    body: str | None = None
+    pii: set[tuple[pii.Kind, str]] = field(default_factory=set)
+    fix: FixChange | None = None
+    fix_base_sha: str | None = None
+    fix_texts: FixTexts | None = None
+
+
 class _Run:
-    def __init__(self, hook: ArgoDegradedHook, deps: Deps, level: Level) -> None:
+    def __init__(self, hook: ArgoDegradedHook, deps: Deps, level: Level,
+                 window: tuple[datetime, datetime] | None = None) -> None:
         self.hook = hook
         self.deps = deps
         self.level = level
         self.s = deps.settings
         self.post_failed = False
+        #: The incident window for the prompt; None: the live window around receipt.
+        self.window = window
 
     def stage(self, step: str, detail: str) -> None:
         stagelog.emit(step, detail, self.s.stage_cols)
@@ -416,24 +456,31 @@ class _Run:
         url = await self.post(self.deps.forge.comment_on_commit(self.hook.sync_revision, text))
         return await self.finish("holmes_failed", url, reason)
 
-    async def investigate(self) -> HolmesResult | Outcome:
-        received = self.hook.received_at or self.deps.clock()
-        prompt = build_prompt(
-            self.hook, live_window(received), config_version_annotation=self.s.config_version_annotation
-        )
+    async def ask(self) -> HolmesResult | Literal["timeout", "bad_output"]:
+        """One HolmesGPT investigation; a failure is named, never posted."""
+        window = self.window or live_window(self.hook.received_at or self.deps.clock())
+        prompt = build_prompt(self.hook, window, config_version_annotation=self.s.config_version_annotation)
         self.stage("holmes", "investigating")
         try:
             result = await self.deps.holmes.investigate(prompt)
         except HolmesTimeout:
             self.stage("holmes", "timed out")
-            return await self.handoff(TIMEOUT_HANDOFF.format(timeout=self.s.holmes_timeout_s), "timeout")
+            return "timeout"
         except HolmesError as exc:
             log.warning("incident %s: holmes failed: %s", self.hook.key, exc)
             self.stage("holmes", "no usable answer")
-            return await self.handoff(BAD_OUTPUT_HANDOFF, "bad_output")
+            return "bad_output"
         # O14: several calls per investigation, some of them failing, are normal.
         for call in result.tool_calls:
             self.stage("holmes", call)
+        return result
+
+    async def investigate(self) -> HolmesResult | Outcome:
+        result = await self.ask()
+        if result == "timeout":
+            return await self.handoff(TIMEOUT_HANDOFF.format(timeout=self.s.holmes_timeout_s), "timeout")
+        if result == "bad_output":
+            return await self.handoff(BAD_OUTPUT_HANDOFF, "bad_output")
         return result
 
     async def cause_title(self, sha: str) -> str | None:
@@ -464,9 +511,7 @@ class _Run:
 
     async def pii_gate(self, body: str, rca_event: dict, *extra: str) -> Outcome | None:
         """Scan everything that would leave the bridge; on a hit, post a fixed notice instead."""
-        texts = (body, json.dumps(rca_event["customData"], ensure_ascii=False), *extra)
-        payloads = tuple(pii.normalize(t) for t in texts)
-        found = {(h.kind, text[h.span[0]:h.span[1]]) for text in payloads for h in pii.scan(text)}
+        found = pii_findings(body, json.dumps(rca_event["customData"], ensure_ascii=False), *extra)
         if not found:
             self.stage("pii", "clean")
             return None
@@ -495,11 +540,14 @@ class _Run:
     def rca_event(self, rca: RCA) -> dict:
         return events.rca_completed(self.hook, rca, self.level, source=self.s.bridge_event_source, now=self.deps.clock())
 
+    def refusal_body(self, refusals: list[Refusal]) -> str:
+        return render("refusal_comment.md.j2", refusals=refusals, argo_url=argo_url(self.s, self.hook),
+                      level=self.level, sentence=pr_sections()["refusal"][self.level])
+
     async def refuse(self, rca: RCA, refusals: list[Refusal], rca_event: dict) -> Outcome:
         """Post the refusal: on the cause once it checked out, otherwise on the synced
         revision, so a wrong answer never lands on an innocent commit."""
-        body = render("refusal_comment.md.j2", refusals=refusals, argo_url=argo_url(self.s, self.hook),
-                      level=self.level, sentence=pr_sections()["refusal"][self.level])
+        body = self.refusal_body(refusals)
         blocked = await self.pii_gate(body, rca_event)
         if blocked:
             return blocked
@@ -511,17 +559,8 @@ class _Run:
         reason = ",".join(dict.fromkeys(r.reason for r in refusals))
         return await self.finish("refused", url, reason, rca_event)
 
-    async def suggest(self) -> Outcome:
-        result = await self.investigate()
-        if isinstance(result, Outcome):
-            return result
-
-        rca, refusals = await self.check(result.rca)
-        rca_event = self.rca_event(rca)
-        if refusals:
-            return await self.refuse(rca, refusals, rca_event)
-
-        body = render(
+    async def rca_comment(self, rca: RCA) -> str:
+        return render(
             "rca_comment.md.j2",
             rca=rca,
             root_cause=short_text(rca.root_cause, ROOT_CAUSE_MAX),
@@ -532,6 +571,18 @@ class _Run:
             argo_url=argo_url(self.s, self.hook),
             level=self.level,
         )
+
+    async def suggest(self) -> Outcome:
+        result = await self.investigate()
+        if isinstance(result, Outcome):
+            return result
+
+        rca, refusals = await self.check(result.rca)
+        rca_event = self.rca_event(rca)
+        if refusals:
+            return await self.refuse(rca, refusals, rca_event)
+
+        body = await self.rca_comment(rca)
         blocked = await self.pii_gate(body, rca_event)
         if blocked:
             return blocked
@@ -598,6 +649,51 @@ class _Run:
             return None
         return _image_tag(text, self.hook.app)
 
+    async def fix_texts(self, rca: RCA, fix: FixChange, base_sha: str, level: Level | None = None) -> FixTexts:
+        patch = rca.proposed_patch
+        title = title_text(f"fix({self.hook.app}): restore {patch.key} to {patch.to_value} and roll config")
+        summary = [title_text(line) for line in fix.diff_summary]
+        commit_message = "\n".join([title, "", *summary, "", f"Cause: {rca.cause_commit_sha}"])
+        body = render_fix_pr_body(
+            rca, fix, level=level or self.level,
+            cause_title=await self.cause_title(rca.cause_commit_sha),
+            argo_url=argo_url(self.s, self.hook),
+            history=self.hook.history,
+            synced_revision=self.hook.sync_revision,
+            annotation=self.s.config_version_annotation,
+            image_tag=await self.image_tag(base_sha),
+            cve_tag=self.s.cve_fix_tag or None,
+            kustomization=self.s.kustomization_file,
+            cause_ref=await self.cause_ref(rca.cause_commit_sha),
+        )
+        return FixTexts(title, commit_message, body)
+
+    async def evaluate(self) -> Evaluation:
+        """`suggest` up to the rendered comment, plus the act path's fix PR, with nothing
+        posted, merged or emitted: every forge call made here is a read."""
+        out = Evaluation(level=self.level)
+        result = await self.ask()
+        if isinstance(result, str):
+            out.holmes_failed = result
+            return out
+        out.raw_rca, out.tool_calls, out.latency_s = result.rca, list(result.tool_calls), result.latency_s
+        rca, refusals = await self.check(result.rca)
+        out.rca, out.refusals = rca, list(refusals)
+        rca_event = self.rca_event(rca)
+        out.body = self.refusal_body(refusals) if refusals else await self.rca_comment(rca)
+        texts: list[str] = [out.body, json.dumps(rca_event["customData"], ensure_ascii=False)]
+        if not refusals:
+            built = await self.build(rca)
+            if isinstance(built, Refusal):
+                out.refusals.append(built)
+            else:
+                out.fix, out.fix_base_sha = built
+                # As the act PR the policy check would see (a fix PR has no suggest wording).
+                out.fix_texts = await self.fix_texts(rca, out.fix, out.fix_base_sha, "act")
+                texts += [out.fix_texts.body, out.fix_texts.title, out.fix_texts.commit_message]
+        out.pii = pii_findings(*texts)
+        return out
+
     async def propose(self) -> Outcome:
         opened = await self.open_fix_pr()
         if isinstance(opened, Outcome):
@@ -625,22 +721,8 @@ class _Run:
             return await self.refuse(rca, [built], rca_event)
         fix, base_sha = built
 
-        patch = rca.proposed_patch
-        title = title_text(f"fix({self.hook.app}): restore {patch.key} to {patch.to_value} and roll config")
-        summary = [title_text(line) for line in fix.diff_summary]
-        commit_message = "\n".join([title, "", *summary, "", f"Cause: {rca.cause_commit_sha}"])
-        body = render_fix_pr_body(
-            rca, fix, level=self.level,
-            cause_title=await self.cause_title(rca.cause_commit_sha),
-            argo_url=argo_url(self.s, self.hook),
-            history=self.hook.history,
-            synced_revision=self.hook.sync_revision,
-            annotation=self.s.config_version_annotation,
-            image_tag=await self.image_tag(base_sha),
-            cve_tag=self.s.cve_fix_tag or None,
-            kustomization=self.s.kustomization_file,
-            cause_ref=await self.cause_ref(rca.cause_commit_sha),
-        )
+        texts = await self.fix_texts(rca, fix, base_sha)
+        title, commit_message, body = texts.title, texts.commit_message, texts.body
         blocked = await self.pii_gate(body, rca_event, title, commit_message)
         if blocked:
             return blocked
@@ -809,6 +891,16 @@ async def handle_incident(hook: ArgoDegradedHook, deps: Deps) -> Outcome:
     return await _ACTORS[level](_Run(hook, deps, level))
 
 
+async def evaluate_incident(
+    hook: ArgoDegradedHook, deps: Deps, window: tuple[datetime, datetime], level: Level = "suggest"
+) -> Evaluation:
+    """One incident up to the rendered output, sending nothing (Task 6.2). The caller passes a
+    read-only forge, a null emitter and a fresh registry; this marks the incident in that
+    registry as the live path does."""
+    deps.registry.mark(hook.key)
+    return await _Run(hook, deps, level, window).evaluate()
+
+
 async def rehydrate_registry(registry: IncidentRegistry, forge: Forge) -> int:
     """Mark every open fix PR's incident as seen, from its branch name (Review Focus 5).
 
@@ -844,6 +936,6 @@ def outcome_for_status(outcome: Outcome) -> dict[str, object]:
 
 
 __all__ = [
-    "Deps", "Outcome", "fix_branch", "handle_incident", "outcome_for_status", "plain", "rehydrate_at_startup",
+    "Deps", "Evaluation", "FixTexts", "Outcome", "evaluate_incident", "fix_branch", "handle_incident", "outcome_for_status", "pii_findings", "plain", "rehydrate_at_startup",
     "rehydrate_registry", "render", "render_fix_pr_body", "short_text",
 ]

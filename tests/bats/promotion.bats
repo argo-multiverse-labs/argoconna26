@@ -384,6 +384,27 @@ body() { cat "$PROMO_STATE/body-$1"; }
   [[ "$output" == *"below"* ]]
 }
 
+@test "promotion body states incidents and runs per incident" {
+  mkdir -p "$FIXTURE/.dryruns"
+  printf '%s\n' '{"n":20,"root_cause_matched":17,"matched":15,"incidents":4,"runs_per_incident":5,
+    "model_temperature":1,"model_id":"anthropic/claude-sonnet-5-5"}' > "$FIXTURE/.dryruns/summary.json"
+  run promo ensure propose
+  [ "$status" -eq 0 ]
+  body 1 | grep -qF 'Score 17/20 is below our 20/20 bar. Measured as 17/20 dry runs across 4 incidents (5 runs each, temperature 1, model `anthropic/claude-sonnet-5-5`).'
+  [ "$(autonomy_at "refs/heads/$(branch_of 1)" .promotion.dry_run_score)" = "17/20" ]
+}
+
+@test "promotion body leaves the structure out when the summary lacks it or carries odd text" {
+  mkdir -p "$FIXTURE/.dryruns"
+  printf '%s\n' '{"n":20,"root_cause_matched":20,"incidents":4,"runs_per_incident":5,"model_temperature":1,
+    "model_id":"x) [click](https://example.invalid"}' > "$FIXTURE/.dryruns/summary.json"
+  run promo ensure propose
+  [ "$status" -eq 0 ]
+  body 1 | grep -qxF -- '- **Dry runs:** Score 20/20 meets our 20/20 bar.'
+  ! body 1 | grep -q 'example.invalid'
+  ! body 1 | grep -q 'Measured as'
+}
+
 @test "promotion body comes only from the committed template" {
   export PROMOTION_BODY="free text that must not appear"
   export BODY="free text that must not appear"
