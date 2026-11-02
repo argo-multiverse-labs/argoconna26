@@ -165,6 +165,24 @@ rs() { jq -c "$2" "$(grep -l "\"name\": *\"$1\"" "$STATE"/rulesets/*.json | head
   [ "$output" = "minimal-policy-check" ]
 }
 
+@test "a plain apply keeps a live required policy-check (minimal-policy-check -> policy-check)" {
+  "$SCRIPT" apply --minimal --with-policy-check
+  run "$SCRIPT" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"keeps the required policy-check"* ]]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks')" = '[{"context":"policy-check","integration_id":15368}]' ]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "true" ]
+  run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; load_env; BRANCHES=\$RULESET_BRANCHES; live_mode"
+  [ "$output" = "policy-check" ]
+}
+
+@test "apply --minimal keeps a live required policy-check too" {
+  "$SCRIPT" apply --with-policy-check
+  "$SCRIPT" apply --minimal
+  [ "$(rs argoconna26-tracked '[.rules[].type]|sort')" = '["pull_request","required_status_checks"]' ]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "false" ]
+}
+
 @test "force_push_refused_by_integrity needs GH013 and the non-fast-forward rule text" {
   run env GH_RULESET_LIB=1 bash -c ". '$SCRIPT'; force_push_refused_by_integrity <<<'remote: error: GH013: Repository rule violations found for refs/heads/x.
 remote: - Cannot force-push to this branch'"

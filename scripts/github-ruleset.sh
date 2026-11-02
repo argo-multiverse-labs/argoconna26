@@ -17,7 +17,9 @@
 #   tracked    pull_request on the same branches; admin role may bypass (the operator's direct pushes).
 #   promote    creation + update + deletion on refs/heads/promote/*; admin role may bypass.
 # --minimal leaves code-owner review off in `tracked` (CODEOWNERS does not exist yet); a plain
-# `apply` turns it on; --with-policy-check also adds required_status_checks (slice 5).
+# `apply` turns it on; --with-policy-check also adds required_status_checks (slice 5). Once the
+# required check is live, a plain `apply` or `apply --minimal` keeps it (there is no mode that
+# removes it; delete the rule in the UI if that is ever wanted).
 # Every PUT replaces a whole ruleset, so this script is the only source of the rules: anything set
 # by hand in the GitHub UI is lost on the next apply. verify-integrity reads the live mode back
 # (minimal, full or policy-check) and restores that mode, not a fixed one.
@@ -156,6 +158,23 @@ live_mode() { # the mode the live tracked ruleset is in: minimal | full | policy
       else "minimal" end'
 }
 
+# keep_live_check MODE : MODE, or MODE-with-the-check when the live tracked ruleset already carries
+# the required policy-check. Every PUT replaces the whole ruleset, so a plain `apply` (or
+# `apply --minimal`) must not silently drop the check a `--with-policy-check` apply put live.
+keep_live_check() {
+  local live
+  live="$(live_mode)"
+  if [[ "$live" == *policy-check ]]; then
+    case "$1" in
+      full) log_info "the live $RULESET_TRACKED has the required $POLICY_CHECK_CONTEXT: apply keeps the required policy-check" >&2
+            echo policy-check; return ;;
+      minimal) log_info "the live $RULESET_TRACKED has the required $POLICY_CHECK_CONTEXT: apply --minimal keeps the required policy-check" >&2
+               echo minimal-policy-check; return ;;
+    esac
+  fi
+  echo "$1"
+}
+
 # A force-push refusal counts only when GitHub names a ruleset (GH013) AND the non_fast_forward
 # rule ("Cannot force-push"), which only the integrity ruleset carries. A plain non-fast-forward
 # rejection, classic branch protection, or tracked's pull-request rule do not count.
@@ -216,10 +235,10 @@ main() {
   case "${1:-}" in
     apply)
       case "${2:-}" in
-        "")             apply_standing full ;;
+        "")             apply_standing "$(keep_live_check full)" ;;
         --minimal)
           case "${3:-}" in
-            "")                  apply_standing minimal ;;
+            "")                  apply_standing "$(keep_live_check minimal)" ;;
             --with-policy-check) apply_standing minimal-policy-check ;;
             *) usage ;;
           esac ;;

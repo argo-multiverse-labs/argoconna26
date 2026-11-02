@@ -94,9 +94,12 @@ from `RULESET_BRANCHES` and re-apply; the script does that for you in `verify-in
   `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: false`,
   `required_review_thread_resolution: false`, and `require_code_owner_review` set to `false`
   with `apply --minimal` (for a repository that has no CODEOWNERS yet; this one does) and `true`
-  with a plain `apply`.
+  with a plain `apply` or `apply --with-policy-check`.
   `apply --with-policy-check` also adds the required `policy-check` status (section 4);
-  `apply --minimal --with-policy-check` adds it while code-owner review stays off.
+  `apply --minimal --with-policy-check` adds it while code-owner review stays off. Every apply
+  replaces the whole ruleset, so once the required check is live a plain `apply` (or
+  `apply --minimal`) keeps it rather than dropping it; use `apply --with-policy-check` to turn
+  code-owner review on.
 - **Bypass actors:** exactly one: the built-in **Repository role "Admin"** (`actor_type:
   RepositoryRole`, `actor_id: 5`, `bypass_mode: always`).
 
@@ -142,7 +145,7 @@ tracked branch. What stops the agent at each level:
 | suggest | Comment only | The bridge (it opens no PR at this level) |
 | propose | Open a PR; a human merges it | The bridge never calls merge or auto-merge on this path (unit-tested). GitHub only requires that the change arrives by PR. |
 | act | Open a PR and turn on auto-merge | GitHub merges only when `policy-check` passes (`required_status_checks`, slice 5) |
-| any | Raise its own level | GitHub: `aiops/autonomy.yaml` is code-owned by the promotion team, and `require_code_owner_review` (plain `apply`) blocks the merge until a team member approves. The second spike test (section 4) checks this on a scratch branch. |
+| any | Raise its own level | GitHub: `aiops/autonomy.yaml` is code-owned by the promotion team, and `require_code_owner_review` (`apply --with-policy-check`) blocks the merge until a team member approves. The second spike test (section 4) checks this on a scratch branch. |
 | any | Push to, rewrite or delete the tracked branch, or touch `promote/*` | GitHub: the three rulesets (the App is never a bypass actor) |
 
 #### Parameters GitHub adds on its own
