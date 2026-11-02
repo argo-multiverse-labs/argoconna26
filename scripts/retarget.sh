@@ -8,7 +8,11 @@
 # is skipped when origin/BRANCH already carries it, and every later step is idempotent.
 #
 #   1  refuse unless BRANCH contains origin/<tracked>, and the main checkout and the operator
-#      clone are clean
+#      clone are clean; and, because Argo CD and the bridge follow BRANCH before step 5
+#      re-applies the rulesets, unless BRANCH is already protected by the live rulesets
+#      (deletion, force-push, pull_request, the required check, and code-owner review while
+#      that is live), its autonomy level is not above the tracked branch's, and it carries no
+#      change to a code-owned path (CODEOWNERS on the tracked branch) the tracked branch lacks
 #   2  one forward commit on BRANCH (operator clone, pushed): every targetRevision under gitops/
 #      (root.yaml included), TRACKED_BRANCH in demo.env, BRANCH in RULESET_BRANCHES and the
 #      bridge Deployment's TRACKED_BRANCH. The main checkout then switches to BRANCH, so the
@@ -20,13 +24,14 @@
 #   4  the bridge: its Deployment carries TRACKED_BRANCH (step 2), so wait for the rollout.
 #      The plan named the Secret bridge-env here, but a Deployment `env` entry beats envFrom
 #      and preflight fails while bridge-env exists, so the setting travels in git instead.
-#   5  github-ruleset.sh apply, then read back deletion, non_fast_forward, pull_request and the
-#      required policy-check on every RULESET_BRANCHES entry
+#   5  github-ruleset.sh apply, then read back deletion, non_fast_forward, pull_request, the
+#      required policy-check (and code-owner review in full mode) on every RULESET_BRANCHES entry
 #   6  .github/CODEOWNERS on BRANCH; any open promotion PR is closed and promotion-pr.sh ensure
 #      opens a fresh one against the new base
 #
-# Overrides: RETARGET_WAIT_S (per Application, default 300), RETARGET_RULESET_MODE
-# (minimal, the default, keeps code-owner review off; full turns it on, after L4),
+# Overrides: RETARGET_WAIT_S (per Application, default 300), RETARGET_RULESET_MODE (unset =
+# live: whatever the live tracked ruleset has, read with `github-ruleset.sh live-mode`; full
+# turns code-owner review on; minimal is refused while code-owner review is live),
 # RETARGET_GITHUB_PREFLIGHT=1 (also run `preflight.sh 2`, whose github sections are still to
 # come with L5b), RETARGET_RULESET_SCRIPT and RETARGET_PROMOTION_SCRIPT (tests).
 # Exit codes: 1 generic, 3 wrong context, 4 wait timed out, 5 cluster lock held.
@@ -64,6 +69,86 @@ require_move_forward() { # OLD NEW
   fetch_branch "$2"
   _og merge-base --is-ancestor "refs/remotes/origin/$1" "refs/remotes/origin/$2" \
     || die "retarget: origin/$2 does not contain origin/$1 (the tracked tip); a retarget is a move, never a rewind. Fast-forward $2 first."
+}
+
+# --------------------------------- 1b. the destination is safe to follow (before any change)
+# Argo CD and the bridge follow NEW from step 3 on, and the rulesets are only re-applied at
+# step 5, so NEW must already be protected, must not raise the autonomy level, and must not
+# carry code-owned changes (autonomy, policy, workflows) that no board review saw on OLD.
+
+# ruleset_mode : minimal | full, from RETARGET_RULESET_MODE, else the live tracked ruleset
+# (github-ruleset.sh live-mode). Explicit minimal is refused while code-owner review is live.
+LIVE_CO=false
+ruleset_mode() {
+  local script="${RETARGET_RULESET_SCRIPT:-$GIT_OPS_DIR/github-ruleset.sh}" live
+  live="$("$script" live-mode)" || die "retarget: cannot read the live ruleset mode (github-ruleset.sh live-mode)"
+  case "$live" in
+    full | policy-check) LIVE_CO=true ;;
+    minimal | minimal-policy-check) LIVE_CO=false ;;
+    *) die "retarget: unknown live ruleset mode '$live'" ;;
+  esac
+  case "${RETARGET_RULESET_MODE:-live}" in
+    live) if [[ "$LIVE_CO" == true ]]; then RULESET_MODE=full; else RULESET_MODE=minimal; fi ;;
+    full) RULESET_MODE=full ;;
+    minimal)
+      [[ "$LIVE_CO" == false ]] \
+        || die "retarget: RETARGET_RULESET_MODE=minimal would turn off the live code-owner review; leave it unset (live mode) or use full"
+      RULESET_MODE=minimal ;;
+    *) die "retarget: RETARGET_RULESET_MODE must be live, minimal or full, not '${RETARGET_RULESET_MODE}'" ;;
+  esac
+  log_info "ruleset mode: $RULESET_MODE (live: $live)"
+}
+
+require_protected() { # NEW
+  rules_ok "$1" "$LIVE_CO" \
+    || die "retarget: $1 is not protected yet (deletion, non_fast_forward, pull_request, the required $POLICY_CHECK_CONTEXT$([[ "$LIVE_CO" == true ]] && echo ', code-owner review')). Add it to RULESET_BRANCHES on the tracked branch, run github-ruleset.sh apply, then retry."
+  log_info "$1 is already protected by the live rulesets"
+}
+
+level_rank() { case "$1" in propose) echo 1 ;; act) echo 2 ;; *) echo 0 ;; esac; }
+
+# branch_level BRANCH : the level in AUTONOMY_FILE on origin/BRANCH; anything missing,
+# unreadable or invalid counts as suggest (Global Constraints).
+branch_level() {
+  local l
+  l="$(_og show "refs/remotes/origin/$1:$AUTONOMY_FILE" 2>/dev/null | yq -r '.level // ""' 2>/dev/null || true)"
+  case "$l" in suggest | propose | act) echo "$l" ;; *) echo suggest ;; esac
+}
+
+require_no_autonomy_raise() { # OLD NEW
+  local lo ln
+  lo="$(branch_level "$1")" ln="$(branch_level "$2")"
+  (($(level_rank "$ln") <= $(level_rank "$lo"))) \
+    || die "retarget: autonomy on $2 is $ln, above $lo on $1; a retarget never raises the level (promote on $1 through its promotion PR first)"
+}
+
+# codeowned PATH PATTERN... : true when PATH matches a CODEOWNERS pattern (/dir/ prefix, exact
+# path, or *).
+codeowned() {
+  local path="$1" pat
+  shift
+  for pat in "$@"; do
+    pat="${pat#/}"
+    case "$pat" in
+      '*' | '') return 0 ;;
+      */) [[ "$path" == "$pat"* ]] && return 0 ;;
+      *) [[ "$path" == "$pat" || "$path" == "$pat/"* ]] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+require_no_codeowned_changes() { # OLD NEW
+  local f
+  local -a pats=() hits=()
+  mapfile -t pats < <(_og show "refs/remotes/origin/$1:.github/CODEOWNERS" 2>/dev/null \
+    | sed -e 's/#.*//' | awk 'NF {print $1}')
+  ((${#pats[@]} > 0)) || die "retarget: no .github/CODEOWNERS on $1 to check the move against"
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && codeowned "$f" "${pats[@]}" && hits+=("$f")
+  done < <(_og diff --name-only "refs/remotes/origin/$1" "refs/remotes/origin/$2")
+  ((${#hits[@]} == 0)) \
+    || die "retarget: $2 changes code-owned paths that $1 lacks (${hits[*]}); land them on $1 through a reviewed PR first"
 }
 
 # ------------------------------------------------ 2. the commit and the switch
@@ -227,27 +312,34 @@ wait_for_bridge() {
 
 # ---------------------------------------------------------------- 5. rulesets
 apply_rulesets() {
-  local script="${RETARGET_RULESET_SCRIPT:-$GIT_OPS_DIR/github-ruleset.sh}" mode="${RETARGET_RULESET_MODE:-minimal}"
-  case "$mode" in
+  local script="${RETARGET_RULESET_SCRIPT:-$GIT_OPS_DIR/github-ruleset.sh}"
+  case "$RULESET_MODE" in
     minimal) "$script" apply --minimal ;;
     full) "$script" apply ;;
-    *) die "retarget: RETARGET_RULESET_MODE must be minimal or full, not '$mode'" ;;
+    *) die "retarget: no ruleset mode" ;;
   esac
 }
 
-# verify_rules_on BRANCH : read back what GitHub enforces on BRANCH.
-verify_rules_on() {
-  local b="$1" rules
-  rules="$(gh api "repos/${REPO_SLUG}/rules/branches/${b}")" || die "retarget: cannot read the rules on $b"
-  jq -e --arg c "$POLICY_CHECK_CONTEXT" --argjson i "$POLICY_CHECK_INTEGRATION_ID" --arg mode "${RETARGET_RULESET_MODE:-minimal}" '
+# rules_ok BRANCH WANT_CODE_OWNER : GitHub enforces deletion, non_fast_forward, pull_request and
+# the required check on BRANCH (and code-owner review when WANT_CODE_OWNER is true).
+rules_ok() {
+  local rules
+  rules="$(gh api "repos/${REPO_SLUG}/rules/branches/$1")" || die "retarget: cannot read the rules on $1"
+  jq -e --arg c "$POLICY_CHECK_CONTEXT" --argjson i "$POLICY_CHECK_INTEGRATION_ID" --argjson co "$2" '
     ([.[].type] | (index("deletion") != null) and (index("non_fast_forward") != null) and (index("pull_request") != null))
     and any(.[]; .type == "required_status_checks"
                  and any(.parameters.required_status_checks[]?; .context == $c and .integration_id == $i))
-    and (if $mode == "full"
-         then any(.[]; .type == "pull_request" and .parameters.require_code_owner_review == true)
-         else true end)' <<<"$rules" >/dev/null \
-    || die "retarget: $b lacks deletion, non_fast_forward, pull_request or the required $POLICY_CHECK_CONTEXT (integration $POLICY_CHECK_INTEGRATION_ID)"
-  log_info "rules on $b: deletion, force-push, pull_request and $POLICY_CHECK_CONTEXT"
+    and (if $co then any(.[]; .type == "pull_request" and .parameters.require_code_owner_review == true)
+         else true end)' <<<"$rules" >/dev/null
+}
+
+# verify_rules_on BRANCH : read back what GitHub enforces on BRANCH after the apply.
+verify_rules_on() {
+  local b="$1" co=false
+  [[ "$RULESET_MODE" == full ]] && co=true
+  rules_ok "$b" "$co" \
+    || die "retarget: $b lacks deletion, non_fast_forward, pull_request or the required $POLICY_CHECK_CONTEXT (integration $POLICY_CHECK_INTEGRATION_ID)$([[ "$co" == true ]] && echo ' or code-owner review')"
+  log_info "rules on $b: deletion, force-push, pull_request and $POLICY_CHECK_CONTEXT$([[ "$co" == true ]] && echo ', code-owner review')"
 }
 
 verify_all_rules() {
@@ -305,9 +397,14 @@ main() {
     log_info "already tracking $new: resuming at the root app"
     require_branch_main "$new"
     op_checkout_branch "$new"
+    ruleset_mode
   else
     require_clean_trees
     require_move_forward "$old" "$new"
+    ruleset_mode
+    require_protected "$new"
+    require_no_autonomy_raise "$old" "$new"
+    require_no_codeowned_changes "$old" "$new"
     git -C "$(main_root)" fetch --quiet origin "refs/heads/$new:refs/remotes/origin/$new" \
       || die "retarget: cannot fetch $new into the main checkout"
     git -C "$(main_root)" merge-base --is-ancestor HEAD "refs/remotes/origin/$new" \

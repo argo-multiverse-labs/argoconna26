@@ -23,7 +23,7 @@ make_retarget_fixture() {
   cp -r "$REPO_ROOT/scripts" "$REPO_ROOT/gitops" "$OTHER/"
   cp "$REPO_ROOT/demo.env" "$REPO_ROOT/versions.env" "$OTHER/"
   cp "$REPO_ROOT/bridge/deploy/deployment.yaml" "$OTHER/bridge/deploy/"
-  printf '* @someone\n' > "$OTHER/.github/CODEOWNERS"
+  printf '/aiops/autonomy.yaml @org/board\n/policy/ @org/board\n/.github/ @org/board\n' > "$OTHER/.github/CODEOWNERS"
   printf '.env\n.kube/\n.operator/\n' > "$OTHER/.gitignore"
   "$REAL_GIT" -C "$OTHER" add -A
   "$REAL_GIT" -C "$OTHER" commit -q -m "seed tooling"
@@ -99,8 +99,11 @@ case "$1 $2" in
   *) echo "gh stub: unexpected: $*" >&2; exit 1 ;;
 esac
 STUB
+  # the ruleset script: live-mode reads LIVE_MODE (default minimal-policy-check, matching the
+  # default rules above); anything else is logged as RULESET.
   cat > "$STUBS/github-ruleset.sh" <<'STUB'
 #!/usr/bin/env bash
+if [ "$1" = live-mode ]; then echo "live-mode" >> "$CALLS"; cat "$STUBS/LIVE_MODE" 2>/dev/null || echo minimal-policy-check; exit 0; fi
 echo "RULESET $*" >> "$CALLS"
 STUB
   cat > "$STUBS/promotion-pr.sh" <<'STUB'
@@ -111,6 +114,20 @@ STUB
 }
 
 retarget() { ( cd "$FIXTURE" && "$FIXTURE/scripts/retarget.sh" "$@" ); }
+
+# commit_on BRANCH PATH CONTENT : one commit on origin's BRANCH writing PATH
+commit_on() {
+  "$REAL_GIT" -C "$OTHER" fetch -q origin
+  "$REAL_GIT" -C "$OTHER" checkout -q -B work "origin/$1"
+  mkdir -p "$OTHER/$(dirname "$2")"
+  printf '%s\n' "$3" > "$OTHER/$2"
+  "$REAL_GIT" -C "$OTHER" add "$2"
+  "$REAL_GIT" -C "$OTHER" commit -q -m "change $2"
+  "$REAL_GIT" -C "$OTHER" push -q origin "HEAD:refs/heads/$1"
+}
+
+GOOD_RULES='[{"type":"deletion"},{"type":"non_fast_forward"},{"type":"pull_request","parameters":{"require_code_owner_review":true}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"policy-check","integration_id":15368}]}}]'
+
 
 # make_branch NAME : a branch on origin at build/demo's tip
 make_branch() { "$REAL_GIT" --git-dir="$ORIGIN" branch "$1" "refs/heads/$BASE"; }
@@ -230,7 +247,9 @@ line_of() { grep -n -m1 -- "$1" "$CALLS" | cut -d: -f1; }
   echo '[{"number":7,"headRefName":"promote/propose-20261102-abcd","baseRefName":"build/demo"}]' > "$STUBS/open-prs.json"
   run retarget "$SCRATCH"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"lacks deletion, non_fast_forward, pull_request or the required policy-check"* ]]
+  # caught before any change now (the destination must be protected before Argo CD follows it)
+  [[ "$output" == *"not protected yet"*"policy-check"* ]]
+  ! grep -q '^PUSH' "$CALLS"
   ! grep -q 'pr close' "$CALLS"
   ! grep -q '^PROMO' "$CALLS"
 }
@@ -329,6 +348,69 @@ JSON
   [ "$(tip "$SCRATCH")" = "$after" ]
   [ "$(main_branch)" = "$SCRATCH" ]
   grep -q 'apply -f gitops/root.yaml' "$CALLS"
+}
+
+@test "retarget refuses a destination the live rulesets don't protect yet, before any commit" {
+  make_branch "$SCRATCH"
+  echo '[{"type":"pull_request","parameters":{}}]' > "$STUBS/rules-rehearse_main-sim.json"
+  run retarget "$SCRATCH"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not protected yet"* ]]
+  ! grep -q '^PUSH' "$CALLS"
+  ! grep -q 'apply -f' "$CALLS"
+  ! grep -q '^RULESET' "$CALLS"
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count "$BASE..$SCRATCH")" = 0 ]
+}
+
+@test "retarget refuses a destination whose autonomy level is above the tracked branch's" {
+  commit_on "$BASE" aiops/autonomy.yaml 'level: suggest'
+  make_branch "$SCRATCH"
+  commit_on "$SCRATCH" aiops/autonomy.yaml 'level: act'
+  "$REAL_GIT" -C "$FIXTURE" pull -q --ff-only origin "$BASE"
+  run retarget "$SCRATCH"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"autonomy"*"act"*"suggest"* ]]
+  ! grep -q '^PUSH' "$CALLS"
+  ! grep -q 'apply -f' "$CALLS"
+}
+
+@test "retarget accepts a destination at the same or a lower autonomy level" {
+  commit_on "$BASE" aiops/autonomy.yaml 'level: propose'
+  make_branch "$SCRATCH"
+  "$REAL_GIT" -C "$FIXTURE" pull -q --ff-only origin "$BASE"
+  run retarget "$SCRATCH"
+  [ "$status" -eq 0 ]
+}
+
+@test "retarget refuses a destination that changes code-owned paths the tracked branch lacks" {
+  make_branch "$SCRATCH"
+  commit_on "$SCRATCH" policy/extra.rego 'package autofix'
+  run retarget "$SCRATCH"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"code-owned"*"policy/extra.rego"* ]]
+  ! grep -q '^PUSH' "$CALLS"
+  ! grep -q 'apply -f' "$CALLS"
+}
+
+@test "retarget defaults to the live ruleset mode and keeps live code-owner review" {
+  make_branch "$SCRATCH"
+  echo policy-check > "$STUBS/LIVE_MODE"
+  for b in build_demo main rehearse_main-sim; do echo "$GOOD_RULES" > "$STUBS/rules-$b.json"; done
+  run retarget "$SCRATCH"
+  [ "$status" -eq 0 ]
+  grep -qx 'RULESET apply' "$CALLS"
+  ! grep -q 'RULESET apply --minimal' "$CALLS"
+}
+
+@test "retarget refuses RETARGET_RULESET_MODE=minimal while code-owner review is live, before any commit" {
+  make_branch "$SCRATCH"
+  echo policy-check > "$STUBS/LIVE_MODE"
+  for b in build_demo main rehearse_main-sim; do echo "$GOOD_RULES" > "$STUBS/rules-$b.json"; done
+  RETARGET_RULESET_MODE=minimal run retarget "$SCRATCH"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"code-owner review"* ]]
+  ! grep -q '^PUSH' "$CALLS"
+  ! grep -q '^RULESET' "$CALLS"
 }
 
 @test "make retarget needs BRANCH" {

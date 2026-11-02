@@ -10,6 +10,8 @@
 #   scripts/github-ruleset.sh apply --spike BRANCH     add the temporary spike ruleset on one rehearse/* branch
 #   scripts/github-ruleset.sh apply --spike-remove     delete the spike ruleset
 #   scripts/github-ruleset.sh show                     print every ruleset, normalized, as JSON
+#   scripts/github-ruleset.sh live-mode                print the live tracked mode (read only):
+#                                                      minimal | full | policy-check | minimal-policy-check
 #   scripts/github-ruleset.sh verify-integrity         prove a force-push to a listed branch is refused
 #
 # The standing rulesets (names and branch list come from demo.env; see docs/github-setup.md):
@@ -19,7 +21,9 @@
 # --minimal leaves code-owner review off in `tracked` (CODEOWNERS does not exist yet); a plain
 # `apply` turns it on; --with-policy-check also adds required_status_checks (slice 5). Once the
 # required check is live, a plain `apply` or `apply --minimal` keeps it (there is no mode that
-# removes it; delete the rule in the UI if that is ever wanted).
+# removes it; delete the rule in the UI if that is ever wanted). Likewise `apply --minimal` refuses
+# while the live tracked ruleset requires code-owner review (RULESET_ALLOW_CODE_OWNER_DROP=1 to
+# drop it on purpose).
 # Every PUT replaces a whole ruleset, so this script is the only source of the rules: anything set
 # by hand in the GitHub UI is lost on the next apply. verify-integrity reads the live mode back
 # (minimal, full or policy-check) and restores that mode, not a fixed one.
@@ -36,7 +40,7 @@ set -euo pipefail
 ADMIN_ROLE_ID=5                  # GitHub's built-in "Admin" repository role
 SPIKE_NAME=argoconna26-spike
 
-usage() { die "usage: github-ruleset.sh apply [--minimal [--with-policy-check]|--with-policy-check|--spike BRANCH|--spike-remove] | show | verify-integrity"; }
+usage() { die "usage: github-ruleset.sh apply [--minimal [--with-policy-check]|--with-policy-check|--spike BRANCH|--spike-remove] | show | live-mode | verify-integrity"; }
 
 LAST_PUSH="${RULESET_LAST_PUSH_APPROVAL:-false}"
 [[ "$LAST_PUSH" == true || "$LAST_PUSH" == false ]] \
@@ -175,6 +179,20 @@ keep_live_check() {
   echo "$1"
 }
 
+# refuse_code_owner_drop MODE : a minimal mode would PUT require_code_owner_review=false. Refuse
+# that while the live tracked ruleset requires code-owner review (L5b): it is what makes the
+# promotion board's review binding on aiops/autonomy.yaml, policy/ and .github/.
+# RULESET_ALLOW_CODE_OWNER_DROP=1 is the explicit operator override.
+refuse_code_owner_drop() {
+  local live
+  [[ "$1" == minimal* ]] || return 0
+  [[ "${RULESET_ALLOW_CODE_OWNER_DROP:-0}" == 1 ]] && return 0
+  live="$(live_mode)"
+  if [[ "$live" == full || "$live" == policy-check ]]; then
+    die "refusing: the live $RULESET_TRACKED requires code-owner review, and apply --minimal would turn it off. Use a plain apply (it keeps code-owner review and the required check), or set RULESET_ALLOW_CODE_OWNER_DROP=1 to drop it on purpose."
+  fi
+}
+
 # A force-push refusal counts only when GitHub names a ruleset (GH013) AND the non_fast_forward
 # rule ("Cannot force-push"), which only the integrity ruleset carries. A plain non-fast-forward
 # rejection, classic branch protection, or tracked's pull-request rule do not count.
@@ -238,8 +256,8 @@ main() {
         "")             apply_standing "$(keep_live_check full)" ;;
         --minimal)
           case "${3:-}" in
-            "")                  apply_standing "$(keep_live_check minimal)" ;;
-            --with-policy-check) apply_standing minimal-policy-check ;;
+            "")                  refuse_code_owner_drop minimal; apply_standing "$(keep_live_check minimal)" ;;
+            --with-policy-check) refuse_code_owner_drop minimal-policy-check; apply_standing minimal-policy-check ;;
             *) usage ;;
           esac ;;
         --with-policy-check) apply_standing policy-check ;;
@@ -248,6 +266,7 @@ main() {
         *) usage ;;
       esac ;;
     show)             show ;;
+    live-mode)        live_mode ;;
     verify-integrity) verify_integrity ;;
     *) usage ;;
   esac

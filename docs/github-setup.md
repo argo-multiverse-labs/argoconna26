@@ -99,7 +99,11 @@ from `RULESET_BRANCHES` and re-apply; the script does that for you in `verify-in
   `apply --minimal --with-policy-check` adds it while code-owner review stays off. Every apply
   replaces the whole ruleset, so once the required check is live a plain `apply` (or
   `apply --minimal`) keeps it rather than dropping it; use `apply --with-policy-check` to turn
-  code-owner review on.
+  code-owner review on. The reverse is refused: while the live tracked ruleset requires
+  code-owner review, `apply --minimal` (with or without `--with-policy-check`) exits without
+  changing anything, because that review is what makes the promotion board's approval binding.
+  `RULESET_ALLOW_CODE_OWNER_DROP=1` drops it on purpose. `github-ruleset.sh live-mode` prints the
+  live mode (read only).
 - **Bypass actors:** exactly one: the built-in **Repository role "Admin"** (`actor_type:
   RepositoryRole`, `actor_id: 5`, `bypass_mode: always`).
 
@@ -315,7 +319,7 @@ Two refusals don't carry a ruleset message, and the check handles them explicitl
 
 | Thing | Value |
 |---|---|
-| Script | `scripts/github-ruleset.sh apply [--minimal [--with-policy-check] \| --with-policy-check \| --spike BRANCH \| --spike-remove]`, `show`, `verify-integrity` |
+| Script | `scripts/github-ruleset.sh apply [--minimal [--with-policy-check] \| --with-policy-check \| --spike BRANCH \| --spike-remove]`, `show`, `live-mode`, `verify-integrity` |
 | Script knob | `RULESET_LAST_PUSH_APPROVAL` (environment, `true` or `false`, default `false`) |
 | Admin role id used as the only bypass | `5` (repository role "Admin") |
 | Names the scripts read | `demo.env`: `REPO_SLUG`, `BOT_LOGIN`, `PROMOTION_TEAM`, `RULESET_BRANCHES`, `RULESET_INTEGRITY`, `RULESET_TRACKED`, `RULESET_PROMOTE`, `POLICY_CHECK_CONTEXT`, `POLICY_CHECK_INTEGRATION_ID` |

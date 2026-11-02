@@ -177,10 +177,46 @@ rs() { jq -c "$2" "$(grep -l "\"name\": *\"$1\"" "$STATE"/rulesets/*.json | head
 }
 
 @test "apply --minimal keeps a live required policy-check too" {
-  "$SCRIPT" apply --with-policy-check
+  "$SCRIPT" apply --minimal --with-policy-check
   "$SCRIPT" apply --minimal
   [ "$(rs argoconna26-tracked '[.rules[].type]|sort')" = '["pull_request","required_status_checks"]' ]
   [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "false" ]
+}
+
+@test "apply --minimal refuses to drop a live code-owner rule" {
+  "$SCRIPT" apply
+  : > "$CALLS"
+  run "$SCRIPT" apply --minimal
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"code-owner review"* ]]
+  ! grep -q -- '-X PUT' "$CALLS"
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "true" ]
+}
+
+@test "apply --minimal --with-policy-check refuses to drop a live code-owner rule" {
+  "$SCRIPT" apply --with-policy-check
+  : > "$CALLS"
+  run "$SCRIPT" apply --minimal --with-policy-check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"code-owner review"* ]]
+  ! grep -q -- '-X PUT' "$CALLS"
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "true" ]
+}
+
+@test "RULESET_ALLOW_CODE_OWNER_DROP=1 lets --minimal turn a live code-owner rule off" {
+  "$SCRIPT" apply --with-policy-check
+  RULESET_ALLOW_CODE_OWNER_DROP=1 run "$SCRIPT" apply --minimal
+  [ "$status" -eq 0 ]
+  [ "$(rs argoconna26-tracked '.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review')" = "false" ]
+}
+
+@test "live-mode prints the live tracked mode (read only)" {
+  "$SCRIPT" apply --with-policy-check
+  : > "$CALLS"
+  run "$SCRIPT" live-mode
+  [ "$status" -eq 0 ]
+  [ "$output" = "policy-check" ]
+  ! grep -qE -- '-X (PUT|POST|DELETE)' "$CALLS"
 }
 
 @test "force_push_refused_by_integrity needs GH013 and the non-fast-forward rule text" {
