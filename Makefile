@@ -439,6 +439,18 @@ demote: ## Lower the autonomy level by one step (a forward commit, direct push)
 disarm-git-only: ## (build-all) Push the disarm before Argo's first sync; skips without an operator clone
 	@$(ROOT)/scripts/git-ops.sh disarm --git-only
 
+################################################################################
+# The rung scripts, as shown on stage (scripts/demo-rung-N.sh; TYPE_SPEED, NO_WAIT) #
+################################################################################
+
+.PHONY: demo-rung-1 demo-rung-2 demo-rung-3
+demo-rung-1: ## Rung 1 (suggest) with demo-magic; start from make reset-rung-1
+	@$(ROOT)/scripts/demo-rung-1.sh
+demo-rung-2: ## Rung 2 (propose) with demo-magic; start from make reset-rung-2
+	@$(ROOT)/scripts/demo-rung-2.sh
+demo-rung-3: ## Rung 3 (act), live through make night; start from make reset-rung-3 and the act promotion
+	@$(ROOT)/scripts/demo-rung-3.sh
+
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts
 	@mkdir -p $(SNAP_DIR)
