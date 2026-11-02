@@ -6,6 +6,7 @@
 # It stops before the bump. Prints (or, under STAGE=1, writes to .operator/last-rearm, the
 # file rearm uses, so a reader always finds the latest cause there):
 #   cause: <PR-242 sha>   change_ref: CHG-XXXXXX
+# SEED_TIMELINE_RESET=true (reset-demo) makes the first /seed drop every earlier event (keep_live_hours=0).
 # The bump that follows (make bump) writes its own line to .operator/last-bump.
 # STAGE=1: one short line per beat, no raw SHAs on the terminal.
 set -euo pipefail
@@ -49,10 +50,10 @@ main() {
   op_disarm
   op_sync
 
-  # The history before PR-242: load it onto the timeline (idempotent; no reset here).
+  # The history before PR-242: load it onto the timeline (idempotent; reset-demo sets SEED_TIMELINE_RESET=true).
   local -a history
   mapfile -t history < <(recent_checkout_revisions)
-  sim_seed false "${history[@]}"
+  sim_seed "${SEED_TIMELINE_RESET:-false}" "${history[@]}"
 
   change_ref="$(new_change_ref)"
   config_value_set "$CONFIG_ARMED"

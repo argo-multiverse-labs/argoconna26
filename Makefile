@@ -37,7 +37,7 @@ PRE    = . $(ROOT)/scripts/common.sh; load_env; cluster_lock
 
 .PHONY: help
 help: ## This help
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 ################################################################################
 # Tools and checks                                                             #
@@ -404,6 +404,20 @@ naive-revert: ## Revert the last image bump: green but wrong
 .PHONY: disarm
 disarm: ## Timeout back to 2000 (IMAGE=vX.Y.Z also pins the tag; GIT_ONLY=1 skips the wait)
 	@$(ROOT)/scripts/git-ops.sh disarm $(if $(IMAGE),--image $(IMAGE)) $(if $(GIT_ONLY),--git-only)
+
+################################################################################
+# Resets between rehearsals (scripts/reset.sh; forward commits only)           #
+################################################################################
+
+.PHONY: reset-rung-1 reset-rung-2 reset-rung-3 reset-demo
+reset-rung-1: ## Back to the rung-1 start: disarmed, suggest, history seeded, timeline kept
+	@$(ROOT)/scripts/reset.sh 1
+reset-rung-2: ## Back to the rung-2 start: disarmed, suggest, a fresh propose promotion PR
+	@$(ROOT)/scripts/reset.sh 2
+reset-rung-3: ## Back to the rung-3 start: disarmed, propose, a fresh act promotion PR (exit 6 from suggest)
+	@$(ROOT)/scripts/reset.sh 3
+reset-demo: ## Rung-1 reset plus a re-seeded timeline (every full rehearsal starts the same)
+	@$(ROOT)/scripts/reset.sh demo
 
 ################################################################################
 # Autonomy: promotion PRs and demotion (scripts/promotion-pr.sh)               #
