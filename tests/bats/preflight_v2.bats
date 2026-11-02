@@ -56,7 +56,9 @@ setup() {
       $R/labels/*) [ ! -e "$S/nolabel-${path##*/}" ] ;;
       $R/contents/aiops/autonomy.yaml) cat "$S/autonomy.yaml" ;;
       $R/contents/.github/CODEOWNERS) echo CODEOWNERS ;;
-      orgs/*/teams/*/repos/*) [ -f "$S/team-repo.json" ] && cat "$S/team-repo.json" || exit 1 ;;
+      # GitHub answers 204 with no body unless the repository media type is asked for.
+      orgs/*/teams/*/repos/*) [ -f "$S/team-repo.json" ] || exit 1
+        case "$*" in *application/vnd.github.v3.repository+json*) cat "$S/team-repo.json" ;; esac ;;
       orgs/*/teams/*/memberships/*) [ -f "$S/membership.json" ] && cat "$S/membership.json" || exit 1 ;;
       user) echo login ;;
       *) echo "gh stub: unexpected $*" >&2; exit 1 ;;
@@ -120,7 +122,8 @@ healthy_github() {
     rules:[{type:"pull_request",parameters:{require_code_owner_review:true}},$c]}' >"$STATE/rulesets/2.json"
   jq -n --argjson b "$admin" '{id:3,name:"argoconna26-promote",conditions:{ref_name:{include:["refs/heads/promote/*"]}},bypass_actors:$b,rules:[{type:"creation"},{type:"update"},{type:"deletion"}]}' >"$STATE/rulesets/3.json"
   jq -n --argjson c "$chk" '[{type:"pull_request",parameters:{require_code_owner_review:true}},$c]' >"$STATE/rules.json"
-  echo '{"role_name":"push","permissions":{"push":true}}' >"$STATE/team-repo.json"
+  # GitHub's real shape: the Write role is "write", with permissions.push true.
+  echo '{"role_name":"write","permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true}}' >"$STATE/team-repo.json"
   echo '{"state":"active"}' >"$STATE/membership.json"
   autonomy suggest
   prs '[]'
@@ -490,6 +493,19 @@ install_unit() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/night.sh" job-install >/d
   [[ "$output" == *"[PASS]"*"requires code-owner review"* ]]
   [[ "$output" == *"[PASS]"*"membership of promotion-board is active"* ]]
   [[ "$output" != *"zq-login-x"* ]]
+}
+
+@test "github-admin passes when the team has GitHub's write role" {
+  STAGE_APPROVER_LOGIN=zq-login-x run "$ONLY" github_admin 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[PASS]"*"team promotion-board has push or higher"* ]]
+}
+
+@test "github-admin fails when the team only has read on the repo" {
+  echo '{"role_name":"read","permissions":{"admin":false,"maintain":false,"push":false,"triage":false,"pull":true}}' >"$STATE/team-repo.json"
+  STAGE_APPROVER_LOGIN=zq-login-x run "$ONLY" github_admin 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"team promotion-board has no push access"* ]]
 }
 
 @test "github-admin fails rung 2 when the stage approver's membership is pending" {

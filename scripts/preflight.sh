@@ -443,9 +443,12 @@ section_github_admin() {
   _admin_tracked "$rs" "$refs"
   _admin_promote "$rs"
   org="$(_team_org)"; slug="$(_team_slug)"
-  if perm="$(gh api "orgs/${org}/teams/${slug}/repos/${REPO_SLUG}" 2>/dev/null)" \
-      && jq -e '(.role_name // "") as $r | ["push","maintain","admin"] | index($r) != null
-                or (.permissions.push == true)' >/dev/null <<<"$perm"; then
+  # Without the repository media type GitHub answers 204 with no body, so nothing to read.
+  if perm="$(gh api -H 'Accept: application/vnd.github.v3.repository+json' \
+        "orgs/${org}/teams/${slug}/repos/${REPO_SLUG}" 2>/dev/null)" \
+      && jq -e '(.role_name // "") as $r
+                | (["push","write","maintain","admin"] | index($r) != null)
+                  or (.permissions.push == true)' >/dev/null <<<"$perm"; then
     check_pass "github-admin: team $slug has push or higher on the repo"
   else
     l5b_check "github-admin: team $slug has no push access to the repo (or does not exist)"
