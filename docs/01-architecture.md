@@ -51,7 +51,9 @@ Notes on the steps:
   data" as inconclusive, not as success. See [03](./03-the-incident.md).
 - **Step 5.** The webhook body carries the app name, namespace, the revision, the synced
   revision, the health, the Argo history, the repo URL and the target revision. Argo
-  Notifications send it once per synced revision (`oncePer`). A malformed body gets a 4xx,
+  Notifications send it once per health transition (`oncePer:
+  app.status.health.lastTransitionTime`), so a fix that syncs while the aborted rollout still
+  reports Degraded does not start a second incident. A malformed body gets a 4xx,
   never a 5xx, so Notifications do not retry in a loop.
 - **Step 6.** The level is read per incident, so a promotion takes effect on the next one. See
   [02](./02-trust-ladder.md).

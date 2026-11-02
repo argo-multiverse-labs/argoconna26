@@ -100,7 +100,7 @@ The tracked-branch ruleset requires pull requests but **zero** approvals. That i
 |------------|---------|-----|
 | At `suggest` the agent opens no PR | The bridge | The `suggest` path only posts comments |
 | At `propose` the agent never merges | The bridge | The path never calls merge or auto-merge; a unit test asserts it |
-| At `act` a merge needs a passing `policy-check` | GitHub | `required_status_checks` in the tracked ruleset (the `--with-policy-check` mode of `scripts/github-ruleset.sh apply`), plus the bridge's own check in its fallback |
+| At `act` a merge needs a passing `policy-check` | GitHub | `required_status_checks` in the tracked ruleset (the `--with-policy-check` mode of `scripts/github-ruleset.sh apply`), plus the bridge's own check before any merge it makes itself |
 | The agent cannot raise its own level | GitHub | `aiops/autonomy.yaml` is code-owned by the promotion team; with `require_code_owner_review` on (`apply --with-policy-check`; `--minimal` leaves it off, and it is off until the promotion-board team exists) an App-authored PR that edits it stays `REVIEW_REQUIRED` and `BLOCKED`. Today the required `policy-check` is what fails such a PR (rule 1) |
 | The agent cannot open or alter a promotion | GitHub | The `promote/*` ruleset allows only the admin role to create, update or delete those branches. The App is never a bypass actor |
 | The agent cannot push to, rewrite or delete the tracked branch | GitHub | The integrity ruleset (`deletion`, `non_fast_forward`, no bypass actors) and the tracked ruleset (pull request required) |

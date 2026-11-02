@@ -11,7 +11,7 @@ One incident, replayed at three levels of trust (the **trust ladder**):
 
 | Rung | Level | What the agent does | Who acts |
 |------|-------|---------------------|----------|
-| 1 | `suggest` | Posts its root-cause analysis as a comment on the cause commit (or its PR). | A human fixes it. |
+| 1 | `suggest` | Posts its root-cause analysis as a comment on the cause commit (or on the PR that merged it). | A human fixes it. |
 | 2 | `propose` | Opens a two-line fix PR with the analysis and evidence in the body. | A human reviews and merges. |
 | 3 | `act` | Opens the same PR and turns on auto-merge. It merges only after `policy-check` passes, which GitHub enforces as a required status. | A human reviews afterwards. |
 
@@ -176,8 +176,10 @@ reviews and merges it, Argo CD syncs, and the application recovers.
 ### Rung 3: act
 
 At `act` the bridge enables GitHub's auto-merge on its fix PR. GitHub merges it once the required
-`policy-check` passes; if auto-merge cannot be enabled, the bridge waits for the check and merges
-only on `success`. The trigger is a scheduled job: one user-level systemd unit that runs the
+`policy-check` passes. If the check passed and the PR is still open 30 s later
+(`ACT_AUTOMERGE_GRACE_S`), the bridge merges it itself at the PR's head SHA; GitHub enforces the
+required check on that merge too. If auto-merge cannot be enabled at all, the bridge waits for
+the check and merges only on `success`. The trigger is a scheduled job: one user-level systemd unit that runs the
 rung-3 preflight and then `rearm`.
 
 ```bash
@@ -191,6 +193,11 @@ merges it, and Argo CD syncs on its own reconciliation (nothing nudges it). A pe
 afterwards. `make night` is the nightly job run on demand; no timer is armed unless you run
 `make timer-arm`. `scripts/night.sh night` returns the job's own exit code (make reports any
 failure as 2).
+
+Measured on the kind cluster (one run, no Argo refresh): 74 s from typing `make night` to the
+PR, 53 s from the PR to the merge, 69 s from the merge to Healthy. PR to merge depends on
+GitHub's auto-merge and ranged from 18 s to 200 s across earlier runs, which is why the bridge
+now merges itself after the grace period.
 
 The end-to-end tests: `tests/e2e/rung3.sh` runs the rung from the pre-promotion state;
 `tests/e2e/overnight-verify.sh SINCE=... UNTIL=...` checks a run after the fact (the job started
@@ -256,7 +263,8 @@ back to 2000 (`IMAGE=vX.Y.Z` also pins the image tag).
 - *The bridge:* at `suggest` it opens no PR; at `propose` it never calls merge or auto-merge, so
   "a human merges" holds there because of the bridge, not a GitHub approval rule. The tracked
   ruleset requires zero approvals on purpose, so that `act` can auto-merge. The bridge also
-  checks that `policy-check` succeeded before its fallback merge.
+  checks that `policy-check` succeeded before any merge it makes itself (the fallback and the
+  catch-up after a slow auto-merge).
 - *The required check's trust boundary:* `policy-check` judges a PR with the policy on the PR's
   base branch, not the copy the PR carries. The workflow itself runs from the PR's merge ref, so
   a PR that edits it could change how it runs. What stops an agent PR doing that: the App has no

@@ -138,9 +138,13 @@ the real model, so they spend LLM budget and open PRs on the repo.
 | `tests/e2e/rung1.sh` | Rung 1: the agent's comment names the cause, cites the change reference, and the incident resolves. `--seed` for the first run, `--rearm` after |
 | `tests/e2e/rung2.sh` | Rung 2: promotion PR, merge, one fix PR with two changed lines, merge, Healthy, counted once |
 | `tests/e2e/failure-paths.sh` | A guardrail refusal, a HolmesGPT timeout handoff, a rejected PR and a demotion. Takes `refusal`, `timeout`, `reject` |
+| `tests/e2e/rung3.sh` | Rung 3 from the pre-promotion state: promotion to `act`, `make night`, one bot PR that merges with no human action, sync, Healthy, then `overnight-verify.sh` over the run window. Leaves autonomy at `act` (`make demote` lowers it) |
+| `tests/e2e/overnight-verify.sh` | Checks a rung-3 run after the fact for `SINCE=... UNTIL=...`: only the job's rearm commits, one bot PR merged by the bot with no reviews, `policy-check` passed with the auto-fix rules applied, the metric rose, the merge deployed, the incident resolved |
+| `tests/e2e/policy-negative.sh` | Opens App-authored PRs that break a rule (image change, edits to the auto-fix policy, golden path, workflow, autonomy, a planted `conftest.toml` or `yaml.py`) and checks each one fails `policy-check`, shows `BLOCKED` and stays unmerged. The workflow edit is refused by GitHub before a PR exists. The code-owner `REVIEW_REQUIRED` assertion for the autonomy case waits until code-owner review is on |
 
 `tests/e2e/assert.sh` holds shared assertions. Evidence from a run goes to `EVIDENCE_DIR` (default
-`.evidence/` in the main checkout, gitignored). There is no end-to-end script for rung 3 yet.
+`.evidence/` in the main checkout, gitignored). PRs the tests open are labelled `demo-reset` or
+`policy-negative-test`, so the dashboard does not count them.
 
 ## The rung-3 scheduled job
 
@@ -178,7 +182,7 @@ merge; it syncs on its own reconciliation. See the [README](../README.md).
 | `make rearm` exits 7 | Already armed. Run `make disarm` first |
 | The bridge refuses or hands off every incident | A test hook is active: `make bridge-hooks-check`, then `make bridge-hooks-clear` |
 | No agent comment | `make bridge-log`; curl `/status` on port 30081 for `holmes_reachable`, `github_token_ok` and the last incident |
-| The agent's PR never merges at `act` | `policy-check` is missing or failing on the PR; the fallback gives up after 10 minutes and says so in a comment |
+| The agent's PR never merges at `act` | `policy-check` is missing or failing on the PR. The bridge waits up to 10 minutes for the check; when it had to wait itself (auto-merge could not be enabled) it says so in a comment. A failing check gets one comment from the reconciler |
 | Argo CD lags behind a merge | Reconciliation is 20 s; the operator scripts annotate the Application to refresh it, and GitHub-side merges may need a refresh |
 | LiteLLM `prisma schema out of sync` after install | The migration Job has not finished; `make litellm-install` waits for it |
 | First success-rate query after a build is empty | Prometheus needs a couple of scrapes. Wait, then run `make preflight` |
