@@ -470,6 +470,10 @@ promotion-record-approval: ## After the merge, record who approved in autonomy.y
 demote: ## Lower the autonomy level by one step (a forward commit, direct push)
 	@$(ROOT)/scripts/promotion-pr.sh demote
 
+.PHONY: retarget
+retarget: ## Move the tracked branch (BRANCH=main): commit, root app, bridge, rulesets, promotion PRs (scripts/retarget.sh)
+	@$(ROOT)/scripts/retarget.sh $(or $(BRANCH),$(error BRANCH=<branch> is required))
+
 .PHONY: disarm-git-only
 disarm-git-only: ## (build-all) Push the disarm before Argo's first sync; skips without an operator clone
 	@$(ROOT)/scripts/git-ops.sh disarm --git-only
