@@ -415,7 +415,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aiops_dryrun_accuracy_ratio or on() vector(-1)",
+          "expr": "max(aiops_dryrun_accuracy_ratio) or on() vector(-1)",
           "legendFormat": "dry-run accuracy",
           "instant": false,
           "range": true
