@@ -9,9 +9,10 @@
 # What it asserts:
 #   - the promotion record says admin-bypass (or a promotion-board review link), never a login
 #     and never the team
-#   - exactly one fix PR from BOT_LOGIN on agent/checkout-* created after T0, whose diff is
-#     CONFIG_FILE and ROLLOUT_FILE with one changed line each, whose body carries
-#     "Cause: <the cause rearm printed>" and the propose footer
+#   - exactly one fix PR from BOT_LOGIN on agent/checkout-* created after T0 (counted when it
+#     opens and again once Healthy), whose diff is CONFIG_FILE and ROLLOUT_FILE with one changed
+#     line each, whose body's first "Cause:" line is the cause rearm printed, with the propose
+#     footer and a root-cause section within the projector caps; no open agent PR at the end
 #   - merge -> Argo synced at the merge commit <= MERGE_SYNC_MAX_S (30 s), a new pod hash, Healthy
 #   - the timeline has the bridge's change.created for checkout and the incident is resolved
 #   - aiops_fix_prs_total{outcome="merged"} rose by one (the reconciler, Task 4.3a), and
@@ -239,6 +240,10 @@ main() {
   local t_healthy
   t_healthy="$(now)"
   [[ "$(rollout_pod_hash)" != "$hash_before" ]] || fail "the Rollout's pod hash did not change after the fix"
+  # Review Focus 5, checked again now: a duplicate (a webhook replay, a rehydrate miss) opens
+  # seconds after the first PR, too late for the count above.
+  n="$(agent_prs_since "$t0" checkout | grep -c . || true)"
+  ((n == 1)) || fail "$n fix PRs from $BOT_LOGIN after T0 by Healthy, expected exactly one"
 
   step "timeline: change.created and the resolved incident"
   wait_for "change.created for checkout on /events since T0" 30 have_sim_event_since checkout change.created "$t0" \
@@ -258,6 +263,9 @@ main() {
   wait_for "Grafana panel 4 merged count = $want" 90 grafana_value_is "$panel4" "$want" \
     || fail "Grafana panel 4 merged count is $(grafana_prom_value "$panel4"), expected $want"
   log_info "rung2: merged fix PRs: $want (GitHub, bridge, Grafana panel 4)"
+  local left
+  left="$(open_agent_prs checkout | tr '\n' ' ')"
+  [[ -z "$left" ]] || fail "open agent PRs left for checkout at the end: $left(one open agent PR per app)"
 
   local rec_s=$((t_rec1 - t_rec0)) rearm_s=$((t0 - t_rearm0)) t0_deg=$((t_deg - t0)) t0_pr=$((t_pr - t0))
   local deg_pr=$((t_pr - t_deg)) merge_synced=$((t_synced - t_merge)) synced_healthy=$((t_healthy - t_synced))

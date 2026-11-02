@@ -102,12 +102,33 @@ fix_pr_footer() {
   yq -r ".footer.$1" "$(main_root)/bridge/src/bridge/templates/pr_sections.yaml"
 }
 
-# assert_fix_pr_body BODY CAUSE LEVEL : the policy-parsed Cause line and the level's footer.
+# pipeline_const NAME : an integer constant from the bridge's pipeline.py (the projector caps).
+pipeline_const() {
+  sed -n "s/^$1 = \([0-9][0-9]*\).*/\1/p" "$(main_root)/bridge/src/bridge/pipeline.py"
+}
+
+# assert_fix_pr_body BODY CAUSE LEVEL : the first "Cause:" line is the policy-parsed cause (no model
+# text before it), the level's footer is there, and the root-cause section fits the projector:
+# the root-cause paragraph and every bullet within the bridge's caps (ROOT_CAUSE_MAX, ITEM_MAX,
+# plus a little room for the "- Timeline: " label and Markdown escapes).
 assert_fix_pr_body() {
-  local body="$1" cause="$2" footer
+  local body="$1" cause="$2" footer first root line root_max item_max slack=20
   footer="$(fix_pr_footer "$3")"
-  grep -qE "^Cause: $cause( |\$)" <<<"$body" || { printf 'no "Cause: %s" line\n' "$cause" >&2; return 1; }
+  first="$(grep -m1 -E '^Cause: ' <<<"$body" || true)"
+  [[ "$first" =~ ^Cause:\ $cause(\ |$) ]] || { printf 'first Cause line is not %s: %s\n' "$cause" "$first" >&2; return 1; }
   grep -qF "$footer" <<<"$body" || { printf 'no %s footer: %s\n' "$3" "$footer" >&2; return 1; }
+  root_max="$(pipeline_const ROOT_CAUSE_MAX)"
+  item_max="$(pipeline_const ITEM_MAX)"
+  [[ -n "$root_max" && -n "$item_max" ]] || { echo 'no ROOT_CAUSE_MAX/ITEM_MAX in pipeline.py' >&2; return 1; }
+  root="$(awk '/^## /{n++} n == 1' <<<"$body")" # the first section: Root cause
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == "## "* || "$line" == "Cause: "* ]] && continue
+    if [[ "$line" == "- "* ]]; then
+      ((${#line} <= item_max + slack)) || { printf 'bullet is %d chars (cap %d): %s\n' "${#line}" "$item_max" "$line" >&2; return 1; }
+    else
+      ((${#line} <= root_max + slack)) || { printf 'root cause is %d chars (cap %d): %s\n' "${#line}" "$root_max" "$line" >&2; return 1; }
+    fi
+  done <<<"$root"
 }
 
 # bot_commit_comments SHA T0 : comments from BOT_LOGIN on commit SHA created at or after T0,

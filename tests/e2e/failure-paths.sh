@@ -2,11 +2,12 @@
 # The failure paths draft §5 reacts to, on the real kind cluster and real GitHub (Task 4.6 Step 3).
 #
 #   start: level propose (a promotion PR merged with admin bypass if it is lower, a demote if higher)
-#   1 refusal   CONFIDENCE_THRESHOLD above 1 -> rearm -> a refusal comment on the cause commit
+#   1 refusal   TEST_CONFIDENCE_THRESHOLD above 1 -> rearm -> a refusal comment on the cause commit
 #               (reason low_confidence), no PR, the guardrail counter +1, "▸ refused: low_confidence"
 #   2 timeout   TEST_HOLMES_TIMEOUT_S=1 -> rearm -> the handoff comment on the synced revision,
 #               exactly the fixed text (no model text), < 120 s after Degraded, /status holmes_failed
-#   3 reject    rearm -> the fix PR -> closed unmerged by a human -> rejected count +1 within 60 s;
+#   3 reject    rearm -> exactly one fix PR -> closed unmerged by a human -> rejected count +1
+#               within 60 s -> labelled demo-reset (a test rejection must not stay on panel 4);
 #   + demote    make demote -> level suggest on the tracked branch -> disarm, rearm -> the bridge
 #               logs "▸ autonomy: suggest" and comments on the cause commit, no PR
 #
@@ -170,8 +171,9 @@ ensure_propose() {
 
 # ---------------------------------------------------------------- the cases
 case_refusal() {
-  step "1 refusal: CONFIDENCE_THRESHOLD=1.01"
-  set_bridge_env CONFIDENCE_THRESHOLD=1.01
+  step "1 refusal: TEST_CONFIDENCE_THRESHOLD=1.01"
+  # The Deployment pins CONFIDENCE_THRESHOLD, so only the TEST_ name reaches the bridge.
+  set_bridge_env TEST_CONFIDENCE_THRESHOLD=1.01
   local series='aiops_guardrail_executions_total{reason="low_confidence"}' before t_deg
   before="$(bridge_metric "$series")"
   run_make disarm >/dev/null
@@ -220,7 +222,11 @@ case_reject_and_demote() {
   rearm
   wait_degraded
   wait_for "a fix PR from $BOT_LOGIN after T0" 300 have_agent_pr_since "$REARM_T0" checkout || fail "no fix PR"
-  pr="$(agent_prs_since "$REARM_T0" checkout | jq -r .number | head -n1)"
+  local prs n
+  prs="$(agent_prs_since "$REARM_T0" checkout)"
+  n="$(grep -c . <<<"$prs" || true)"
+  ((n == 1)) || fail "$n fix PRs from $BOT_LOGIN after T0, expected exactly one"
+  pr="$(jq -r .number <<<"$prs")"
   branch="$(gh pr view "$pr" --repo "$REPO_SLUG" --json headRefName --jq .headRefName)"
   gh pr close "$pr" --repo "$REPO_SLUG" --comment "Rejected: not the fix we want (failure-paths test)." >/dev/null
   t_close="$(now)"
@@ -229,6 +235,12 @@ case_reject_and_demote() {
   t_counted="$(now)"
   delete_remote_branch "$branch"
   record "reject: PR $pr closed unmerged, $series $before -> $((before + 1)) in $((t_counted - t_close)) s"
+  # A test rejection must not stay in panel 4's count for rehearsals and the stage: label it
+  # demo-reset (REST, not gh pr edit) and wait for the reconciler to drop it again.
+  gh api -X POST "repos/$REPO_SLUG/issues/$pr/labels" -f "labels[]=demo-reset" >/dev/null
+  wait_for "$series back to $before (PR $pr labelled demo-reset)" "$REJECT_COUNT_MAX_S" \
+    bridge_metric_is "$series" "$before" || fail "$series did not fall back to $before after the demo-reset label"
+  record "reject: PR $pr labelled demo-reset, $series back to $before"
 
   run_make demote >/dev/null
   wait_for "$AUTONOMY_FILE@$TRACKED_BRANCH is suggest" 60 tracked_level_is suggest || fail "the level is not suggest"
