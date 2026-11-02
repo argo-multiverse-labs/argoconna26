@@ -78,6 +78,21 @@ fix_prs_on_github() {
 merged_fix_prs_on_github() { fix_prs_on_github merged "$@"; }   # [APP]
 rejected_fix_prs_on_github() { fix_prs_on_github rejected "$@"; } # [APP]
 
+# policy_check_conclusion SHA : the conclusion of the required policy-check (GitHub Actions) on SHA:
+# success, failure, ..., or "pending" while it runs, or "missing" before it exists.
+policy_check_conclusion() {
+  local run
+  run="$(gh api "repos/$REPO_SLUG/commits/$1/check-runs?check_name=$POLICY_CHECK_CONTEXT&per_page=100" \
+    --jq "[.check_runs[] | select(.app.id == $POLICY_CHECK_INTEGRATION_ID)] | sort_by(.started_at) | last // empty")"
+  if [[ -z "$run" ]]; then echo missing; else jq -r '.conclusion // "pending"' <<<"$run"; fi
+}
+
+pr_policy_check_done() { # PR : policy-check on the PR's head has concluded (any conclusion)
+  local c
+  c="$(policy_check_conclusion "$(gh pr view "$1" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
+  [[ "$c" != pending && "$c" != missing ]]
+}
+
 pr_state_is() { # PR STATE (OPEN, CLOSED, MERGED)
   [[ "$(gh pr view "$1" --repo "$REPO_SLUG" --json state --jq .state)" == "$2" ]]
 }

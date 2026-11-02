@@ -176,7 +176,10 @@ main() {
     || { bridge_status >&2; fail "the bridge is not ready for real writes (dry_forge, GitHub token, HolmesGPT)"; }
 
   step "pre-promotion state: propose, no open agent PR, disarm --image $CHECKOUT_STABLE_TAG"
+  local t_reset0 t_reset1
+  t_reset0="$(now)"
   pre_promotion_state
+  t_reset1="$(now)"
   "$ROOT/scripts/preflight.sh" 3 --pre-promotion >>"$RUN_LOG" 2>&1 || fail "preflight 3 --pre-promotion failed (see $RUN_LOG)"
 
   step "promotion PR propose -> act, merge --admin (D5), record-approval"
@@ -288,12 +291,12 @@ main() {
 
   local trig_pr=$((t_pr - run_ts)) t0_pr=$((t_pr - t0)) pr_merged=$((t_merge - t_pr))
   local merge_synced=$((t_synced - t_merge)) merged_healthy=$((t_healthy - t_merge)) summary
-  summary="rung3: run=$run_id run_ts=$run_ts until=$until_ts cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr promotion_s=$((t_promo1 - t_promo0)) trigger_to_pr_s=$trig_pr t0_to_pr_s=$t0_pr pr_to_merged_s=$pr_merged merged_to_synced_s=$merge_synced merged_to_healthy_s=$merged_healthy merged_by=${merged_by:-auto} auto_merge=$auto"
+  summary="rung3: run=$run_id run_ts=$run_ts until=$until_ts cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr reset_s=$((t_reset1 - t_reset0)) promotion_s=$((t_promo1 - t_promo0)) trigger_to_pr_s=$trig_pr t0_to_pr_s=$t0_pr pr_to_merged_s=$pr_merged merged_to_synced_s=$merge_synced merged_to_healthy_s=$merged_healthy merged_by=${merged_by:-auto} auto_merge=$auto"
   printf '%s\n' "$summary" | tee -a "$RUN_LOG"
   [[ -s "$evdir/rung3-runs.tsv" ]] \
-    || printf 'run\trun_ts\tuntil\tcause\tpromo_pr\tfix_pr\tpromotion_s\ttrigger_to_pr_s\tt0_to_pr_s\tpr_to_merged_s\tmerged_to_synced_s\tmerged_to_healthy_s\tmerged_by\tauto_merge\tfix_pr_url\n' >"$evdir/rung3-runs.tsv"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$run_ts" "$until_ts" "$cause" "$PROMO_PR" \
-    "$fix_pr" "$((t_promo1 - t_promo0))" "$trig_pr" "$t0_pr" "$pr_merged" "$merge_synced" "$merged_healthy" \
+    || printf 'run\trun_ts\tuntil\tcause\tpromo_pr\tfix_pr\treset_s\tpromotion_s\ttrigger_to_pr_s\tt0_to_pr_s\tpr_to_merged_s\tmerged_to_synced_s\tmerged_to_healthy_s\tmerged_by\tauto_merge\tfix_pr_url\n' >"$evdir/rung3-runs.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$run_ts" "$until_ts" "$cause" "$PROMO_PR" \
+    "$fix_pr" "$((t_reset1 - t_reset0))" "$((t_promo1 - t_promo0))" "$trig_pr" "$t0_pr" "$pr_merged" "$merge_synced" "$merged_healthy" \
     "${merged_by:-auto}" "$auto" "$fix_url" >>"$evdir/rung3-runs.tsv"
   log_info "rung3: PASS"
 }

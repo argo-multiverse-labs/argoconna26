@@ -22,7 +22,8 @@
 #   - the Task 3.16 budget: T0 -> PR <= 150 s, merge -> Healthy <= 90 s, and the machine total
 #     plus the budgeted human dwell (HUMAN_DWELL_S, 90 s) <= 330 s (spec §8, 5.5 min)
 #
-# The fix PR is merged by this script with `gh pr merge --merge` (Luke's gh login). With
+# The fix PR is merged by this script with `gh pr merge --merge` (Luke's gh login), once the
+# required policy-check has passed on it. With
 # RUNG2_MERGE=browser it waits (up to BROWSER_MERGE_WAIT_S) for someone to merge it in the
 # browser instead, then measures from GitHub's mergedAt the same way.
 #
@@ -242,6 +243,12 @@ main() {
 
   step "merge the fix PR ($merge_mode)"
   if [[ "$merge_mode" == script ]]; then
+    # policy-check is a required status on the tracked branch: a human waits for it to go green.
+    wait_for "policy-check on fix PR $fix_pr concluded" 600 pr_policy_check_done "$fix_pr" \
+      || fail "policy-check on fix PR $fix_pr did not conclude"
+    local concl
+    concl="$(policy_check_conclusion "$(gh pr view "$fix_pr" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
+    [[ "$concl" == success ]] || fail "policy-check on fix PR $fix_pr concluded '$concl'"
     gh pr merge "$fix_pr" --repo "$REPO_SLUG" --merge >/dev/null || fail "gh could not merge fix PR $fix_pr"
   else
     log_info "rung2: merge $fix_url in the browser now"
