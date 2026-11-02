@@ -9,4 +9,4 @@ resources:
   - deploy/analysistemplate.yaml
 images:
   - name: checkout
-    newTag: v1.4.4
+    newTag: v1.4.5
