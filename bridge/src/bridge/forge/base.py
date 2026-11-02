@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 
 class ForgeError(Exception):
@@ -28,6 +28,23 @@ class PullRequest:
     url: str
     node_id: str
     head_sha: str
+
+
+@dataclass(frozen=True)
+class PullRequestInfo:
+    """One agent PR as the outcome reconciler sees it (Task 4.3a)."""
+
+    number: int
+    url: str
+    node_id: str
+    head_sha: str
+    branch: str
+    state: Literal["open", "closed"]
+    merged: bool = False
+    merged_by: str | None = None
+    merge_sha: str | None = None
+    closed_at: str | None = None
+    labels: tuple[str, ...] = ()
 
 
 #: Every branch the bridge creates starts with this, and every guard keys on it.
@@ -76,3 +93,5 @@ class Forge(Protocol):
     ) -> PullRequest: ...
 
     async def list_open_agent_prs(self, app: str) -> list[PullRequest]: ...
+
+    async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]: ...

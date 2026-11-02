@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import re
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -16,6 +16,7 @@ from .base import (
     ForgeError,
     ForgeNotFound,
     PullRequest,
+    PullRequestInfo,
     check_agent_branch,
 )
 
@@ -46,6 +47,7 @@ class GitHubForge:
         self.bot_login = bot_login
         self._api = api_url.rstrip("/")
         self._http = http or httpx.AsyncClient(timeout=timeout_s)
+        self._merged_by_cache: dict[int, str] = {}
 
     def __repr__(self) -> str:
         return f"GitHubForge(repo={self.repo!r})"
@@ -221,3 +223,49 @@ class GitHubForge:
             if len(batch) < 100:
                 return found
             page += 1
+
+    async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:
+        """Agent PRs (bot author, `agent/<app>-*` branch) in the given state, newest first.
+
+        The list endpoint does not say who merged, so a merged PR costs one extra GET, cached
+        because a merged PR never changes. Reads at most 10 pages (1000 PRs).
+        """
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+        found: list[PullRequestInfo] = []
+        for page in range(1, 11):
+            r = await self._request("GET", "/pulls", params={"state": state, "per_page": 100, "page": page})
+            batch = r.json()
+            for pr in batch:
+                head = pr.get("head") or {}
+                if not str(head.get("ref", "")).startswith(prefix):
+                    continue
+                if (pr.get("user") or {}).get("login") != self.bot_login:
+                    continue
+                number = int(pr["number"])
+                merged = bool(pr.get("merged_at"))
+                found.append(
+                    PullRequestInfo(
+                        number=number,
+                        url=str(pr.get("html_url", "")),
+                        node_id=str(pr.get("node_id", "")),
+                        head_sha=str(head.get("sha", "")),
+                        branch=str(head.get("ref", "")),
+                        state="open" if pr.get("state") == "open" else "closed",
+                        merged=merged,
+                        merged_by=await self._merged_by(number) if merged else None,
+                        merge_sha=pr.get("merge_commit_sha"),
+                        closed_at=pr.get("closed_at"),
+                        labels=tuple(str(label.get("name", "")) for label in pr.get("labels") or []),
+                    )
+                )
+            if len(batch) < 100:
+                break
+        return found
+
+    async def _merged_by(self, number: int) -> str:
+        if number in self._merged_by_cache:
+            return self._merged_by_cache[number]
+        r = await self._request("GET", f"/pulls/{number}")
+        login = str((r.json().get("merged_by") or {}).get("login") or "unknown")
+        self._merged_by_cache[number] = login
+        return login
