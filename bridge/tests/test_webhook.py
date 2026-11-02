@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from bridge.app import create_app
 from bridge.config import Settings
@@ -246,3 +246,15 @@ def test_status_shows_the_effective_test_hooks(settings: Settings, handler) -> N
     timed = settings.model_copy(update={"holmes_timeout_s": 1.0})
     with TestClient(create_app(timed, handler=handler)) as c:
         assert c.get("/status").json()["test_hooks_active"] is True
+
+
+@pytest.mark.parametrize("app", ["checkout/../main", "checkout api", "Checkout", "-x", "a" * 54, "checkout\n"])
+def test_hook_app_must_be_a_plain_name(app: str) -> None:
+    """C4 F4: the app name goes into a branch name, a URL and a PR-prefix match."""
+    with pytest.raises(ValidationError):
+        ArgoDegradedHook.model_validate(hook_body(app=app))
+
+
+def test_hook_app_accepts_the_demo_apps() -> None:
+    for app in ("checkout", "pricing", "a-b-1"):
+        assert ArgoDegradedHook.model_validate(hook_body(app=app)).app == app

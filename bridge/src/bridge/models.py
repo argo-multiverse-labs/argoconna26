@@ -28,7 +28,8 @@ class ArgoDegradedHook(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    app: str = Field(min_length=1)
+    # A plain Kubernetes-style name: it goes into a branch name, a URL and a PR-prefix match.
+    app: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,51}[a-z0-9])?$")
     namespace: str
     revision: Sha
     sync_revision: Sha

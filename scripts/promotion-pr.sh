@@ -139,16 +139,26 @@ gh_open_promotion_prs() { # -> PR numbers, one per line
 # Per human reviewer, the latest review that decides (COMMENTED and PENDING don't withdraw an
 # approval on GitHub, so they are dropped first) must be APPROVED and on HEAD (the head ensure
 # pushed). Bots and BOT_LOGIN never count: an App approval is not a promotion-board review.
-# Only the URL leaves this function; the reviewer's login is used for grouping and dropped.
-# (Team membership is not checked yet: the team does not exist before L4.)
+# The reviewer must be an active member of PROMOTION_TEAM (the repo is public, so anyone can
+# leave an approving review). Only the URL leaves this function; logins are used for the checks
+# and dropped.
 approving_review_url() {
-  local reviews
+  local reviews candidates login url org="${PROMOTION_TEAM#@}" found=""
+  local team="${org#*/}"
+  org="${org%%/*}"
   reviews="$(gh api "repos/${REPO_SLUG}/pulls/$1/reviews?per_page=100")" || return 1
-  jq -r --arg bot "${BOT_LOGIN:?}" --arg head "$2" '
+  candidates="$(jq -r --arg bot "${BOT_LOGIN:?}" --arg head "$2" '
     [.[] | select(.state != "COMMENTED" and .state != "PENDING")
          | select(.user.type != "Bot" and .user.login != $bot)]
     | [group_by(.user.login)[] | last | select(.state == "APPROVED" and .commit_id == $head)]
-    | last | .html_url // empty' <<<"$reviews"
+    | sort_by(.id) | .[] | "\(.user.login) \(.html_url)"' <<<"$reviews")" || return 1
+  while read -r login url; do
+    [[ -n "$login" ]] || continue
+    if [[ "$(gh api "orgs/$org/teams/$team/memberships/$login" --jq .state 2>/dev/null)" == active ]]; then
+      found="$url"
+    fi
+  done <<<"$candidates"
+  [[ -z "$found" ]] || printf '%s\n' "$found"
 }
 
 # ------------------------------------------------------- recorded promotions

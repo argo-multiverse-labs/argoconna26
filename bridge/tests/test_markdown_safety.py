@@ -84,3 +84,25 @@ def test_plain_still_breaks_mentions() -> None:
 def test_pii_scan_sees_through_format_and_fullwidth_characters() -> None:
     assert [h.kind for h in pii.scan(pii.normalize("ops​@example.com"))] == ["email"]
     assert [h.kind for h in pii.scan(pii.normalize("ops＠example.com"))] == ["email"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["## Blast radius", "# Approved", "---", "> quoted", "- item", "* item", "+ item",
+     "1. item", "2) item", "===", "| a | b |", "___", "***"],
+)
+def test_plain_cannot_start_a_markdown_block(text: str) -> None:
+    import re
+
+    out = plain(text)
+    assert not re.match(r"^(#{1,6}(\s|$)|[-*+](\s|$)|>|\d+[.)](\s|$)|-{3,}|={3,}|_{3,}|\*{3,}|\|)", out), out
+
+
+def test_plain_escapes_html_entities() -> None:
+    out = plain("ping &#64;team about &#35;12")
+    assert "&#" not in out
+    assert out.startswith("ping &amp;#")
+
+
+def test_plain_escapes_an_ordered_list_marker_after_the_number() -> None:
+    assert plain("1. item") == "1\\. item"
