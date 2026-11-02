@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rung 3 (act) as it is shown on stage: the scheduled job runs live, from the armed state. Start
-# from `make reset-rung-3` plus the promotion to act (Hilliary's approval, or Luke's bypass),
+# from `make reset-rung-3` plus the promotion to act (the On-call SRE's approval as the board, or an admin bypass),
 # which happens before this script starts.
 #
 #   make night (the stage line is "running the nightly job now") -> the unit re-arms -> Degraded
@@ -49,7 +49,7 @@ rung3_main() {
   bump="$(unit_value bump "$journal")"
   ref="$(unit_value change_ref "$journal")"
   if ! sha_ok "$cause" || ! sha_ok "$bump"; then die "the job's journal has no cause and bump"; fi
-  scene_say teach # O32: Hilliary teaches while the job re-arms and the agent works (no stop)
+  scene_say teach # O32: the On-call SRE teaches while the job re-arms and the agent works (no stop)
 
   READY_TIMEOUT_S="${DEGRADED_WAIT_S:-180}" until_ready "Degraded" degraded_at "$bump"
   beat "Degraded"

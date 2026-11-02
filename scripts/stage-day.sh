@@ -137,7 +137,7 @@ merge_promotion() {
     human_step "Merge $what promotion PR $pr with admin bypass (it will be logged as admin-bypass). Open it: gh pr view $pr --web"
     step "promotion-pr.sh merge $pr --admin" "$PROMOTION" merge "$pr" --admin
   else
-    human_step "Approve $what promotion PR $pr as a promotion-board member (Hilliary). Open it: gh pr view $pr --web"
+    human_step "Approve $what promotion PR $pr as a promotion-board member (the On-call SRE). Open it: gh pr view $pr --web"
     step "promotion-pr.sh merge $pr" "$PROMOTION" merge "$pr"
   fi
   step "promotion-pr.sh record-approval $pr" "$PROMOTION" record-approval "$pr"

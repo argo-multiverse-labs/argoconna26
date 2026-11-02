@@ -20,7 +20,8 @@ if [[ "$NO_WAIT" == true ]]; then
   check "bridge is up" bridge_up
 fi
 scene_break "2:15 a.m. The page"
+speaker_beat sre "paged at 2:15; what changed?"
 scene_say page
-speaker_beat luke "what changed?"
 scene_say what-changed
+speaker_beat pe "it's in Slack"
 scene_say slack

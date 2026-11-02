@@ -17,27 +17,27 @@ declare -gA SCENE_KEYS=(
   [close]="timeline slack drop repo"
 )
 
-# write_narration DIR : every key of every scene, one long Luke line and one Hilliary placeholder
+# write_narration DIR : every key of every scene, one long Platform Engineer line and one SRE placeholder
 write_narration() {
   local dir="$1" scene key
   mkdir -p "$dir"
   for scene in "${!SCENE_KEYS[@]}"; do
     : >"$dir/$scene.txt"
     for key in ${SCENE_KEYS[$scene]}; do
-      printf '[%s]\n# Luke says something fairly long about %s in %s, in plain words.\n\n# [Hilliary: %s beat topic]\n' \
+      printf '[%s]\n# The engineer says something fairly long about %s in %s, in plain words.\n\n# [SRE: %s beat topic]\n' \
         "$key" "$key" "$scene" "$key" >>"$dir/$scene.txt"
     done
   done
 }
 
-# hilliary_ok DIR : every line that mentions Hilliary in DIR/*.txt is exactly a placeholder
-hilliary_ok() {
-  local f line bad=0 re='^# \[Hilliary: [^]]+\]$'
+# placeholders_ok DIR : in DIR/*.txt every line that opens a bracket is exactly an SRE placeholder.
+placeholders_ok() {
+  local f line bad=0 re='^# \[SRE: [^]]+\]$'
   for f in "$1"/*.txt; do
     [[ -e "$f" ]] || continue
     while IFS= read -r line; do
       [[ "$line" =~ $re ]] || { printf '%s: %s\n' "$f" "$line" >&2; bad=1; }
-    done < <(grep -i hilliary "$f" || true)
+    done < <(grep -E '\[' "$f" | grep -v '^\[[a-z0-9-]*\]$' || true)
   done
   return "$bad"
 }
@@ -53,7 +53,7 @@ p "# a comment"
 scene_say nokey
 until_ready "x" true
 fourth_wall "B"
-speaker_beat luke "topic"
+speaker_beat pe "topic"
 typed "echo two"
 wait_never_asked=1
 EOF
@@ -161,25 +161,39 @@ scene close" ]
   run bash -c ". '$REPO_ROOT/scripts/demo-common.sh'; narrate scene-1 push"
   [ "$status" -eq 0 ]
   out="$(strip_ansi "$output")"
-  [[ "$out" == *"# Luke says"* ]]
-  [[ "$out" == *"[Hilliary: push beat"* ]]
+  [[ "$out" == *"# The engineer says"* ]]
+  [[ "$out" == *"[SRE: push beat"* ]]
   [[ "$out" != *"gate"* ]] # the next section is not printed
   assert_fits "$output"
 }
 
-@test "Hilliary lines are placeholders only" {
-  hilliary_ok "$NARRATION_DIR"
-  hilliary_ok "$REPO_ROOT/tests/bats/fixtures/scene-text"
+@test "speaker cues name the talk's characters, never a speaker" {
+  cd "$FIXTURE"
+  for who in pe sre both; do
+    run bash -c "SCENE=x DEMO_PACE=auto NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; speaker_beat $who t"
+    [ "$status" -eq 0 ]
+  done
+  run bash -c "SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; speaker_beat pe t; speaker_beat sre t"
+  [[ "$(strip_ansi "$output")" == *"> Platform Engineer"*"> On-call SRE"* ]]
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; speaker_beat luke t"
+  [ "$status" -ne 0 ]
+  # every cue in the scripts is one of the three
+  ! grep -hoE '^[[:space:]]*speaker_beat [a-z]+' "$REPO_ROOT"/scripts/demo-*.sh | grep -vE 'speaker_beat (pe|sre|both)$'
+}
+
+@test "SRE lines are placeholders only, and no speaker is named" {
+  placeholders_ok "$NARRATION_DIR"
+  placeholders_ok "$REPO_ROOT/tests/bats/fixtures/scene-text"
   # the real narration, when it exists (local only, in the main checkout)
   main="$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")"
-  hilliary_ok "$main/narration"
+  placeholders_ok "$main/narration"
   # and the check itself catches wording
   mkdir -p "$BATS_TEST_TMPDIR/bad"
-  printf '[k]\n# [Hilliary: topic] and some words\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
-  run hilliary_ok "$BATS_TEST_TMPDIR/bad"
+  printf '[k]\n# [SRE: topic] and some words\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
+  run placeholders_ok "$BATS_TEST_TMPDIR/bad"
   [ "$status" -ne 0 ]
-  printf '[k]\n# Hilliary says hello\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
-  run hilliary_ok "$BATS_TEST_TMPDIR/bad"
+  printf '[k]\n# [Someone: topic]\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
+  run placeholders_ok "$BATS_TEST_TMPDIR/bad"
   [ "$status" -ne 0 ]
 }
 
@@ -204,7 +218,7 @@ scene close" ]
   run scene scene-1
   [ "$status" -eq 0 ]
   assert_fits "$output"
-  [[ "$output" == *"[Hilliary:"* ]]
+  [[ "$output" == *"[SRE:"* ]]
   [[ "$(strip_ansi "$output")" == *"2:19 Look, don't touch"* ]]
   ! grep -q 'cause:' <<<"$output"
   ! grep -qE '[0-9a-f]{40}' <<<"$output"
@@ -282,7 +296,7 @@ scene close" ]
   run scene scene-3
   [ "$status" -eq 0 ]
   night="$(grep -n 'make night' <<<"$output" | head -n1 | cut -d: -f1)"
-  teach="$(grep -n 'Hilliary: teach' <<<"$output" | head -n1 | cut -d: -f1)"
+  teach="$(grep -n 'SRE: teach' <<<"$output" | head -n1 | cut -d: -f1)"
   [ -n "$night" ] && [ -n "$teach" ]
   [ "$teach" -gt "$night" ]
 }

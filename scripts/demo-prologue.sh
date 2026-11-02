@@ -31,7 +31,7 @@ beat "owner: $(rollout_label example.dev/owner)"
 beat "tier: $(rollout_label example.dev/tier)"
 beat "slo: $(rollout_label slo.example.dev/success-rate)"
 scene_say golden-path
-speaker_beat hilliary "data and the golden path"
+speaker_beat sre "data and the golden path"
 scene_say data
 fourth_wall "Notifications and CDEvents"
 scene_say cdevents
