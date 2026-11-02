@@ -195,6 +195,10 @@ main() {
   local approved
   approved="$(tracked_file "$AUTONOMY_FILE" | yq -r .promotion.approved_by)"
   [[ "$approved" == admin-bypass || "$approved" == promotion-board\ member* ]] || fail "approved_by is '$approved'"
+  # preflight 3 --armed checks that cluster_lock is free (the unit can't inherit it), so release
+  # it first, as on stage.
+  step "release the lock; preflight 3 --armed"
+  release_lock
   "$ROOT/scripts/preflight.sh" 3 --armed >>"$RUN_LOG" 2>&1 || fail "preflight 3 --armed failed (see $RUN_LOG)"
 
   local pass_series='aiops_policy_checks_total{result="pass"}' pass_start pass_want
@@ -202,8 +206,7 @@ main() {
   pass_want="$(awk -v a="$pass_start" 'BEGIN {printf "%d", a + 1}')" # /metrics prints floats ("0.0")
   log_info "rung3: policy passes at the start: $pass_start"
 
-  step "release the lock; T0 = make night"
-  release_lock
+  step "T0 = make night"
   local out rc=0 run_ts
   # scripts/night.sh, not make night: make turns every failure into 2.
   out="$("$ROOT/scripts/night.sh" night 2>&1)" || rc=$?
