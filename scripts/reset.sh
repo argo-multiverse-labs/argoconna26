@@ -18,7 +18,8 @@
 #      only: a reset never raises the level.
 #   6. the notified.notifications.argoproj.io annotation on the checkout Application is deleted (Δ10).
 #   7. promotion PR: rung 2 `propose`, rung 3 `act`, always a fresh one (Δ25).
-#      rung 1 and demo: seed-history (pre-armed). Rungs 2 and 3 stay disarmed (they start with rearm).
+#      rung 1 and demo: seed-history (pre-armed), its cause and change_ref saved to
+#      .operator/last-rearm for demo-rung-1. Rungs 2 and 3 stay disarmed (they start with rearm).
 #      demo also re-seeds the timeline (reset=true, keep_live_hours=0); per-rung resets leave it alone.
 #   8. make bridge-hooks-clear (a killed failure-paths run leaves test hooks), then the bridge pod
 #      is deleted (clears its in-memory registry; rehydrate covers open PRs).
@@ -172,8 +173,9 @@ main() {
 
   k annotate application checkout -n "$NS_ARGOCD" notified.notifications.argoproj.io- >/dev/null
   case "$target" in
-    1) SEED_TIMELINE_RESET=false "$SEED_HISTORY" ;;
-    demo) SEED_TIMELINE_RESET=true "$SEED_HISTORY" ;;
+    # STAGE=1: the cause and change_ref go to .operator/last-rearm, where demo-rung-1 reads them.
+    1) STAGE=1 SEED_TIMELINE_RESET=false "$SEED_HISTORY" ;;
+    demo) STAGE=1 SEED_TIMELINE_RESET=true "$SEED_HISTORY" ;;
     2) pr="$(ensure_promotion_pr propose)" || die "could not open the propose promotion PR" ;;
     3) pr="$(ensure_promotion_pr act)" || die "could not open the act promotion PR" ;;
   esac

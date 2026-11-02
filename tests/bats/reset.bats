@@ -243,6 +243,20 @@ calls_at() { grep -n "$1" "$CALLS" | head -n1 | cut -d: -f1; }
   run ! grep -q 'reset=true' "$STUBS/seed-urls.log"
 }
 
+@test "reset-rung-1 and reset-demo hand the seeded cause to demo-rung-1 in .operator/last-rearm" {
+  for target in 1 demo; do
+    rm -f "$FIXTURE/.operator/last-rearm"
+    run reset "$target"
+    [ "$status" -eq 0 ]
+    f="$FIXTURE/.operator/last-rearm"
+    [ -s "$f" ]
+    cause="$(sed -n 's/^cause: //p' "$f")"
+    [[ "$cause" =~ ^[0-9a-f]{40}$ ]]
+    [ "$("$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name-only -r "$cause")" = "$CFG" ]
+    [[ "$(sed -n 's/^change_ref: //p' "$f")" =~ ^CHG- ]]
+  done
+}
+
 @test "reset-rung-2 and 3 leave the config disarmed and seed nothing" {
   run reset 2
   [ "$status" -eq 0 ]
