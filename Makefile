@@ -37,7 +37,7 @@ PRE    = . $(ROOT)/scripts/common.sh; load_env; cluster_lock
 
 .PHONY: help
 help: ## This help
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 ################################################################################
 # Tools and checks                                                             #
@@ -424,6 +424,18 @@ demote: ## Lower the autonomy level by one step (a forward commit, direct push)
 .PHONY: disarm-git-only
 disarm-git-only: ## (build-all) Push the disarm before Argo's first sync; skips without an operator clone
 	@$(ROOT)/scripts/git-ops.sh disarm --git-only
+
+################################################################################
+# The rung scripts, as shown on stage (scripts/demo-rung-N.sh; TYPE_SPEED, NO_WAIT) #
+################################################################################
+
+.PHONY: demo-rung-1 demo-rung-2 demo-rung-3
+demo-rung-1: ## Rung 1 (suggest) with demo-magic; start from make reset-rung-1
+	@$(ROOT)/scripts/demo-rung-1.sh
+demo-rung-2: ## Rung 2 (propose) with demo-magic; start from make reset-rung-2
+	@$(ROOT)/scripts/demo-rung-2.sh
+demo-rung-3: ## Rung 3 (act), live through make night; start from make reset-rung-3 and the act promotion
+	@$(ROOT)/scripts/demo-rung-3.sh
 
 .PHONY: snapshot
 snapshot: ## (internal) record object UIDs and restart counts

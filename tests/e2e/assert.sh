@@ -137,6 +137,20 @@ assert_timeline_line() {
   [[ "$refs" == "$ref" ]] || { printf 'the Timeline line cites change refs other than %s: %s\n' "$ref" "$timeline" >&2; return 1; }
 }
 
+# assert_rca_body BODY CAUSE REF : BODY is the RCA comment (rung 1): "## Root cause", not a refusal,
+# a PII block or a handoff; it names the cause, has its "Cause: <sha>" line, the tokens 200 and
+# 2000, and a Timeline line that cites REF (Δ28). Prints why on failure.
+assert_rca_body() {
+  local body="$1" sha="$2" ref="$3"
+  grep -q '^## Root cause' <<<"$body" || { echo "the comment is not an RCA (no '## Root cause')" >&2; return 1; }
+  if grep -qE '^## Agent (refused|output blocked)' <<<"$body"; then echo "the comment is a refusal or a PII block" >&2; return 1; fi
+  grep -qE "(^|[^0-9a-f])(${sha:0:7}|$sha)" <<<"$body" || { echo "the comment does not name the cause ${sha:0:7}" >&2; return 1; }
+  grep -qE "^Cause: $sha( |\$)" <<<"$body" || { echo "no 'Cause: $sha' line" >&2; return 1; }
+  grep -qE '(^|[^0-9])200([^0-9]|$)' <<<"$body" || { echo "no 200 token in the comment" >&2; return 1; }
+  grep -qE '(^|[^0-9])2000([^0-9]|$)' <<<"$body" || { echo "no 2000 token in the comment" >&2; return 1; }
+  assert_timeline_line "$body" "$ref"
+}
+
 # assert_fix_pr_body BODY CAUSE LEVEL [REF] : the first "Cause:" line is the policy-parsed cause (no model
 # text before it), the level's footer is there, and the root-cause section fits the projector:
 # the root-cause paragraph and every bullet within the bridge's caps (ROOT_CAUSE_MAX, ITEM_MAX,
