@@ -1,0 +1,2 @@
+# policy negative test: never fail
+no-fail = true
