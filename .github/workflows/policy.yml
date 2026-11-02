@@ -13,7 +13,7 @@
 # an agent PR doing that today: the agent's GitHub App has no `workflows` permission (GitHub
 # refuses its commits under .github/workflows/), and for the agent's PRs auto-fix rule 1
 # denies any change outside the two fix files (policy/, .github/, aiops/autonomy.yaml
-# included). .github/ is also code-owned, which binds once require_code_owner_review is on
+# included). .github/ is also code-owned by the promotion team, and code-owner review is on
 # in the tracked ruleset. See docs/05-policy.md.
 #
 # No secrets are used here, and the token is read-only.
