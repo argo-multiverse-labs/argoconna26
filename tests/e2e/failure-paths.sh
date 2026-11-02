@@ -28,6 +28,9 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$E2E_DIR/../../scripts/git-ops.sh"
 # shellcheck source=tests/e2e/assert.sh
 . "$E2E_DIR/assert.sh"
+E2E_NAME=failure-paths
+# shellcheck source=tests/e2e/harness.sh
+. "$E2E_DIR/harness.sh"
 
 DEGRADED_WAIT_S="${DEGRADED_WAIT_S:-180}"
 HEALTHY_WAIT_S="${HEALTHY_WAIT_S:-240}"
@@ -35,26 +38,6 @@ COMMENT_WAIT_S="${COMMENT_WAIT_S:-300}"
 HANDOFF_MAX_S=120
 REJECT_COUNT_MAX_S=60
 TIMEOUT_TEXT='Investigation did not finish in 1 s; a human should take this one.'
-
-now() { date +%s; }
-step() { printf '\n== %s\n' "$*" >&2; }
-fail() { log_error "failure-paths: $*"; exit 1; }
-
-run_make() { # TARGET... : output to stderr and the run log, stdout returned
-  local out rc=0
-  out="$(make --no-print-directory -C "$ROOT" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "make $* exited $rc"
-  printf '%s\n' "$out"
-}
-
-run_promo() {
-  local out rc=0
-  out="$("$ROOT/scripts/promotion-pr.sh" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "promotion-pr.sh $* exited $rc"
-  printf '%s\n' "$out"
-}
 
 machine() { sed -n "s/^$1: //p" <<<"$2" | tail -n1; } # KEY TEXT
 commit_time() { _og show -s --format=%ct "$1"; }
@@ -72,9 +55,7 @@ close_open_agent_prs() { # LABEL|"" : close every open agent PR for checkout, de
   local n branch
   for n in $(open_agent_prs checkout); do
     branch="$(gh pr view "$n" --repo "$REPO_SLUG" --json headRefName --jq .headRefName)"
-    # REST, not `gh pr edit --add-label`: that fails on the classic-projects GraphQL field.
-    [[ -z "${1:-}" ]] ||
-      gh api -X POST "repos/$REPO_SLUG/issues/$n/labels" -f "labels[]=$1" >/dev/null
+    [[ -z "${1:-}" ]] || label_pr "$n" "$1"
     gh pr close "$n" --repo "$REPO_SLUG" --comment "closed by tests/e2e/failure-paths.sh" >/dev/null
     log_warn "failure-paths: closed agent PR $n"
     delete_remote_branch "$branch"

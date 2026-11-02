@@ -44,6 +44,9 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$E2E_DIR/../../scripts/git-ops.sh"
 # shellcheck source=tests/e2e/assert.sh
 . "$E2E_DIR/assert.sh"
+E2E_NAME=rung2
+# shellcheck source=tests/e2e/harness.sh
+. "$E2E_DIR/harness.sh"
 
 PR_WAIT_S="${PR_WAIT_S:-300}"
 DEGRADED_WAIT_S="${DEGRADED_WAIT_S:-180}"
@@ -55,33 +58,9 @@ MERGE_HEALTHY_MAX_S="${MERGE_HEALTHY_MAX_S:-90}"
 HUMAN_DWELL_S="${HUMAN_DWELL_S:-90}"
 SLOT_S="${SLOT_S:-330}"
 
-now() { date +%s; }
-step() { printf '\n== %s\n' "$*" >&2; }
-fail() { log_error "rung2: $*"; exit 1; }
-
-run_make() { # TARGET... : output to stderr and the run log, stdout returned
-  local out rc=0
-  out="$(make --no-print-directory -C "$ROOT" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "make $* exited $rc"
-  printf '%s\n' "$out"
-}
-
-run_promo() { # SUBCOMMAND ARGS... : scripts/promotion-pr.sh, same output handling
-  local out rc=0
-  out="$("$ROOT/scripts/promotion-pr.sh" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "promotion-pr.sh $* exited $rc"
-  printf '%s\n' "$out"
-}
-
 machine() { sed -n "s/^$1: //p" <<<"$2" | tail -n1; } # KEY TEXT
 
 commit_time() { _og show -s --format=%ct "$1"; }
-
-label_demo_reset() { # PR : REST, not `gh pr edit --add-label` (it fails on the classic-projects GraphQL field)
-  gh api -X POST "repos/$REPO_SLUG/issues/$1/labels" -f "labels[]=demo-reset" >/dev/null
-}
 
 delete_remote_branch() { # BRANCH : best effort, through the API with the operator's gh login
   if gh api -X DELETE "repos/$REPO_SLUG/git/refs/heads/$1" >/dev/null 2>&1; then
@@ -247,7 +226,7 @@ main() {
     wait_for "policy-check on fix PR $fix_pr concluded" 600 pr_policy_check_done "$fix_pr" \
       || fail "policy-check on fix PR $fix_pr did not conclude"
     local concl
-    concl="$(policy_check_conclusion "$(gh pr view "$fix_pr" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
+    concl="$(pr_policy_check_conclusion "$fix_pr")"
     [[ "$concl" == success ]] || fail "policy-check on fix PR $fix_pr concluded '$concl'"
     gh pr merge "$fix_pr" --repo "$REPO_SLUG" --merge >/dev/null || fail "gh could not merge fix PR $fix_pr"
   else

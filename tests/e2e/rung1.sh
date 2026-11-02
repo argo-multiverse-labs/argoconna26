@@ -28,24 +28,15 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$E2E_DIR/../../scripts/git-ops.sh"
 # shellcheck source=tests/e2e/assert.sh
 . "$E2E_DIR/assert.sh"
+E2E_NAME=rung1
+# shellcheck source=tests/e2e/harness.sh
+. "$E2E_DIR/harness.sh"
 
 COMMENT_WAIT_S="${COMMENT_WAIT_S:-300}"
 DEGRADED_WAIT_S="${DEGRADED_WAIT_S:-180}"
 HEALTHY_WAIT_S="${HEALTHY_WAIT_S:-240}"
 
-now() { date +%s; }
-step() { printf '\n== %s\n' "$*" >&2; }
-fail() { log_error "rung1: $*"; exit 1; }
-
 # Run a make target; its output goes to stderr and the run log, its stdout is returned.
-run_make() {
-  local out rc=0
-  out="$(make --no-print-directory -C "$ROOT" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "make $* exited $rc"
-  printf '%s\n' "$out"
-}
-
 machine() { # KEY TEXT : the value of a "KEY: value" machine line in TEXT
   sed -n "s/^$1: //p" <<<"$2" | tail -n1
 }

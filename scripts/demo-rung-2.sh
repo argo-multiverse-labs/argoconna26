@@ -82,12 +82,7 @@ rung2_main() {
   scene_say identity # the Platform Engineer covers the agent's identity and the bridge while the agent works
   READY_TIMEOUT_S="${OUTCOME_WAIT_S:-300}" await_outcome "$t0" 1 checkout "$cause" "$bump"
   unhappy_outcome || true
-  if [[ "$OUT_KIND" != pr ]]; then
-    beat "no fix PR, only a comment"
-    open_tab "$OUT_URL"
-    [[ "$NO_WAIT" == true ]] && exit 1
-    leave_early
-  fi
+  require_fix_pr
 
   beat "bot PR #$OUT_PR"
   open_tab "$OUT_URL"
@@ -95,7 +90,7 @@ rung2_main() {
   speaker_beat sre "reviews the fix PR"
   scene_say review
   READY_TIMEOUT_S="${FIX_PR_WAIT_S:-900}" until_ready "PR merged" pr_not_open "$OUT_PR"
-  if [[ "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]]; then
+  if pr_state_is "$OUT_PR" MERGED; then
     merged_branch "$OUT_PR" "$cause" "$ref"
   else
     rejected_branch "$rejected_start"

@@ -33,6 +33,9 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$E2E_DIR/../../scripts/git-ops.sh"
 # shellcheck source=tests/e2e/assert.sh
 . "$E2E_DIR/assert.sh"
+E2E_NAME=rung3
+# shellcheck source=tests/e2e/harness.sh
+. "$E2E_DIR/harness.sh"
 
 PR_WAIT_S="${PR_WAIT_S:-300}"
 MERGED_WAIT_S="${MERGED_WAIT_S:-900}"
@@ -40,31 +43,7 @@ HEALTHY_WAIT_S="${HEALTHY_WAIT_S:-240}"
 METRIC_WAIT_S="${METRIC_WAIT_S:-180}"
 RUNG3_REFRESH="${RUNG3_REFRESH:-0}"   # 1: annotate refresh=normal on the merge (not on the make night path)
 
-now() { date +%s; }
-step() { printf '\n== %s\n' "$*" >&2; }
-fail() { log_error "rung3: $*"; exit 1; }
-
-run_make() { # TARGET... : output to stderr and the run log, stdout returned
-  local out rc=0
-  out="$(make --no-print-directory -C "$ROOT" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "make $* exited $rc"
-  printf '%s\n' "$out"
-}
-
-run_promo() { # SUBCOMMAND ARGS...
-  local out rc=0
-  out="$("$ROOT/scripts/promotion-pr.sh" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "promotion-pr.sh $* exited $rc"
-  printf '%s\n' "$out"
-}
-
 machine() { sed -n "s/^$1: //p" <<<"$2" | tail -n1; } # KEY TEXT
-
-label_demo_reset() { # PR : REST (gh pr edit --add-label is broken)
-  gh api -X POST "repos/$REPO_SLUG/issues/$1/labels" -f "labels[]=demo-reset" >/dev/null
-}
 
 delete_remote_branch() { # BRANCH : best effort; a 404/422 means it is already gone
   if gh api -X DELETE "repos/$REPO_SLUG/git/refs/heads/$1" >/dev/null 2>&1; then

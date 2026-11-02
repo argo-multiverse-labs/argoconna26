@@ -23,25 +23,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/git-ops.sh"
 
 PROMOTION_BODY_TEMPLATE="$GIT_OPS_DIR/templates/promotion-pr-body.md"
-LEVELS=(suggest propose act)
 EXIT_VERIFY=8
-
-# ---------------------------------------------------------------- levels
-# level_index LEVEL : print 0..2, or return 1 for anything else.
-level_index() {
-  local i
-  for i in "${!LEVELS[@]}"; do
-    if [[ "${LEVELS[i]}" == "$1" ]]; then printf '%s' "$i"; return 0; fi
-  done
-  return 1
-}
-
-current_level() {
-  local lvl
-  lvl="$(yaml_get "$AUTONOMY_FILE" .level)"
-  level_index "$lvl" >/dev/null || die "$AUTONOMY_FILE: level is '$lvl', expected one of ${LEVELS[*]}"
-  printf '%s' "$lvl"
-}
 
 # ------------------------------------------------------------------ time
 utc_stamp() { printf '%s' "${PROMOTION_STAMP:-$(date -u +%Y%m%d%H%M%S)}"; }
@@ -211,7 +193,7 @@ cmd_ensure() {
   cur="$(current_level)"
   cur_idx="$(level_index "$cur")"
   if ((cur_idx + 1 != to_idx)); then
-    refuse 1 "level is $cur" "ensure: level is $cur; a promotion to $to needs ${LEVELS[to_idx - 1]} first"
+    refuse 1 "level is $cur" "ensure: level is $cur; a promotion to $to needs ${AUTONOMY_LEVELS[to_idx - 1]} first"
   fi
   close_stale_promotion_prs
 
@@ -336,7 +318,7 @@ cmd_demote() {
   cur="$(current_level)"
   idx="$(level_index "$cur")"
   ((idx >= 1)) || refuse 1 "already suggest" "demote: the level is already suggest"
-  prev="${LEVELS[idx - 1]}"
+  prev="${AUTONOMY_LEVELS[idx - 1]}"
   YQ_PREV="$prev" YQ_TODAY="$(utc_today)" \
     yq -i '.level = strenv(YQ_PREV) | .since = strenv(YQ_TODAY) | .promotion = null' "$(op_path "$AUTONOMY_FILE")"
   op_commit_push "chore(autonomy): demote $cur to $prev" "$AUTONOMY_FILE" >/dev/null

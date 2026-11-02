@@ -216,8 +216,6 @@ show_verify() {
 # promote_to LEVEL PR : verified, merged by people, recorded (the On-call SRE approves as the board).
 # With NO_WAIT=true and DEMO_AUTOMERGE_FOR_TEST=1 an open promotion PR is merged here with
 # --admin (logged as admin-bypass), which stands in for the board in a run nobody watches.
-act_with_approval() { tracked_level_is act && [[ -n "$(autonomy_approved_by)" ]]; }
-
 promote_to() {
   local level="$1" pr="$2" state
   "$PROMOTION_PR_SH" verify "$pr" # one line (P23); exit 8 and a refusal line when the PR changed
@@ -227,15 +225,10 @@ promote_to() {
   state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state 2>/dev/null || true)"
   if [[ "$state" == OPEN ]] && automerge_for_test; then "$PROMOTION_PR_SH" merge "$pr" --admin >/dev/null; fi
   READY_TIMEOUT_S="${PROMO_WAIT_S:-1800}" until_ready "promotion merged" pr_not_open "$pr"
-  [[ "$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]] \
-    || refuse 1 "promotion PR closed" "promotion PR $pr was closed, not merged"
+  pr_state_is "$pr" MERGED || refuse 1 "promotion PR closed" "promotion PR $pr was closed, not merged"
   beat "promotion merged"
   "$PROMOTION_PR_SH" record-approval "$pr" # one line: recorded: board approval | admin bypass
-  if [[ "$level" == act ]]; then
-    until_ready "act, approved" act_with_approval
-  else
-    until_ready "propose, approved" propose_with_approval
-  fi
+  until_ready "$level, approved" level_with_approval "$level"
 }
 
 # typed COMMAND : demo-magic's pe, after checking that prompt plus command fit the stage pane.
@@ -312,9 +305,7 @@ pr_body() { gh pr view "$1" --repo "$REPO_SLUG" --json body --jq .body; }
 
 autonomy_approved_by() { tracked_file "$AUTONOMY_FILE" | yq -r '.promotion.approved_by // ""'; }
 
-propose_with_approval() {
-  tracked_level_is propose && [[ -n "$(autonomy_approved_by)" ]]
-}
+level_with_approval() { tracked_level_is "$1" && [[ -n "$(autonomy_approved_by)" ]]; } # LEVEL
 
 # approved_by is a role, never a login and never the team.
 approved_by_is_role() {
@@ -392,6 +383,16 @@ await_outcome() {
 
 refusal_reason() { sed -n 's/^- \([a-z_]*\): .*/\1/p' <<<"$OUT_BODY" | head -n1; }
 
+# require_fix_pr : after unhappy_outcome, an outcome that is still not a fix PR (an RCA comment
+# where rungs 2 and 3 expect a PR) ends the rung: a FAIL under NO_WAIT=true, else leave_early.
+require_fix_pr() {
+  [[ "$OUT_KIND" != pr ]] || return 0
+  beat "no fix PR, only a comment"
+  open_tab "$OUT_URL"
+  [[ "$NO_WAIT" == true ]] && exit 1
+  leave_early
+}
+
 # human_fix : the On-call SRE's beat, then the human fix (make fix, one pushed: line) until Healthy.
 human_fix() {
   speaker_beat sre "before the human fix"
@@ -456,7 +457,7 @@ start_pr_helper() {
       gh pr close "$pr" --repo "$REPO_SLUG" --comment "Rejected by the NO_WAIT test hook." >/dev/null
     else
       wait_for "policy-check on PR $pr" 600 pr_policy_check_done "$pr"
-      [[ "$(policy_check_conclusion "$(gh pr view "$pr" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")" == success ]]
+      [[ "$(pr_policy_check_conclusion "$pr")" == success ]]
       gh pr merge "$pr" --repo "$REPO_SLUG" --merge >/dev/null
     fi
   ) >/dev/null 2>&1 {CLUSTER_LOCK_FD}>&- & # never inherits the cluster lock's fd

@@ -249,6 +249,25 @@ yaml_get() { # FILE KEY
   yq -r "$2" "$(op_path "$1")"
 }
 
+# Autonomy levels, lowest first (promotion-pr.sh and reset.sh).
+AUTONOMY_LEVELS=(suggest propose act)
+
+# level_index LEVEL : print 0..2, or return 1 for anything else.
+level_index() {
+  local i
+  for i in "${!AUTONOMY_LEVELS[@]}"; do
+    if [[ "${AUTONOMY_LEVELS[i]}" == "$1" ]]; then printf '%s' "$i"; return 0; fi
+  done
+  return 1
+}
+
+current_level() { # the level in AUTONOMY_FILE in the operator clone; dies on an unknown one
+  local lvl
+  lvl="$(yaml_get "$AUTONOMY_FILE" .level)"
+  level_index "$lvl" >/dev/null || die "$AUTONOMY_FILE: level is '$lvl', expected one of ${AUTONOMY_LEVELS[*]}"
+  printf '%s' "$lvl"
+}
+
 config_value_get() { yaml_get "$CONFIG_FILE" ".data.${CONFIG_KEY}"; }
 config_value_set() { yaml_set "$CONFIG_FILE" ".data.${CONFIG_KEY}" "$1"; }
 

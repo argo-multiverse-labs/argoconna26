@@ -87,9 +87,13 @@ policy_check_conclusion() {
   if [[ -z "$run" ]]; then echo missing; else jq -r '.conclusion // "pending"' <<<"$run"; fi
 }
 
+pr_policy_check_conclusion() { # PR : policy_check_conclusion on the PR's head
+  policy_check_conclusion "$(gh pr view "$1" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)"
+}
+
 pr_policy_check_done() { # PR : policy-check on the PR's head has concluded (any conclusion)
   local c
-  c="$(policy_check_conclusion "$(gh pr view "$1" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
+  c="$(pr_policy_check_conclusion "$1")"
   [[ "$c" != pending && "$c" != missing ]]
 }
 

@@ -37,22 +37,6 @@ BRIDGE_HOOKS="$GIT_OPS_DIR/bridge-hooks.sh"
 RESET_LABEL=demo-reset
 RESET_COMMENT="reset for rehearsal"
 EXIT_NEEDS_PROPOSE=6
-LEVELS=(suggest propose act)
-
-level_idx() { # LEVEL -> 0..2
-  local i
-  for i in "${!LEVELS[@]}"; do
-    if [[ "${LEVELS[i]}" == "$1" ]]; then printf '%s' "$i"; return 0; fi
-  done
-  die "autonomy level '$1' is not one of ${LEVELS[*]}"
-}
-
-current_level() {
-  local lvl
-  lvl="$(yaml_get "$AUTONOMY_FILE" .level)"
-  level_idx "$lvl" >/dev/null
-  printf '%s' "$lvl"
-}
 
 # ---------------------------------------------------------------- agent PRs
 # label_and_close_agent_prs : label every agent/* PR (any state) demo-reset, close the open ones.
@@ -120,7 +104,7 @@ heal_stale_armed_pods() {
 lower_autonomy_to() {
   local want="$1" cur
   cur="$(current_level)"
-  while (($(level_idx "$cur") > $(level_idx "$want"))); do
+  while (($(level_index "$cur") > $(level_index "$want"))); do
     "$PROMOTION_PR" demote
     op_sync
     cur="$(current_level)"

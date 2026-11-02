@@ -55,17 +55,12 @@ rung3_main() {
   beat "Degraded"
   READY_TIMEOUT_S="${OUTCOME_WAIT_S:-300}" await_outcome "$run_ts" 1 checkout "$cause" "$bump"
   unhappy_outcome || true
-  if [[ "$OUT_KIND" != pr ]]; then
-    beat "no fix PR, only a comment"
-    open_tab "$OUT_URL"
-    [[ "$NO_WAIT" == true ]] && exit 1
-    leave_early
-  fi
+  require_fix_pr
 
   beat "bot PR #$OUT_PR"
   scene_say pr
   READY_TIMEOUT_S="${POLICY_WAIT_S:-600}" until_ready "policy-check" pr_policy_check_done "$OUT_PR"
-  conclusion="$(policy_check_conclusion "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json headRefOid --jq .headRefOid)")"
+  conclusion="$(pr_policy_check_conclusion "$OUT_PR")"
   if [[ "$conclusion" != success ]]; then
     beat "policy: left for review"
     open_tab "$OUT_URL/checks" # the policy working, shown as a feature
@@ -77,7 +72,7 @@ rung3_main() {
   scene_say policy-pass
 
   READY_TIMEOUT_S="${MERGED_WAIT_S:-900}" until_ready "auto-merge" pr_not_open "$OUT_PR"
-  [[ "$(gh pr view "$OUT_PR" --repo "$REPO_SLUG" --json state --jq .state)" == MERGED ]] \
+  pr_state_is "$OUT_PR" MERGED \
     || refuse 1 "PR closed, not merged" "fix PR $OUT_PR was closed, not merged"
   bot_merged "$OUT_PR" || refuse 1 "merged by a person" "fix PR $OUT_PR was not merged by $BOT_LOGIN"
   beat "auto-merged"

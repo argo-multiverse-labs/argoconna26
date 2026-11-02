@@ -28,27 +28,15 @@ set -euo pipefail
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/common.sh
 . "$E2E_DIR/../../scripts/common.sh"
+E2E_NAME=slice2
+# shellcheck source=tests/e2e/harness.sh
+. "$E2E_DIR/harness.sh"
 
 ABORT_WAIT_S="${ABORT_WAIT_S:-180}"
 HEALTHY_WAIT_S="${HEALTHY_WAIT_S:-240}"
 STABLE_TAG="${CHECKOUT_STABLE_TAG_OVERRIDE:-}"
 
 # ------------------------------------------------------------------ helpers
-now() { date +%s; }
-
-step() { printf '\n== %s\n' "$*" >&2; }
-
-fail() { log_error "slice2: $*"; exit 1; }
-
-# Run a make target, echo its output to stderr and the run log, return its stdout.
-run_make() {
-  local out rc=0
-  out="$(make --no-print-directory -C "$ROOT" "$@" 2> >(tee -a "$RUN_LOG" >&2))" || rc=$?
-  printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
-  ((rc == 0)) || fail "make $* exited $rc"
-  printf '%s\n' "$out"
-}
-
 ro_get() { # JSONPATH on the checkout Rollout
   k get rollout checkout -n "$NS_DEMO" -o "jsonpath=$1"
 }
