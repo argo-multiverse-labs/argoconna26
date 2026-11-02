@@ -14,6 +14,10 @@
 #                      (no workflows permission, P21) and no PR exists
 #   tamper-autonomy    an App-authored PR that sets level: act: policy-check fails ("rule 1:");
 #                      needs autonomy below act on the tracked branch
+#   tamper-config      the image change plus a root conftest.toml (no-fail = true) and a root yaml.py
+#                      that shadows PyYAML: still "rule 4:", so neither file configured the check
+#   shadow-yaml        a fix-shaped change plus a root yaml.py whose safe_load names another agent
+#                      login: the auto-fix rules still run and deny ("rule 1:"), no "skipped"
 #
 # What GitHub itself must block depends on the live rules on the tracked branch (read, never
 # changed, from GET /repos/{r}/rules/branches/{branch}):
@@ -26,7 +30,7 @@
 # nobody merges the PR (still unmerged 60 s after the check concluded).
 # Then each PR is closed and its branch deleted.
 #
-# Usage, from the main checkout: tests/e2e/policy-negative.sh [SCENARIO...]   (default: all five)
+# Usage, from the main checkout: tests/e2e/policy-negative.sh [SCENARIO...]   (default: all seven)
 # Output: PASS/FAIL/DEFERRED lines, also saved under $EVIDENCE_DIR/slice-5/policy-negative-<ts>.txt.
 # Exit 0 when nothing FAILed (DEFERRED is not a failure), 1 otherwise.
 set -euo pipefail
@@ -34,7 +38,7 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/common.sh
 . "$E2E_DIR/../../scripts/common.sh"
 
-ALL=(image-change tamper-autofix tamper-goldenpath tamper-workflow tamper-autonomy)
+ALL=(image-change tamper-autofix tamper-goldenpath tamper-workflow tamper-autonomy tamper-config shadow-yaml)
 CHECK_WAIT_S="${CHECK_WAIT_S:-600}"
 HOLD_S="${HOLD_S:-60}"
 TEST_LABEL=policy-negative-test
@@ -186,6 +190,29 @@ case_check_fail() { # SCENARIO REGEX WHAT
   close_and_delete "$PR" "$BRANCH"
 }
 
+# The auto-fix step must have run. The log also echoes the step's script (which contains the
+# words "auto-fix rules skipped"), so look for conftest's own line about facts.json instead,
+# and for the skip message only with a real login in it.
+expect_not_skipped() { # CASE
+  if grep -qE 'PR author is not [^$ ]+: auto-fix rules skipped' <<<"$LOG"; then
+    failc "$1" "the policy-check log says the auto-fix rules were skipped"
+  elif grep -qE 'Testing ".*facts\.json" against [0-9]+ policies in namespace "autofix"' <<<"$LOG"; then
+    pass "$1" "the auto-fix rules ran on facts.json"
+  else
+    failc "$1" "no sign in the policy-check log that the auto-fix rules ran"
+  fi
+}
+
+case_check_fail_ran() { # SCENARIO REGEX WHAT : case_check_fail plus expect_not_skipped
+  open_pr "$1" || return 0
+  if wait_check "$1"; then
+    expect_failure_with "$1" "$2" "$3"
+    expect_not_skipped "$1"
+    github_blocks "$1"
+  fi
+  close_and_delete "$PR" "$BRANCH"
+}
+
 case_tamper_workflow() {
   local out rc=0 st
   out="$(cli open-test-pr --scenario tamper-workflow 2>&1)" || rc=$?
@@ -255,6 +282,10 @@ main() {
                            'the golden-path message for the missing example.dev/owner label' ;;
       tamper-workflow) case_tamper_workflow ;;
       tamper-autonomy) case_tamper_autonomy ;;
+      tamper-config) case_check_fail_ran tamper-config '(^|[^0-9A-Za-z])rule 4: ' \
+                       '"rule 4:" (not turned off by the PR'"'"'s conftest.toml or yaml.py)' ;;
+      shadow-yaml) case_check_fail_ran shadow-yaml '(^|[^0-9A-Za-z])rule 1: ' \
+                     '"rule 1:" (the PR'"'"'s yaml.py did not skip the auto-fix rules)' ;;
     esac
   done
   say "policy-negative: end ($(date +%s))"

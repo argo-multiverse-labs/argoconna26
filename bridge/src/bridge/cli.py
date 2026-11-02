@@ -316,7 +316,12 @@ async def run_spike_pr(
 TEST_PR_PREFIX = "agent/test-"
 TEST_LABEL = "policy-negative-test"
 TEST_PR_BODY = "Opened by the operator with the agent's identity to test the policy; not opened by the agent."
-SCENARIOS = ("image-change", "tamper-autofix", "tamper-goldenpath", "tamper-workflow", "tamper-autonomy")
+SCENARIOS = ("image-change", "tamper-autofix", "tamper-goldenpath", "tamper-workflow", "tamper-autonomy",
+             "tamper-config", "shadow-yaml")
+# Scenarios whose PR is fix-shaped, so its body cites the cause like the agent's would.
+_CITES_CAUSE = ("image-change", "tamper-autofix", "tamper-config", "shadow-yaml")
+POLICY_CHECK_CONTEXT = os.environ.get("POLICY_CHECK_CONTEXT", "policy-check")
+POLICY_CHECK_INTEGRATION_ID = int(os.environ.get("POLICY_CHECK_INTEGRATION_ID", "15368"))
 
 _CONFIG_FILE = os.environ.get("CONFIG_FILE", "apps/checkout/config/checkout-config.yaml")
 _ROLLOUT_FILE = os.environ.get("ROLLOUT_FILE", "apps/checkout/deploy/rollout.yaml")
@@ -329,6 +334,14 @@ _PRICING = "apps/pricing/deploy/deployment.yaml"
 _WORKFLOW = ".github/workflows/policy.yml"
 _AUTOFIX_REGO = "policy/autofix.rego"
 _GOLDEN_REGO = "policy/golden_path.rego"
+# Files at the root of the PR's tree that once turned the check green from the head (review
+# 11-02): conftest reads ./conftest.toml, and `python3 -c` puts the current directory first on
+# sys.path, so a yaml.py there replaced PyYAML in the agent-login lookup.
+_CONFTEST_TOML = "conftest.toml"
+_YAML_PY = "yaml.py"
+_NO_FAIL = "# policy negative test: never fail\nno-fail = true\n"
+_SHADOW_YAML = ('# policy negative test: shadows PyYAML\n'
+                'def safe_load(f):\n    return {"agent_login": "nobody"}\n')
 _ALLOW_ALL = "package {pkg}\n\nimport rego.v1\n\n# policy negative test: allow everything\ndeny := set()\n"
 
 
@@ -348,6 +361,8 @@ def _files_for(scenario: str) -> tuple[str, ...]:
         "tamper-goldenpath": (_PRICING, _GOLDEN_REGO),
         "tamper-workflow": (_WORKFLOW,),
         "tamper-autonomy": (_AUTONOMY_FILE,),
+        "tamper-config": fix,
+        "shadow-yaml": (_CONFIG_FILE, _ROLLOUT_FILE),
     }[scenario]
 
 
@@ -358,9 +373,8 @@ def _sub_once(text: str, pattern: str, repl: Callable[[re.Match[str]], str], wha
     return new
 
 
-def _fix_shape_plus_image(files: dict[str, str]) -> dict[str, str]:
-    """A fix-shaped change (the key toggled to a value seen before, config-version + 1) plus an
-    image tag bump in kustomization.yaml: only autofix rules 1 and 4 can catch it."""
+def _fix_shape(files: dict[str, str]) -> dict[str, str]:
+    """The two-line fix shape: the key toggled to a value seen before, config-version + 1."""
     def flip(m: re.Match[str]) -> str:
         to = _CONFIG_ARMED if m.group(2) == _CONFIG_HEALTHY else _CONFIG_HEALTHY
         return f'{m.group(1)}"{to}"'
@@ -368,13 +382,21 @@ def _fix_shape_plus_image(files: dict[str, str]) -> dict[str, str]:
     def bump_cv(m: re.Match[str]) -> str:
         return f'{m.group(1)}"{int(m.group(2)) + 1}"'
 
-    def bump_tag(m: re.Match[str]) -> str:
-        return f"{m.group(1)}{m.group(2)}{int(m.group(3)) + 1}"
-
     return {
         _CONFIG_FILE: _sub_once(files[_CONFIG_FILE], rf'^(\s*{re.escape(_CONFIG_KEY)}:\s*)"?(\d+)"?\s*$', flip, _CONFIG_KEY),
         _ROLLOUT_FILE: _sub_once(files[_ROLLOUT_FILE], r'^(\s*example\.dev/config-version:\s*)"?(\d+)"?\s*$',
                                  bump_cv, "config-version"),
+    }
+
+
+def _fix_shape_plus_image(files: dict[str, str]) -> dict[str, str]:
+    """A fix-shaped change plus an image tag bump in kustomization.yaml: only autofix rules 1
+    and 4 can catch it."""
+    def bump_tag(m: re.Match[str]) -> str:
+        return f"{m.group(1)}{m.group(2)}{int(m.group(3)) + 1}"
+
+    return {
+        **_fix_shape(files),
         _KUSTOMIZATION: _sub_once(files[_KUSTOMIZATION], r"^(\s*newTag:\s*)(v\d+\.\d+\.)(\d+)\s*$", bump_tag, "newTag"),
     }
 
@@ -387,6 +409,10 @@ def scenario_edits(scenario: str, files: dict[str, str]) -> dict[str, str]:
         return _fix_shape_plus_image(files)
     if scenario == "tamper-autofix":
         return {**_fix_shape_plus_image(files), _AUTOFIX_REGO: _ALLOW_ALL.format(pkg="autofix")}
+    if scenario == "tamper-config":
+        return {**_fix_shape_plus_image(files), _CONFTEST_TOML: _NO_FAIL, _YAML_PY: _SHADOW_YAML}
+    if scenario == "shadow-yaml":
+        return {**_fix_shape(files), _YAML_PY: _SHADOW_YAML}
     if scenario == "tamper-goldenpath":
         # Drop the workload's own owner label (the first one); the pod template keeps its copy.
         dep = _sub_once(files[_PRICING], r"^\s*example\.dev/owner:.*\n", lambda _m: "", "example.dev/owner")
@@ -482,7 +508,7 @@ async def run_open_test_pr(
 
     res.head = commit
     body = TEST_PR_BODY
-    if scenario in ("image-change", "tamper-autofix"):
+    if scenario in _CITES_CAUSE:
         lc = await gh.call("GET", "/commits", params={"sha": head, "path": _CONFIG_FILE, "per_page": 1})
         lc.raise_for_status()
         if lc.json():
@@ -499,6 +525,31 @@ async def run_open_test_pr(
         await gh.call("DELETE", ref_path)
         raise NegativePrError(f"could not label PR {res.number} {TEST_LABEL} ({lab.status_code}); closed it, branch deleted")
     return res
+
+
+async def _required_check_live(gh: _Gh, branch: str) -> bool:
+    """GitHub's rules for BRANCH require POLICY_CHECK_CONTEXT from the Actions integration."""
+    r = await gh.call("GET", f"/rules/branches/{quote(branch, safe='/')}", params={"per_page": 100})
+    if r.status_code >= 300 or not isinstance(r.json(), list):
+        return False
+    return any(
+        rule.get("type") == "required_status_checks"
+        and any(c.get("context") == POLICY_CHECK_CONTEXT and c.get("integration_id") == POLICY_CHECK_INTEGRATION_ID
+                for c in (rule.get("parameters") or {}).get("required_status_checks", []))
+        for rule in r.json() if isinstance(rule, dict)
+    )
+
+
+async def _policy_check_state(gh: _Gh, sha: str) -> tuple[str, str | None]:
+    """(status, conclusion) of the latest POLICY_CHECK_CONTEXT run on SHA from the Actions app."""
+    r = await gh.call("GET", f"/commits/{sha}/check-runs", params={"check_name": POLICY_CHECK_CONTEXT, "per_page": 100})
+    if r.status_code >= 300:
+        return "", None
+    runs = [x for x in r.json().get("check_runs", []) if (x.get("app") or {}).get("id") == POLICY_CHECK_INTEGRATION_ID]
+    if not runs:
+        return "", None
+    last = max(runs, key=lambda x: str(x.get("started_at") or ""))
+    return str(last.get("status") or ""), last.get("conclusion")
 
 
 @dataclass
@@ -521,8 +572,10 @@ async def run_test_pr_try_merge(
 ) -> TryMergeResult:
     """With the App token: enable auto-merge (as the bridge does) and, with `rest`, try a REST merge.
 
-    Refuses, before any write, unless the PR is on an `agent/test-*` branch and labelled TEST_LABEL,
-    so it can never merge one of the agent's real PRs.
+    Refuses, before any write, unless the PR is on an `agent/test-*` branch and labelled TEST_LABEL
+    (so it can never merge one of the agent's real PRs), and unless GitHub requires
+    POLICY_CHECK_CONTEXT on the PR's base branch. With `rest` it also refuses unless that check
+    has already concluded with something other than success on the head SHA.
     """
     gh = _Gh(http, tokens, repo, api_url)
     v = await gh.call("GET", f"/pulls/{number}")
@@ -532,6 +585,19 @@ async def run_test_pr_try_merge(
     labels = {str(x.get("name")) for x in pr.get("labels", [])}
     if not ref.startswith(TEST_PR_PREFIX) or TEST_LABEL not in labels:
         raise NegativePrError(f"PR {number} is not a {TEST_LABEL} PR on {TEST_PR_PREFIX}* (branch {ref!r})")
+    # The CLI refuses on its own, not only through tests/e2e/policy-negative.sh: without the
+    # required check on the base branch nothing on GitHub would stop this merge.
+    base = str(pr.get("base", {}).get("ref", ""))
+    if not await _required_check_live(gh, base):
+        raise NegativePrError(
+            f"the required {POLICY_CHECK_CONTEXT} (integration {POLICY_CHECK_INTEGRATION_ID}) is not live on {base!r}; "
+            "refusing to enable auto-merge or merge")
+    if rest:
+        status, conclusion = await _policy_check_state(gh, str(pr["head"]["sha"]))
+        if status != "completed" or conclusion in (None, "", "success"):
+            raise NegativePrError(
+                f"{POLICY_CHECK_CONTEXT} on {str(pr['head']['sha'])[:7]} is {status or 'missing'}/{conclusion or '-'}; "
+                "a REST merge is tried only after it concluded non-success")
     g = await http.post(
         f"{api_url.rstrip('/')}/graphql",
         headers={"Authorization": f"Bearer {await tokens.token()}", "Accept": "application/vnd.github+json"},

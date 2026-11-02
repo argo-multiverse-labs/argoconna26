@@ -2,10 +2,19 @@
 # PR's BASE branch, never the policy the PR carries, so a PR cannot loosen the rules it
 # is judged by.
 #
+# The PR is checked out into pr/ and the base branch's policy/ into base/. Every tool runs
+# from $RUNNER_TEMP with explicit paths, and Python runs with -P, so nothing the PR adds can
+# configure a tool or shadow a module: a conftest.toml (conftest reads ./conftest.toml) or a
+# yaml.py (python3 -c puts the current directory first on sys.path) in the PR's tree is just
+# a file in pr/. tests/e2e/policy-negative.sh `tamper-config` checks this.
+#
 # Trust boundary: this file runs from the PR's merge ref (pull_request, not
 # pull_request_target), so a PR that edits it could change how the check runs. What stops
-# an agent PR doing that: the agent's GitHub App has no `workflows` permission (GitHub
-# refuses its commits under .github/workflows/) and .github/ is code-owned. See the README.
+# an agent PR doing that today: the agent's GitHub App has no `workflows` permission (GitHub
+# refuses its commits under .github/workflows/), and for the agent's PRs auto-fix rule 1
+# denies any change outside the two fix files (policy/, .github/, aiops/autonomy.yaml
+# included). .github/ is also code-owned, which binds once require_code_owner_review is on
+# in the tracked ruleset. See docs/05-policy.md.
 #
 # No secrets are used here, and the token is read-only.
 name: policy
@@ -26,6 +35,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          path: pr
           persist-credentials: false
 
       - name: Check out the base branch's policy
@@ -33,7 +43,7 @@ jobs:
         with:
           ref: ${{ github.base_ref }}
           sparse-checkout: policy
-          path: .base-policy
+          path: base
           persist-credentials: false
 
       - name: Install conftest
@@ -42,6 +52,7 @@ jobs:
           CONFTEST_SHA256: c3f6b2a753bd56e377a1e51a95ae3e057f926f2e9139f7d5b5dfbbaf810f7985
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           tarball="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
           curl -fsSL -o "$RUNNER_TEMP/$tarball" \
             "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${tarball}"
@@ -51,17 +62,22 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Policy unit tests (base-branch policy)
-        run: conftest verify --policy .base-policy/policy
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          conftest verify --policy "$GITHUB_WORKSPACE/base/policy"
 
       - name: Golden-path labels on every app
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
+          pr="$GITHUB_WORKSPACE/pr" policy="$GITHUB_WORKSPACE/base/policy"
           rc=0
-          for d in apps/*/; do
+          for d in "$pr"/apps/*/; do
             [[ -f "$d/kustomization.yaml" ]] || continue
-            echo "policy-check: $d"
+            echo "policy-check: ${d#"$pr"/}"
             kubectl kustomize "$d" \
-              | conftest test -p .base-policy/policy --namespace goldenpath --parser yaml - || rc=1
+              | conftest test -p "$policy" --namespace goldenpath --parser yaml - || rc=1
           done
           exit "$rc"
 
@@ -75,18 +91,21 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --user pyyaml==6.0.2
-          agent="$(python3 -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1]))["agent_login"])' \
-            .base-policy/policy/data/agent.yaml)"
+          cd "$RUNNER_TEMP"
+          pr="$GITHUB_WORKSPACE/pr" policy="$GITHUB_WORKSPACE/base/policy"
+          # -P: the current directory never goes on sys.path (Python 3.11+).
+          python3 -P -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --user pyyaml==6.0.2
+          agent="$(python3 -P -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1]))["agent_login"])' \
+            "$policy/data/agent.yaml")"
           if [[ "$PR_AUTHOR_LOGIN" != "$agent" ]]; then
             echo "PR author is not $agent: auto-fix rules skipped"
             exit 0
           fi
           printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
-          python3 .base-policy/policy/facts/facts.py --repo . \
+          python3 -P "$policy/facts/facts.py" --repo "$pr" \
             --base "$BASE_SHA" --head "$HEAD_SHA" \
             --body-file "$RUNNER_TEMP/pr-body.md" \
             --author-login "$PR_AUTHOR_LOGIN" --author-type "$PR_AUTHOR_TYPE" \
             --tracked-ref "origin/$BASE_REF" > "$RUNNER_TEMP/facts.json"
-          conftest test "$RUNNER_TEMP/facts.json" -p .base-policy/policy --namespace autofix \
-            -d .base-policy/policy/data --output github
+          conftest test "$RUNNER_TEMP/facts.json" -p "$policy" --namespace autofix \
+            -d "$policy/data" --output github

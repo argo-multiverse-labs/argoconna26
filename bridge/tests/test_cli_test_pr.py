@@ -136,6 +136,23 @@ def test_tamper_autonomy_refuses_when_already_act() -> None:
         scenario_edits("tamper-autonomy", f)
 
 
+def test_tamper_config_adds_conftest_toml_and_yaml_py_to_an_image_change() -> None:
+    e = scenario_edits("tamper-config", FILES)
+    assert "newTag: v1.4.2" in e["apps/checkout/kustomization.yaml"]
+    assert "no-fail = true" in e["conftest.toml"]
+    assert "def safe_load" in e["yaml.py"] and "agent_login" in e["yaml.py"]
+
+
+def test_shadow_yaml_is_a_fix_shape_plus_a_root_yaml_py() -> None:
+    e = scenario_edits("shadow-yaml", FILES)
+    assert set(e) == {
+        "apps/checkout/config/checkout-config.yaml",
+        "apps/checkout/deploy/rollout.yaml",
+        "yaml.py",
+    }
+    assert 'UPSTREAM_TIMEOUT_MS: "200"' in e["apps/checkout/config/checkout-config.yaml"]
+
+
 def test_missing_anchor_line_refused() -> None:
     f = dict(FILES)
     f["apps/checkout/kustomization.yaml"] = "images: []\n"
@@ -250,8 +267,25 @@ async def test_open_refuses_an_unknown_scenario_before_any_http(_no_unmocked_htt
 
 
 def _pr(ref="agent/test-image-change-T1", labels=(TEST_LABEL,)):
-    return {"number": 9, "node_id": "N", "head": {"ref": ref, "sha": "f" * 40},
+    return {"number": 9, "node_id": "N", "head": {"ref": ref, "sha": "f" * 40}, "base": {"ref": BASE},
             "labels": [{"name": n} for n in labels]}
+
+
+REQUIRED_CHECK_RULES = [
+    {"type": "pull_request", "parameters": {"require_code_owner_review": False}},
+    {"type": "required_status_checks", "parameters": {
+        "required_status_checks": [{"context": "policy-check", "integration_id": 15368}]}},
+]
+
+
+def _check_runs(status="completed", conclusion="failure", app_id=15368):
+    return {"check_runs": [{"status": status, "conclusion": conclusion, "app": {"id": app_id},
+                            "started_at": "2026-11-02T00:00:00Z"}]}
+
+
+def _mock_guard(r, rules=REQUIRED_CHECK_RULES, runs=None):
+    r.get(f"{R}/rules/branches/{BASE}").mock(return_value=httpx.Response(200, json=rules))
+    r.get(f"{R}/commits/{'f' * 40}/check-runs").mock(return_value=httpx.Response(200, json=runs or _check_runs()))
 
 
 async def _try(**kw):
@@ -277,6 +311,7 @@ async def test_try_merge_reports_both_refusals(_no_unmocked_http) -> None:
 
     with respx.mock(assert_all_called=False) as r:
         r.get(f"{R}/pulls/9").mock(return_value=httpx.Response(200, json=_pr()))
+        _mock_guard(r)
         r.post(f"{API}/graphql").mock(return_value=httpx.Response(200, json={
             "data": {"enablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {"enabledAt": "t"}}}}}))
         put = r.put(f"{R}/pulls/9/merge").mock(
@@ -292,6 +327,7 @@ async def test_try_merge_without_rest_never_puts(_no_unmocked_http) -> None:
 
     with respx.mock(assert_all_called=False) as r:
         r.get(f"{R}/pulls/9").mock(return_value=httpx.Response(200, json=_pr()))
+        _mock_guard(r)
         r.post(f"{API}/graphql").mock(return_value=httpx.Response(200, json={
             "errors": [{"message": "Pull request is in clean status"}]}))
         put = r.put(f"{R}/pulls/9/merge")
@@ -324,3 +360,66 @@ async def test_other_scenarios_still_raise_on_a_tree_error(_no_unmocked_http) ->
         tree.mock(return_value=httpx.Response(403, json={"message": "nope"}))
         with pytest.raises(httpx.HTTPStatusError):
             await _open("image-change")
+
+
+@pytest.mark.parametrize("rules", [
+    [],
+    [{"type": "pull_request", "parameters": {}}],
+    [{"type": "required_status_checks", "parameters": {
+        "required_status_checks": [{"context": "policy-check", "integration_id": 1}]}}],
+    [{"type": "required_status_checks", "parameters": {
+        "required_status_checks": [{"context": "other", "integration_id": 15368}]}}],
+])
+async def test_try_merge_refuses_without_the_required_check_live(_no_unmocked_http, rules) -> None:
+    """Without GitHub's required policy-check on the base branch nothing would stop the merge."""
+    import respx
+
+    with respx.mock(assert_all_called=False) as r:
+        r.get(f"{R}/pulls/9").mock(return_value=httpx.Response(200, json=_pr()))
+        _mock_guard(r, rules=rules)
+        gql = r.post(f"{API}/graphql")
+        put = r.put(f"{R}/pulls/9/merge")
+        with pytest.raises(NegativePrError, match="required"):
+            await _try(rest=True)
+    assert not gql.called and not put.called
+
+
+@pytest.mark.parametrize("runs", [
+    _check_runs(conclusion="success"),
+    _check_runs(status="in_progress", conclusion=None),
+    _check_runs(app_id=1),
+    {"check_runs": []},
+])
+async def test_try_merge_rest_refused_unless_the_check_concluded_non_success(_no_unmocked_http, runs) -> None:
+    import respx
+
+    with respx.mock(assert_all_called=False) as r:
+        r.get(f"{R}/pulls/9").mock(return_value=httpx.Response(200, json=_pr()))
+        _mock_guard(r, runs=runs)
+        gql = r.post(f"{API}/graphql")
+        put = r.put(f"{R}/pulls/9/merge")
+        with pytest.raises(NegativePrError, match="policy-check"):
+            await _try(rest=True)
+    assert not gql.called and not put.called
+
+
+@pytest.mark.parametrize("scenario", ["tamper-config", "shadow-yaml"])
+async def test_open_tamper_scenarios_cite_the_cause(_no_unmocked_http, scenario) -> None:
+    import respx
+
+    files = dict(FILES)
+    with respx.mock(assert_all_called=False) as r:
+        tree, _, _, pulls, _ = _mock_repo(r)
+
+        def contents(req):
+            path = req.url.path.split("/contents/", 1)[1]
+            if path not in files:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"content": base64.b64encode(files[path].encode()).decode()})
+
+        r.get(url__startswith=f"{R}/contents/").mock(side_effect=contents)
+        res = await _open(scenario)
+    assert res.number == 9
+    paths = {x["path"] for x in json.loads(tree.calls[0].request.content)["tree"]}
+    assert "yaml.py" in paths
+    assert f"\nCause: {CAUSE}\n" in f"\n{json.loads(pulls.calls[0].request.content)['body']}\n"
