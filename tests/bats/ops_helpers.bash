@@ -143,6 +143,9 @@ case "\$*" in
     if grep -q '"200"' <<<"\$cfg" && [[ "\$subj" != Revert* ]] && grep -q kustomization.yaml <<<"\$files"; then
       echo Degraded
     else echo Healthy; fi ;;
+  *"get rollout"*)
+    # ROLLOUT_ABORTED: the Rollout is still aborted (status.abort true) on the current template.
+    if [ -e "$STUBS/ROLLOUT_ABORTED" ] && ! grep -q '^PUSH' "$CALLS"; then echo true; else echo false; fi ;;
   *"get pods"*)
     echo "PODS" >> "$CALLS"
     # PODS_JSON: the pod list to answer with (for example two ReplicaSets' pods during a scale-down).

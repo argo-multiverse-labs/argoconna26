@@ -300,6 +300,18 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   ! grep -q '^PUSH' "$CALLS"
 }
 
+@test "disarm --image rolls through cv 8 and pins 7 when Git is disarmed but the Rollout is still aborted" {
+  # Git already at v1.4.1, 2000, cv 7, but the Rollout aborted on that very template: waiting
+  # for Healthy would never end, because nothing new reaches Argo Rollouts.
+  touch "$STUBS/ROLLOUT_ABORTED"
+  before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 2)) ]
+  [ "$(cv_value)" = "7" ]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" show refs/heads/build/demo~1:$ROLL | yq -r '.spec.template.metadata.annotations["example.dev/config-version"]')" = "8" ]
+}
+
 @test "disarm --git-only does not wait" {
   arm_origin
   run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --git-only

@@ -211,6 +211,11 @@ op_wait_fleet_disarmed() {
   fi
 }
 
+# rollout_aborted : the checkout Rollout's status.abort is true (an unreadable Rollout counts as not).
+rollout_aborted() {
+  [[ "$(k get rollout checkout -n "$NS_DEMO" -o jsonpath='{.status.abort}' 2>/dev/null)" == true ]]
+}
+
 # one_checkout_replicaset : every checkout pod (Terminating ones included) has one pod-template
 # hash. Until then an old ReplicaSet still has pods, and pinning config-version back to the
 # template they were made from would hand them the canary (they may have started while armed).
@@ -323,6 +328,14 @@ op_disarm() {
     fi
   elif ((value_changed)); then
     cv_new="$(config_version_bump)"
+  fi
+  # Git already at the disarm targets, but the Rollout is still aborted on that template (an
+  # earlier canary of it failed): nothing would reach Argo Rollouts, so Healthy never comes.
+  # Roll through a bumped config-version and pin back, like the armed case.
+  if [[ -n "$image" && -z "$cv_new" ]] && ((!git_only && !value_changed && !image_changed)) \
+    && rollout_aborted; then
+    cv_new="$(config_version_bump)"
+    pin_after=1
   fi
   [[ -z "$cv_new" ]] || files+=("$ROLLOUT_FILE")
   ((!value_changed)) || beats+=("pushed: config $CONFIG_HEALTHY, cv ${cv_new:-$cv_now}")
