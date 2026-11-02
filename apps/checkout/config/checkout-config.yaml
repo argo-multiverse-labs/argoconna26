@@ -8,5 +8,5 @@ metadata:
     example.dev/tier: "1"
     slo.example.dev/success-rate: "99"
 data:
-  UPSTREAM_TIMEOUT_MS: "200"
+  UPSTREAM_TIMEOUT_MS: "2000"
   PRICING_URL: http://pricing.demo.svc:8080
