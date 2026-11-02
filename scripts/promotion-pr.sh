@@ -116,11 +116,20 @@ gh_open_promotion_prs() { # -> PR numbers, one per line
     --jq '.[] | select(.headRefName | startswith("promote/")) | .number'
 }
 
-# approving_review_url PR : the URL of the latest approving review (per reviewer), or nothing.
+# approving_review_url PR HEAD : the URL of an approval that still stands on HEAD, or nothing.
+# Per human reviewer, the latest review that decides (COMMENTED and PENDING don't withdraw an
+# approval on GitHub, so they are dropped first) must be APPROVED and on HEAD (the head ensure
+# pushed). Bots and BOT_LOGIN never count: an App approval is not a promotion-board review.
 # Only the URL leaves this function; the reviewer's login is used for grouping and dropped.
+# (Team membership is not checked yet: the team does not exist before L4.)
 approving_review_url() {
-  gh api "repos/${REPO_SLUG}/pulls/$1/reviews?per_page=100" \
-    --jq '[group_by(.user.login)[] | last | select(.state == "APPROVED")] | last | .html_url // empty'
+  local reviews
+  reviews="$(gh api "repos/${REPO_SLUG}/pulls/$1/reviews?per_page=100")" || return 1
+  jq -r --arg bot "${BOT_LOGIN:?}" --arg head "$2" '
+    [.[] | select(.state != "COMMENTED" and .state != "PENDING")
+         | select(.user.type != "Bot" and .user.login != $bot)]
+    | [group_by(.user.login)[] | last | select(.state == "APPROVED" and .commit_id == $head)]
+    | last | .html_url // empty' <<<"$reviews"
 }
 
 # ------------------------------------------------------- recorded promotions
@@ -248,7 +257,7 @@ cmd_merge() {
   if ((admin)); then
     args+=(--admin)
     log_info "admin-bypass: merging PR $pr without a review"
-  elif [[ -z "$(approving_review_url "$pr")" ]]; then
+  elif [[ -z "$(approving_review_url "$pr" "$RECORDED_HEAD")" ]]; then
     refuse 1 "no approving review" "merge: PR $pr has no approving review; get one, or pass --admin (logged as admin-bypass)"
   fi
   gh "${args[@]}" >/dev/null || die "gh could not merge PR $pr"
@@ -266,7 +275,7 @@ cmd_record_approval() {
   state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state)" || die "could not read PR $pr"
   [[ "$state" == MERGED ]] || refuse 1 "PR is $state" "record-approval: PR $pr is $state, not MERGED"
 
-  url="$(approving_review_url "$pr")" || die "could not read the reviews of PR $pr"
+  url="$(approving_review_url "$pr" "$(record_value "$file" head)")" || die "could not read the reviews of PR $pr"
   if [[ -n "$url" ]]; then
     value="promotion-board member (review $url)"
   else

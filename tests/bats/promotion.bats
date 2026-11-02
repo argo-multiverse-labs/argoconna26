@@ -13,11 +13,21 @@ setup() {
   make_promotion_fixture
 }
 
-# approve PR : a stubbed approving review, by a login that must never reach Git
-approve() {
-  printf '[{"state":"APPROVED","html_url":"https://github.com/argo-multiverse-labs/argoconna26/pull/%s#pullrequestreview-555","user":{"login":"stub-reviewer"}}]\n' "$1" \
-    > "$PROMO_STATE/reviews-$1.json"
+# review PR STATE [LOGIN] [TYPE] [COMMIT] : append one stubbed review (default: on the PR's head,
+# by a human login that must never reach Git).
+review() {
+  local f="$PROMO_STATE/reviews-$1.json" id
+  [[ -f "$f" ]] || echo '[]' > "$f"
+  id=$((555 + $(jq length "$f")))
+  jq --arg n "$1" --arg st "$2" --arg login "${3:-stub-reviewer}" --arg type "${4:-User}" \
+     --arg commit "${5:-$(jq -r .headRefOid "$PROMO_STATE/pr/$1.json")}" --argjson id "$id" \
+     '. + [{state: $st, commit_id: $commit, user: {login: $login, type: $type},
+            html_url: "https://github.com/argo-multiverse-labs/argoconna26/pull/\($n)#pullrequestreview-\($id)"}]' \
+     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
+
+# approve PR : one approving review on the PR's head
+approve() { review "$1" APPROVED; }
 
 # ---------------------------------------------------------------- ensure
 
@@ -208,6 +218,45 @@ approve() {
   ! gh_calls | grep 'pr merge 1' | grep -q -- '--admin'
   gh_calls | grep 'pr merge 1' | grep -q -- "--match-head-commit $(jq -r .headRefOid "$PROMO_STATE/pr/1.json")"
   [ "$(tip_autonomy .level)" = "propose" ]
+}
+
+@test "an approval followed by a COMMENTED review still counts (slice-4 review)" {
+  promo ensure propose
+  approve 1
+  review 1 COMMENTED
+  run promo merge 1
+  [ "$status" -eq 0 ]
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "promotion-board member (review $URL1)" ]
+}
+
+@test "a bot's approval is not a board approval: merge refuses, record-approval says admin-bypass" {
+  promo ensure propose
+  review 1 APPROVED "argoconna26-agent[bot]" Bot
+  run promo merge 1
+  [ "$status" -ne 0 ]
+  ! gh_calls | grep -q 'pr merge'
+  promo merge 1 --admin
+  run promo record-approval 1
+  [ "$status" -eq 0 ]
+  [ "$(tip_autonomy .promotion.approved_by)" = "admin-bypass" ]
+}
+
+@test "an approval by BOT_LOGIN typed as a user still does not count" {
+  promo ensure propose
+  review 1 APPROVED "argoconna26-agent[bot]" User
+  run promo merge 1
+  [ "$status" -ne 0 ]
+  ! gh_calls | grep -q 'pr merge'
+}
+
+@test "an approval on another commit than the recorded head does not count" {
+  promo ensure propose
+  review 1 APPROVED stub-reviewer User 0000000000000000000000000000000000000000
+  run promo merge 1
+  [ "$status" -ne 0 ]
+  ! gh_calls | grep -q 'pr merge'
 }
 
 @test "merge without --admin refuses when there is no approving review" {
