@@ -12,9 +12,12 @@ setup() {
   : >"$LOG"
   export EVIDENCE_DIR="$BATS_TEST_TMPDIR/evidence"
   STUBS="$BATS_TEST_TMPDIR/stubs"
-  make_stub "$STUBS" make 'echo "make ${*: -1}" >>"$LOG"; [[ "${FAIL_MAKE:-}" == "${*: -1}" ]] && exit 2; exit 0'
+  make_stub "$STUBS" make 'echo "make ${*: -1}" >>"$LOG"; [[ "${FAIL_MAKE:-}" == "${*: -1}" ]] && exit 2
+    # BELOW_PROPOSE=1: the first reset-rung-3 finds autonomy at suggest and exits 6 (Task 6.3)
+    if [[ "${BELOW_PROPOSE:-}" == 1 && "${*: -1}" == reset-rung-3 && ! -e "$LOG.r3" ]]; then : >"$LOG.r3"; exit 6; fi
+    exit 0'
   make_stub "$STUBS" gh 'echo "gh $*" >>"$LOG"; [[ -z "${GH_AUTH_FAIL:-}" ]]'
-  make_stub "$STUBS" preflight 'echo "preflight $*" >>"$LOG"; [[ "$*" != "${FAIL_PREFLIGHT:-none}" ]]'
+  make_stub "$STUBS" preflight 'echo "preflight $*${PREFLIGHT_REQUIRE_SCORE:+ (score required)}" >>"$LOG"; [[ "$*" != "${FAIL_PREFLIGHT:-none}" ]]'
   make_stub "$STUBS" promotion 'echo "promotion $*" >>"$LOG"; [[ "$1" != "${FAIL_PROMOTION:-none}" ]]'
   make_stub "$STUBS" litellm 'echo "${SPEND:-live 1.0000 remaining 40.0000 cumulative 12.0000 budget 50.00}"'
   make_stub "$STUBS" grafana 'echo "http://kiosk.example/"'
@@ -22,6 +25,7 @@ setup() {
   export STAGE_DAY_PREFLIGHT="$STUBS/preflight" STAGE_DAY_PROMOTION="$STUBS/promotion" \
     STAGE_DAY_LITELLM="$STUBS/litellm" STAGE_DAY_GRAFANA_URL="$STUBS/grafana"
   printf 'pr=77\nhead=abc\nbranch=promote/act-x\n' >"$FIXTURE/.operator/promotion-act"
+  printf 'pr=76\nhead=def\nbranch=promote/propose-x\n' >"$FIXTURE/.operator/promotion-propose"
 }
 
 sd() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/stage-day.sh" "$@"); }
@@ -30,7 +34,7 @@ sd() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/stage-day.sh" "$@"); }
   run sd morning
   [ "$status" -eq 0 ]
   [ "$(cat "$LOG")" = "make reset-demo
-preflight 1
+preflight 1 (score required)
 gh auth status
 make job-install
 preflight 3" ]
@@ -159,4 +163,25 @@ preflight 3 --armed" ]
   [ "$status" -eq 2 ]
   run sd arm-rung-3 --nope </dev/null
   [ "$status" -eq 2 ]
+}
+
+@test "arm-rung-3 from suggest (after reject + demote) merges the propose promotion first, then resets again" {
+  BELOW_PROPOSE=1 run bash -c "cd '$FIXTURE' && printf '\n\n' | '$REPO_ROOT/scripts/stage-day.sh' arm-rung-3 --admin"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$LOG")" = "make reset-rung-3
+promotion merge 76 --admin
+promotion record-approval 76
+make reset-rung-3
+preflight 3 --pre-promotion
+promotion merge 77 --admin
+promotion record-approval 77
+preflight 3 --armed" ]
+  [[ "$output" == *"propose promotion PR 76"* ]]
+}
+
+@test "arm-rung-3 from suggest stops at the propose human step with no input and merges nothing" {
+  BELOW_PROPOSE=1 run sd arm-rung-3
+  [ "$status" -eq 3 ]
+  ! grep -q '^promotion' "$LOG"
+  [[ "$output" == *"propose promotion PR 76"* ]]
 }

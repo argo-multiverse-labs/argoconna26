@@ -16,7 +16,8 @@
 # keeps them deferred.
 #
 # Test/tuning overrides: PREFLIGHT_FLEET_WAIT_S (how long to wait for the fleet gauge series, default 20),
-# PREFLIGHT_MIN_FREE_GB (default 5), SYSTEMD_USER_DIR, XDG_RUNTIME_DIR.
+# PREFLIGHT_MIN_FREE_GB (default 5), SYSTEMD_USER_DIR, XDG_RUNTIME_DIR. PREFLIGHT_REQUIRE_SCORE=1
+# makes a missing full dry-run score a FAIL (section dryrun; stage-day morning sets it).
 # Sections are functions named section_<name>. V1_SECTIONS runs first, in order; any other
 # section_* function defined by a later slice runs after them (alphabetically).
 set -euo pipefail
@@ -378,14 +379,19 @@ section_local() {
 # ------------------------------------------------------------------ GitHub helpers
 # True when the full `github-ruleset.sh apply` is live: the tracked branch's rules carry
 # code-owner review. PREFLIGHT_L5B=1 / 0 forces it. Read with whichever credential gh holds.
+# Fails closed: when the rules cannot be read (no access, rate limit, 5xx) that is a FAIL of its
+# own and the L5b checks run as hard checks; only a successful read without the rule defers them.
 _L5B=""
 l5b_active() {
   local rules
   case "${PREFLIGHT_L5B:-auto}" in 1) return 0 ;; 0) return 1 ;; esac
   if [[ -z "$_L5B" ]]; then
-    rules="$(gh api "repos/${REPO_SLUG}/rules/branches/${TRACKED_BRANCH}" 2>/dev/null || true)"
-    if jq -e 'any(.[]?; .type == "pull_request" and .parameters.require_code_owner_review == true)' \
-        <<<"${rules:-[]}" >/dev/null 2>&1; then _L5B=yes; else _L5B=no; fi
+    if ! rules="$(gh api "repos/${REPO_SLUG}/rules/branches/${TRACKED_BRANCH}" 2>/dev/null)" \
+        || ! jq -e 'type == "array"' <<<"$rules" >/dev/null 2>&1; then
+      _L5B=yes
+      check_fail "github: cannot read the rules on $TRACKED_BRANCH; the L5b checks run as hard checks"
+    elif jq -e 'any(.[]?; .type == "pull_request" and .parameters.require_code_owner_review == true)' \
+        <<<"$rules" >/dev/null 2>&1; then _L5B=yes; else _L5B=no; fi
   fi
   [[ "$_L5B" == yes ]]
 }
@@ -644,6 +650,44 @@ _runtime_app() {
     check_pass "github-runtime: the App holds no workflows, administration or actions permission, and writes only contents and pull_requests"
   else
     check_fail "github-runtime: the App installation holds permissions it must not: $bad"
+  fi
+}
+
+# ------------------------------------------------------------------ dry-run score
+# The published dry-run score (panel 4, promotion PR bodies) must come from a full run:
+# .dryruns/summary.json with n >= PROMOTION_SCORE_BAR's denominator, more than one incident and
+# incidents x runs_per_incident == n (Δ27), and ConfigMap dryrun-summary equal to it. No summary
+# and no ConfigMap is "pending": a WARN, or a FAIL with PREFLIGHT_REQUIRE_SCORE=1 (stage-day).
+section_dryrun() {
+  local f cm bn
+  [[ -n "$RUNG" ]] || return 0
+  f="$(main_root)/.dryruns/summary.json"
+  bn="${PROMOTION_SCORE_BAR#*/}"
+  cm="$(k get configmap dryrun-summary -n "$NS_AIOPS" -o json 2>/dev/null | jq -r '.data["summary.json"] // empty' 2>/dev/null || true)"
+  if [[ ! -s "$f" ]]; then
+    if [[ -n "$cm" ]]; then
+      check_fail "dryrun: ConfigMap dryrun-summary is set but .dryruns/summary.json is missing (kubectl -n $NS_AIOPS delete configmap dryrun-summary, or restore the file)"
+    elif [[ "${PREFLIGHT_REQUIRE_SCORE:-0}" == 1 ]]; then
+      check_fail "dryrun: no full dry-run score yet (make dry-runs N=$bn BATCH=5)"
+    else
+      check_warn "dryrun: score pending (no .dryruns/summary.json; panel 4 and promotion PRs say pending)"
+    fi
+    return 0
+  fi
+  if jq -e --argjson bn "$bn" '(.n | type) == "number" and .n >= $bn
+      and (.incidents | type) == "number" and .incidents > 1
+      and (.runs_per_incident | type) == "number" and .incidents * .runs_per_incident == .n
+      and (.root_cause_matched | type) == "number"' "$f" >/dev/null 2>&1; then
+    check_pass "dryrun: summary.json is a full run ($(jq -r '"\(.root_cause_matched)/\(.n) across \(.incidents) incidents"' "$f"))"
+  else
+    check_fail "dryrun: summary.json is not a full run ($(jq -c '{n, incidents, runs_per_incident}' "$f" 2>/dev/null || echo unreadable)); move it aside and run make dry-runs N=$bn BATCH=5"
+  fi
+  if [[ -z "$cm" ]]; then
+    check_fail "dryrun: ConfigMap dryrun-summary is missing (make dryrun-summary-restore)"
+  elif [[ "$(jq -S -c . <<<"$cm" 2>/dev/null)" == "$(jq -S -c . "$f" 2>/dev/null)" ]]; then
+    check_pass "dryrun: ConfigMap dryrun-summary matches summary.json"
+  else
+    check_fail "dryrun: ConfigMap dryrun-summary differs from summary.json (make dryrun-summary-restore)"
   fi
 }
 

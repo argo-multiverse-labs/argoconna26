@@ -32,6 +32,7 @@ setup() {
       *"get jobs -n "*) echo "{\"items\":[]}" ;;
       *"get deployment bridge"*) cat "$S/bridge-deploy.json" ;;
       *"get applications.argoproj.io"*) cat "$S/apps.json" ;;
+      *"get configmap dryrun-summary"*) [ -f "$S/cm.json" ] && cat "$S/cm.json" || exit 1 ;;
       *) echo "kubectl stub: unexpected $*" >&2; exit 1 ;;
     esac'
   make_stub "$STUBS" kind 'echo argoconna26'
@@ -589,4 +590,63 @@ install_unit() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/night.sh" job-install >/d
   [[ "$output" == *"[FAIL]"*"label demo-reset is missing"* ]]
   [[ "$output" == *"[FAIL]"*"allow_auto_merge is not on"* ]]
   [[ "$output" == *"[FAIL]"*"push protection is not enabled"* ]]
+}
+
+# --------------------------------------------------------------- L5b read fails closed
+@test "runtime: a failed read of the tracked rules is a FAIL and the L5b checks run hard, not deferred" {
+  rm -f "$STATE/rules.json"
+  rm -f "$STATE/app-check.json"
+  run "$ONLY" github_runtime 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"cannot read the rules on build/demo"* ]]
+  [[ "$output" != *"deferred to L5b"* ]]
+}
+
+# --------------------------------------------------------------- dryrun: the published score
+summary() { # N INCIDENTS RUNS_EACH MATCHED -> .dryruns/summary.json in the fixture
+  mkdir -p "$FIXTURE/.dryruns"
+  jq -n --argjson n "$1" --argjson i "$2" --argjson r "$3" --argjson m "$4" \
+    '{n:$n, incidents:$i, runs_per_incident:$r, root_cause_matched:$m}' >"$FIXTURE/.dryruns/summary.json"
+}
+cm_from_file() { jq -n --rawfile s "$FIXTURE/.dryruns/summary.json" '{data: {"summary.json": $s}}' >"$STATE/cm.json"; }
+
+@test "dryrun: no summary and no ConfigMap is pending (WARN), a FAIL with PREFLIGHT_REQUIRE_SCORE=1" {
+  run "$ONLY" dryrun 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[WARN]"*"score pending"* ]]
+  PREFLIGHT_REQUIRE_SCORE=1 run "$ONLY" dryrun 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"no full dry-run score"* ]]
+}
+
+@test "dryrun: a smoke summary (n=1) fails, even when the ConfigMap matches" {
+  summary 1 1 1 1
+  cm_from_file
+  run "$ONLY" dryrun 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"not a full run"* ]]
+}
+
+@test "dryrun: a full run passes when the ConfigMap matches, fails when it differs or is missing" {
+  summary 20 4 5 17
+  cm_from_file
+  run "$ONLY" dryrun 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[PASS]"*"17/20 across 4 incidents"* ]]
+  [[ "$output" == *"[PASS]"*"matches summary.json"* ]]
+  echo '{"data":{"summary.json":"{\"n\":1,\"root_cause_matched\":1}"}}' >"$STATE/cm.json"
+  run "$ONLY" dryrun 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"differs"* ]]
+  rm "$STATE/cm.json"
+  run "$ONLY" dryrun 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"dryrun-summary is missing"* ]]
+}
+
+@test "dryrun: a ConfigMap without a summary file fails" {
+  echo '{"data":{"summary.json":"{\"n\":1}"}}' >"$STATE/cm.json"
+  run "$ONLY" dryrun 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[FAIL]"*"summary.json is missing"* ]]
 }
