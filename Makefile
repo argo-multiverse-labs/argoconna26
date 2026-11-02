@@ -258,15 +258,8 @@ policy-verify: ## Run the Rego unit tests
 	@cd $(ROOT) && conftest verify --policy policy
 
 .PHONY: policy-check
-policy-check: ## Golden-path labels on every app's rendered manifests (conftest, no cluster needed)
-	@cd $(ROOT)
-	rc=0
-	for d in apps/*/; do
-	  [[ -f "$$d/kustomization.yaml" ]] || continue
-	  echo "policy-check: $$d"
-	  kubectl kustomize "$$d" | conftest test --policy policy --namespace goldenpath --parser yaml - || rc=1
-	done
-	exit $$rc
+policy-check: ## Golden-path labels on every app; with BASE= and HEAD= also the auto-fix rules (no cluster needed)
+	@$(ROOT)/scripts/policy-check.sh $(if $(BASE),--base $(BASE) --head $(HEAD)) $(if $(BODY_FILE),--body-file $(BODY_FILE)) $(if $(AUTHOR_LOGIN),--author-login $(AUTHOR_LOGIN)) $(if $(TRACKED_REF),--tracked-ref $(TRACKED_REF))
 
 ################################################################################
 # GitOps                                                                       #
