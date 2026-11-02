@@ -6,6 +6,6 @@ promotion:
   from_level: suggest
   dry_run_score: pending
   approver_required: '@argo-multiverse-labs/promotion-board'
-  approved_by: null
-  pr: null
+  approved_by: admin-bypass
+  pr: 49
 touchpoints: {suggest: 4, propose: 1, act: 1} # steps a human must take; at act the one step is an after-the-fact review
