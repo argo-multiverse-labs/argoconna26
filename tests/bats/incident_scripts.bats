@@ -232,6 +232,29 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   [ "$(cv_value)" = "8" ]
 }
 
+@test "a re-run of disarm after the old-ReplicaSet timeout still waits before it pins" {
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null     # armed, cv 7, tag v1.4.2
+  echo '{"items":[
+    {"metadata":{"name":"checkout-new-1","labels":{"rollouts-pod-template-hash":"new"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+    {"metadata":{"name":"checkout-old-1","labels":{"rollouts-pod-template-hash":"old"},"deletionTimestamp":"2026-11-02T21:02:50Z"},"status":{}}]}' >"$STUBS/PODS_JSON"
+  ONE_RS_WAIT_S=2 run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 4 ]
+  [ "$(cv_value)" = "8" ]
+  # The operator retries straight away; the old pods are still there. Git now has cv 8, so the
+  # retry takes the "pin at once" path, which must wait the same way and refuse, not pin.
+  before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
+  ONE_RS_WAIT_S=2 run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"old ReplicaSet"* ]]
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq "$before" ]
+  [ "$(cv_value)" = "8" ]
+  # once they are gone, the retry pins
+  rm -f "$STUBS/PODS_JSON"
+  run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -eq 0 ]
+  [ "$(cv_value)" = "7" ]
+}
+
 @test "disarm --image pins config-version back to 7 after a fix" {
   arm_origin
   ops_run "$REPO_ROOT/scripts/fix.sh" >/dev/null       # 2000, cv 8

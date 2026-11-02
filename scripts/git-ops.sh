@@ -336,6 +336,11 @@ op_disarm() {
   cv_now="$(config_version_get)"
   if [[ -n "$image" ]]; then
     if [[ "$cv_now" != "$CONFIG_VERSION_START" ]]; then
+      # The value is already healthy, so this commit only moves the template back to cv
+      # CONFIG_VERSION_START, whose ReplicaSet Rollouts reuses. A re-run after pin_after's exit 4
+      # lands here with that old ReplicaSet's pods (which read the armed value) still up: wait
+      # for them first, the same guard as pin_after.
+      if ((!git_only && !value_changed)); then op_wait_one_replicaset; fi
       yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
       cv_new="$CONFIG_VERSION_START"
     elif ((value_changed && !git_only && !image_changed)) \
