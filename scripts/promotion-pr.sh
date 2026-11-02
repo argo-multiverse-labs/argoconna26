@@ -78,6 +78,24 @@ dry_run_score() {
   printf '%s' "${out:-pending}"
 }
 
+# dry_run_detail : " Measured as M/N dry runs across I incidents (R runs each, temperature T, model `ID`)."
+# from .dryruns/summary.json (Δ27, D17), or nothing when the summary lacks any of it. The model ID
+# lands in a public PR body, so anything but a plain model name leaves the whole sentence out.
+dry_run_detail() {
+  local f
+  f="$(main_root)/.dryruns/summary.json"
+  [[ -r "$f" ]] || return 0
+  jq -r 'def plural(n; w): "\(n) \(w)\(if n == 1 then "" else "s" end)";
+    select((.n | type) == "number" and .n > 0 and (.root_cause_matched | type) == "number"
+      and (.incidents | type) == "number" and .incidents > 0
+      and (.runs_per_incident | type) == "number" and .runs_per_incident > 0
+      and (.model_temperature | type) == "number"
+      and (.model_id | type) == "string" and (.model_id | test("^[A-Za-z0-9._:/@-]{1,100}$")))
+    | " Measured as \(.root_cause_matched)/\(.n) dry runs across \(plural(.incidents; "incident"))"
+      + " (\(plural(.runs_per_incident; "run")) each, temperature \(.model_temperature), model `\(.model_id)`)."' \
+    "$f" 2>/dev/null || true
+}
+
 # score_verdict SCORE : the plain sentence for the body; returns 1 when the score is below the bar.
 score_verdict() {
   local score="$1" bar="$PROMOTION_SCORE_BAR" m n bm bn
@@ -102,10 +120,10 @@ render_body() {
   weeks_var="PROMOTION_WEEKS_${from^^}"
   verdict="$(score_verdict "$score")" || log_warn "score $score is below the $PROMOTION_SCORE_BAR bar; the PR body says so"
   # shellcheck disable=SC2016 # envsubst variable names, not shell expansions
-  FROM_LEVEL="$from" TO_LEVEL="$to" VERDICT="$verdict" \
+  FROM_LEVEL="$from" TO_LEVEL="$to" VERDICT="$verdict" DRY_RUN_DETAIL="$(dry_run_detail)" \
     TIME_AT_LEVEL="$(time_at_level "$since")" WEEKS="${!weeks_var:?$weeks_var is not set in demo.env}" \
     APPROVER="$PROMOTION_TEAM" \
-    envsubst '${FROM_LEVEL} ${TO_LEVEL} ${VERDICT} ${TIME_AT_LEVEL} ${WEEKS} ${APPROVER}' \
+    envsubst '${FROM_LEVEL} ${TO_LEVEL} ${VERDICT} ${DRY_RUN_DETAIL} ${TIME_AT_LEVEL} ${WEEKS} ${APPROVER}' \
     <"$PROMOTION_BODY_TEMPLATE" >"$out"
 }
 
