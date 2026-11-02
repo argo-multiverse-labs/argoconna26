@@ -94,7 +94,8 @@ from `RULESET_BRANCHES` and re-apply; the script does that for you in `verify-in
   `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: false`,
   `required_review_thread_resolution: false`, and `require_code_owner_review` set to `false`
   with `apply --minimal` (CODEOWNERS does not exist yet) and `true` with a plain `apply`.
-  `apply --with-policy-check` also adds the required `policy-check` status (section 4).
+  `apply --with-policy-check` also adds the required `policy-check` status (section 4);
+  `apply --minimal --with-policy-check` adds it while code-owner review stays off.
 - **Bypass actors:** exactly one: the built-in **Repository role "Admin"** (`actor_type:
   RepositoryRole`, `actor_id: 5`, `bypass_mode: always`).
 
@@ -218,7 +219,8 @@ These are not applied yet; the script's full mode and the preflight grow as the 
   `required_status_checks` rule on the tracked branches naming the context `policy-check` from
   GitHub Actions (`integration_id: 15368`). The workflow that produces it lives on the tracked
   branch. Don't apply it before that workflow exists there, or every PR waits for a check that
-  never runs.
+  never runs. `apply --minimal --with-policy-check` adds the check with code-owner review still
+  off, for a fork (or this repo) that has the workflow but not yet the promotion-board team.
 - **Merge-mechanics spike** (`apply --spike rehearse/<name>` and `apply --spike-remove`): a
   temporary fourth ruleset, `argoconna26-spike`, with those full rules on one scratch
   `rehearse/*` branch only, to test the App's auto-merge before the real branches carry them.
@@ -307,7 +309,7 @@ Two refusals don't carry a ruleset message, and the check handles them explicitl
 
 | Thing | Value |
 |---|---|
-| Script | `scripts/github-ruleset.sh apply [--minimal \| --with-policy-check \| --spike BRANCH \| --spike-remove]`, `show`, `verify-integrity` |
+| Script | `scripts/github-ruleset.sh apply [--minimal [--with-policy-check] \| --with-policy-check \| --spike BRANCH \| --spike-remove]`, `show`, `verify-integrity` |
 | Script knob | `RULESET_LAST_PUSH_APPROVAL` (environment, `true` or `false`, default `false`) |
 | Admin role id used as the only bypass | `5` (repository role "Admin") |
 | Names the scripts read | `demo.env`: `REPO_SLUG`, `BOT_LOGIN`, `PROMOTION_TEAM`, `RULESET_BRANCHES`, `RULESET_INTEGRITY`, `RULESET_TRACKED`, `RULESET_PROMOTE`, `POLICY_CHECK_CONTEXT`, `POLICY_CHECK_INTEGRATION_ID` |

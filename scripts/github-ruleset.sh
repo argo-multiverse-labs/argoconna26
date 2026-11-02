@@ -5,6 +5,8 @@
 #   scripts/github-ruleset.sh apply [--minimal]        create or update the three standing rulesets
 #                                                      and the two labels (idempotent: PUT by id)
 #   scripts/github-ruleset.sh apply --with-policy-check  the same, plus the required policy-check (slice 5)
+#   scripts/github-ruleset.sh apply --minimal --with-policy-check  the required check, code-owner review off
+#                                                      (before the promotion-board team exists)
 #   scripts/github-ruleset.sh apply --spike BRANCH     add the temporary spike ruleset on one rehearse/* branch
 #   scripts/github-ruleset.sh apply --spike-remove     delete the spike ruleset
 #   scripts/github-ruleset.sh show                     print every ruleset, normalized, as JSON
@@ -32,7 +34,7 @@ set -euo pipefail
 ADMIN_ROLE_ID=5                  # GitHub's built-in "Admin" repository role
 SPIKE_NAME=argoconna26-spike
 
-usage() { die "usage: github-ruleset.sh apply [--minimal|--with-policy-check|--spike BRANCH|--spike-remove] | show | verify-integrity"; }
+usage() { die "usage: github-ruleset.sh apply [--minimal [--with-policy-check]|--with-policy-check|--spike BRANCH|--spike-remove] | show | verify-integrity"; }
 
 LAST_PUSH="${RULESET_LAST_PUSH_APPROVAL:-false}"
 [[ "$LAST_PUSH" == true || "$LAST_PUSH" == false ]] \
@@ -98,15 +100,15 @@ ensure_labels() {
   log_info "labels demo-reset and policy-negative-test: present"
 }
 
-apply_standing() { # MODE: minimal | full | policy-check
+apply_standing() { # MODE: minimal | full | policy-check | minimal-policy-check
   local inc rules names co=true
-  [[ "$1" == minimal ]] && co=false
+  [[ "$1" == minimal* ]] && co=false
   mapfile -t names < <(branches_array)
   inc="$(refs_json "${names[@]}")"
   put_ruleset "$RULESET_INTEGRITY" "$(ruleset_body "$RULESET_INTEGRITY" "$inc" '[]' \
     '[{"type":"deletion"},{"type":"non_fast_forward"}]')"
   rules="[$(pull_request_rule "$co" "$LAST_PUSH")"
-  [[ "$1" == policy-check ]] && rules+=",$(policy_check_rule)"
+  [[ "$1" == *policy-check ]] && rules+=",$(policy_check_rule)"
   rules+="]"
   put_ruleset "$RULESET_TRACKED" "$(ruleset_body "$RULESET_TRACKED" "$inc" "$admin_bypass" "$rules")"
   put_ruleset "$RULESET_PROMOTE" "$(ruleset_body "$RULESET_PROMOTE" '["refs/heads/promote/*"]' "$admin_bypass" \
@@ -145,10 +147,11 @@ show() {
         rules:(.rules|map({type, parameters:(.parameters // null)}))}) | sort_by(.name)'
 }
 
-live_mode() { # the mode the live tracked ruleset is in: minimal | full | policy-check
+live_mode() { # the mode the live tracked ruleset is in: minimal | full | policy-check | minimal-policy-check
   show | jq -r --arg n "$RULESET_TRACKED" '[.[]|select(.name==$n)][0] as $t
+    | ([$t.rules[]?|select(.type=="pull_request")|.parameters.require_code_owner_review][0] // false) as $co
     | if $t == null then "minimal"
-      elif any($t.rules[]; .type=="required_status_checks") then "policy-check"
+      elif any($t.rules[]; .type=="required_status_checks") then (if $co then "policy-check" else "minimal-policy-check" end)
       elif ([$t.rules[]|select(.type=="pull_request")|.parameters.require_code_owner_review][0] // false) then "full"
       else "minimal" end'
 }
@@ -214,7 +217,12 @@ main() {
     apply)
       case "${2:-}" in
         "")             apply_standing full ;;
-        --minimal)      apply_standing minimal ;;
+        --minimal)
+          case "${3:-}" in
+            "")                  apply_standing minimal ;;
+            --with-policy-check) apply_standing minimal-policy-check ;;
+            *) usage ;;
+          esac ;;
         --with-policy-check) apply_standing policy-check ;;
         --spike)        apply_spike "${3:?--spike needs a BRANCH}" ;;
         --spike-remove) remove_spike ;;
