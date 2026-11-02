@@ -109,7 +109,8 @@ The check is only worth something if the agent cannot change how it runs.
   - the GitHub App has no `workflows` permission, so GitHub refuses its commits under
     `.github/workflows/`;
   - `.github/` is code-owned by the promotion team, so a change there needs one of its members
-    to review, and `require_code_owner_review` is on in the tracked ruleset.
+    to review once `require_code_owner_review` is on in the tracked ruleset (a plain `apply`; the
+    `--minimal` modes leave it off).
 - **The policy directory is code-owned too** (`/policy/`), and so is `aiops/autonomy.yaml`.
 
 The check is a *required* status on the tracked branch only in the `--with-policy-check` mode of

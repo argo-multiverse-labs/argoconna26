@@ -10,10 +10,10 @@ check except the one that runs the code.
 
 | Piece | What it does |
 |-------|--------------|
-| `apps/checkout/config/checkout-config.yaml` | A ConfigMap with `UPSTREAM_TIMEOUT_MS: "2000"` and `PRICING_URL` |
-| `apps/checkout/deploy/rollout.yaml` | A Rollout with 4 replicas. It loads the ConfigMap with `envFrom`. The pod template has the annotation `example.dev/config-version: "8"` |
+| `apps/checkout/config/checkout-config.yaml` | A ConfigMap with `UPSTREAM_TIMEOUT_MS` (`"2000"` in the working state, `"200"` while armed) and `PRICING_URL` |
+| `apps/checkout/deploy/rollout.yaml` | A Rollout with 4 replicas. It loads the ConfigMap with `envFrom`. The pod template has the annotation `example.dev/config-version: "7"` (the reset value; the fix raises it to 8) |
 | `apps/checkout/app/main.py` | Reads `UPSTREAM_TIMEOUT_MS` **once, at startup**, calls pricing with that timeout, returns 502 on a timeout, and exports the value it read as the gauge `checkout_config_upstream_timeout_ms` |
-| `apps/pricing/app/main.py` | Answers `/price` after 300 to 450 ms (mean 350 ms) |
+| `apps/pricing/app/main.py` | Answers `/price` after 300 to 400 ms (mean 350 ms) |
 | `apps/checkout/deploy/analysistemplate.yaml` | The canary gate: the success rate of the canary's pods must be at least the SLO (99, from a pod label). Measured every 10 s from a Prometheus query |
 
 With a timeout of 2000 ms every request succeeds. With 200 ms, nearly every request times out,
@@ -70,15 +70,15 @@ the incident window) is still in Prometheus after the canary pods are gone.
 - The ConfigMap still says 200. Every pod started since the config change still reads 200 and
   still returns 502s, so the success-rate panel on the dashboard keeps showing the SLO missed
   while Argo CD shows green.
-- It is worse than wrong. The reverted image is older than `CHECKOUT_CVE_TAG` (v1.4.2, the first
+- It also removes a security fix. The reverted image is older than `CHECKOUT_CVE_TAG` (v1.4.2, the first
   tag with the security fix in the example `CHANGELOG.md`), so the revert also removes the fix.
   The script refuses unless the revert would land below that tag.
 - The next unrelated deploy starts new pods, which read 200 and abort the canary again.
   `make naive-revert` shows that second failure too (`NAIVE_STOP_AT_GREEN=1` stops after the first
   half).
 
-The point for the talk: a green status was never the question. The SLO was. An agent that watches
-only deployment health would call this fixed.
+Deployment health and the SLO disagree here. An agent that watches only deployment health would
+call this fixed.
 
 ## The real fix
 

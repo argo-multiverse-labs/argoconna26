@@ -17,7 +17,7 @@ One incident, replayed at three levels of trust (the **trust ladder**):
 |------|-------|---------------------|----------|
 | 1 | `suggest` | Posts its root-cause analysis as a comment on the cause commit (or its PR). | A human fixes it. |
 | 2 | `propose` | Opens a two-line fix PR with the analysis and evidence in the body. | A human reviews and merges. |
-| 3 | `act` | Opens the same PR and turns on auto-merge. GitHub merges it only if the required `policy-check` passes. | A human reviews afterwards. |
+| 3 | `act` | Opens the same PR and turns on auto-merge. It merges only after `policy-check` passes, which GitHub enforces as a required status. | A human reviews afterwards. |
 
 The incident is the same each time. A change lowers a timeout (`UPSTREAM_TIMEOUT_MS`, 2000 to
 200) without bumping the pod template's config-version annotation. The next image deploy starts
@@ -179,7 +179,7 @@ reviews and merges it, Argo CD syncs, and the application recovers.
 
 ### Rung 3: act (in progress)
 
-Slice 5 is being built now. What exists on this branch: the `act` path in the bridge (auto-merge,
+Rung 3 is still being built. What exists on this branch: the `act` path in the bridge (auto-merge,
 with a fallback that merges only on a `success` from `policy-check`), the policy rules, the
 `policy-check` workflow, and the scheduled job. Not yet in place: the end-to-end test for the
 rung and the stage script.
@@ -190,8 +190,9 @@ make job-install        # installs the user unit argoconna26-rearm.service
 make night              # starts that unit now: preflight, then rearm
 ```
 
-From the trigger to Healthy no human acts: the agent opens the PR, `policy-check` passes, GitHub
-merges, Argo CD syncs. A person reviews afterwards.
+The intended run: from the trigger to Healthy no human acts. The agent opens the PR,
+`policy-check` passes, the PR merges, and Argo CD syncs. A person reviews afterwards. This run has
+not been recorded end to end yet.
 
 ### Going back down
 
@@ -240,10 +241,11 @@ back to 2000 (`IMAGE=vX.Y.Z` also pins the image tag).
 
 - *GitHub:* the three standing rulesets (nobody deletes or force-pushes a tracked branch; changes
   to it arrive by pull request, with only a repository admin able to bypass; only an admin
-  creates, moves or deletes `promote/*`); code-owner review on `aiops/autonomy.yaml`, `policy/`
-  and `.github/` (CODEOWNERS, with `require_code_owner_review` on); and, in the policy-check mode
-  of `scripts/github-ruleset.sh apply`, the required `policy-check` status. An agent PR that
-  raises `aiops/autonomy.yaml` stays blocked until the promotion board reviews it.
+  creates, moves or deletes `promote/*`); and the required `policy-check`
+  status. Code-owner review on `aiops/autonomy.yaml`, `policy/` and `.github/` comes on with a
+  plain `scripts/github-ruleset.sh apply` once the promotion-board team exists; with it on, an
+  agent PR that raises `aiops/autonomy.yaml` stays blocked until the board reviews it.
+  `scripts/github-ruleset.sh show` prints which mode is live.
 - *The bridge:* at `suggest` it opens no PR; at `propose` it never calls merge or auto-merge, so
   "a human merges" holds there because of the bridge, not a GitHub approval rule. The tracked
   ruleset requires zero approvals on purpose, so that `act` can auto-merge. The bridge also

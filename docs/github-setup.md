@@ -207,7 +207,7 @@ printf '#!/bin/sh\nexec gitleaks git --pre-commit --staged --redact\n' > .git/ho
 chmod +x .git/hooks/pre-commit
 ```
 
-## 4. What later slices add
+## 4. Optional modes
 
 These are modes and options of the script. `scripts/github-ruleset.sh show` tells you which one is
 live on your repository.

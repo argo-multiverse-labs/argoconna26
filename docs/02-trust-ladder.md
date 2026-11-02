@@ -101,10 +101,10 @@ The tracked-branch ruleset requires pull requests but **zero** approvals. That i
 | At `suggest` the agent opens no PR | The bridge | The `suggest` path only posts comments |
 | At `propose` the agent never merges | The bridge | The path never calls merge or auto-merge; a unit test asserts it |
 | At `act` a merge needs a passing `policy-check` | GitHub | `required_status_checks` in the tracked ruleset (the `--with-policy-check` mode of `scripts/github-ruleset.sh apply`), plus the bridge's own check in its fallback |
-| The agent cannot raise its own level | GitHub | `aiops/autonomy.yaml` is code-owned by the promotion team and `require_code_owner_review` is on, so an App-authored PR that edits it stays `REVIEW_REQUIRED` and `BLOCKED` |
+| The agent cannot raise its own level | GitHub | `aiops/autonomy.yaml` is code-owned by the promotion team; with `require_code_owner_review` on (a plain `apply`; `--minimal` leaves it off) an App-authored PR that edits it stays `REVIEW_REQUIRED` and `BLOCKED`. The required `policy-check` also fails such a PR (rule 1) |
 | The agent cannot open or alter a promotion | GitHub | The `promote/*` ruleset allows only the admin role to create, update or delete those branches. The App is never a bypass actor |
 | The agent cannot push to, rewrite or delete the tracked branch | GitHub | The integrity ruleset (`deletion`, `non_fast_forward`, no bypass actors) and the tracked ruleset (pull request required) |
-| The agent cannot change the policy or the check that gates it | GitHub | `policy/` and `.github/` are code-owned, and the App has no `workflows` permission |
+| The agent cannot change the policy or the check that gates it | GitHub | The check runs the base branch's `policy/`, the App has no `workflows` permission, and `policy/` and `.github/` are code-owned (enforced with a plain `apply`) |
 | The agent writes only PRs and comments | The bridge and the App's permissions | Contents, pull requests and checks only; no administration, no workflows |
 
 CODEOWNERS (`.github/CODEOWNERS`) has no `*` line on purpose: ordinary changes need no

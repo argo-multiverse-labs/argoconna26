@@ -160,8 +160,8 @@ branch is not `act` (exit 6), or when `preflight 3 --armed` fails (exit 9). They
 runtime file (`$XDG_RUNTIME_DIR/argoconna26/job.env`, mode 0600, outside the repo) holding
 `GH_TOKEN` from `gh auth token`, because `gh` keeps its token in the desktop keyring and the unit
 cannot read it. The unit deletes the file when it stops. The unit starts only when you run
-`make night` or `make timer-arm` in your logged-in session: nothing here runs unattended, and a
-timer needs the machine awake and the session logged in. The target is in progress; see the
+`make night` or `make timer-arm` yourself; a timer then fires on its own, but only while the
+machine is awake and your session is logged in. The target is in progress; see the
 [README](../README.md).
 
 ## Troubleshooting
