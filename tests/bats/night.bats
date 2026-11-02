@@ -18,7 +18,8 @@ setup() {
     case "$*" in *" show "*) echo "${UNIT_STATUS:-0}" ;; esac'
   make_stub "$STUBS" gh 'case "$*" in
     "auth token") echo tok123 ;;
-    *contents/aiops/autonomy.yaml*) printf "level: %s\n" "${AUTONOMY:-act}" ;;
+    *contents/aiops/autonomy.yaml*) printf "level: %s\npromotion:\n  approved_by: admin-bypass\n" "${AUTONOMY:-act}" ;;
+    "pr list"*) echo "[{\"number\":7,\"headRefName\":\"promote/act-20261102000000-ab12\"}]" ;;
     *contents/.github/CODEOWNERS*) echo CODEOWNERS ;;
     *rules/branches/*) if [[ -n "${RULES_JSON:-}" ]]; then printf "%s\n" "$RULES_JSON"; else echo "[{\"type\":\"required_status_checks\",\"parameters\":{\"required_status_checks\":[{\"context\":\"policy-check\",\"integration_id\":15368}]}}]"; fi ;;
     "api user"*)
@@ -196,10 +197,13 @@ exec_start() { sed -n 's/^ExecStart=\/usr\/bin\/env bash -o pipefail -c //p' "$S
 }
 
 # ---------------------------------------------------------------- preflight job section
-# Runs preflight's main with every section but job and github_admin replaced by a no-op.
+# Runs preflight's main with every section but github_runtime replaced by a no-op (github_admin
+# by a marker). The App-permission part of github_runtime is deferred to L5b and stays so here.
 run_job_preflight() {
   bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/preflight.sh'
-    for s in tools context cluster nodes pods endpoints llm bridge_hooks; do eval \"section_\$s() { :; }\"; done
+    keep=\$(declare -f section_github_runtime)
+    for s in \$(compgen -A function section_ | sed s/section_//); do eval \"section_\$s() { :; }\"; done
+    eval \"\$keep\"
     section_github_admin() { echo ADMIN-RAN; }
     main $*"
 }
