@@ -5,13 +5,14 @@
 #   disarm --image v1.4.1, preflight 3 --pre-promotion) -> promotion PR propose -> act,
 #   merge --admin (D5), record-approval -> preflight 3 --armed -> release the lock
 #   -> T0 = make night (the job unit re-arms) -> the bot's fix PR -> policy-check -> merged with no
-#   human action -> refresh (O13) -> synced -> Healthy -> overnight-verify.sh for the run window
+#   human action -> synced (Argo's own reconciliation; RUNG3_REFRESH=1 nudges it) -> Healthy -> overnight-verify.sh for the run window
 #
 # What it asserts:
 #   - make night exits 0, and the unit's journal since RUN_TS has the cause and bump SHAs
 #   - exactly one PR from BOT_LOGIN on agent/checkout-* created after T0; its diff is the two
 #     changed lines, its body's first "Cause:" line is the journal's cause and it has the act footer
-#   - it reaches MERGED within MERGED_WAIT_S (15 min), merged by the bot or by auto-merge, no reviews
+#   - it reaches MERGED within MERGED_WAIT_S (15 min), mergedBy the bot (GitHub's auto-merge or the
+#     bridge's fallback), no reviews; its Timeline line cites the journal's change_ref and no other
 #   - Argo syncs the merge commit and checkout is Healthy
 #   - /events has the bridge's agent-action events and its change.merged for the PR since T0
 #   - aiops_policy_checks_total{result="pass"} rose by one over the start value
@@ -19,7 +20,10 @@
 # Then the PR is labelled demo-reset (O23) and its branch deleted. Autonomy stays at act; the
 # next run (or make demote) lowers it.
 #
-# Timings: one "rung3:" line on stdout and a row in $EVIDENCE_DIR/slice-5/rung3-runs.tsv.
+# Timings: one "rung3:" line on stdout and a row in $EVIDENCE_DIR/slice-5/rung3-runs-v2.tsv.
+# typed_to_pr_s counts from when scripts/night.sh started (T_TYPED, before its own preflight);
+# trigger_to_pr_s from RUN_TS (the unit's start, the verifier's window start). By default
+# Argo is not nudged after the merge (RUNG3_REFRESH=0), as on the make night path.
 # Usage, from the main checkout: tests/e2e/rung3.sh
 # Exit codes: 1 an assertion failed, 3 wrong context, 4 a wait timed out, 5 cluster lock held.
 
@@ -34,6 +38,7 @@ PR_WAIT_S="${PR_WAIT_S:-300}"
 MERGED_WAIT_S="${MERGED_WAIT_S:-900}"
 HEALTHY_WAIT_S="${HEALTHY_WAIT_S:-240}"
 METRIC_WAIT_S="${METRIC_WAIT_S:-180}"
+RUNG3_REFRESH="${RUNG3_REFRESH:-0}"   # 1: annotate refresh=normal on the merge (not on the make night path)
 
 now() { date +%s; }
 step() { printf '\n== %s\n' "$*" >&2; }
@@ -200,16 +205,22 @@ main() {
   step "release the lock; T0 = make night"
   release_lock
   local out rc=0 run_ts
-  out="$(make --no-print-directory -C "$ROOT" night 2>&1)" || rc=$?
+  # scripts/night.sh, not make night: make turns every failure into 2.
+  out="$("$ROOT/scripts/night.sh" night 2>&1)" || rc=$?
   printf '%s\n' "$out" | tee -a "$RUN_LOG" >&2
   run_ts="$(sed -n 's/^RUN_TS=//p' "$ROOT/.operator/last-run")"
-  ((rc == 0)) || fail "make night exited $rc"
+  local t_typed
+  t_typed="$(sed -n 's/^T_TYPED=//p' "$ROOT/.operator/last-run")"
+  ((rc == 0)) || fail "scripts/night.sh night exited $rc"
   [[ "$run_ts" =~ ^[0-9]+$ ]] || fail "no RUN_TS in .operator/last-run"
   local jtext cause bump t0
   jtext="$(journal_since "$run_ts")"
   printf '%s\n' "--- unit journal since $run_ts" "$jtext" "---" >>"$RUN_LOG"
   cause="$(sed -n 's/^cause: \([0-9a-f]\{40\}\)$/\1/p' <<<"$jtext" | tail -n1)"
   bump="$(sed -n 's/^bump: \([0-9a-f]\{40\}\)$/\1/p' <<<"$jtext" | tail -n1)"
+  local change_ref
+  change_ref="$(sed -n 's/^change_ref: \(CHG-[A-Z2-7]\{6\}\)$/\1/p' <<<"$jtext" | tail -n1)"
+  [[ -n "$change_ref" ]] || fail "no change_ref in the unit's journal since $run_ts"
   [[ "$cause" =~ ^[0-9a-f]{40}$ && "$bump" =~ ^[0-9a-f]{40}$ ]] || fail "no cause/bump in the unit's journal since $run_ts"
   t0="$(date -d "$(gh api "repos/$REPO_SLUG/commits/$bump" --jq .commit.committer.date)" +%s)"
   log_info "rung3: RUN_TS $run_ts, cause ${cause:0:7}, bump ${bump:0:7}, T0 $t0"
@@ -229,13 +240,18 @@ main() {
   body="$(gh pr view "$fix_pr" --repo "$REPO_SLUG" --json body --jq .body)"
   printf '%s\n' "--- fix PR $fix_url ($fix_branch)" "$body" "---" | tee -a "$RUN_LOG" >&2
   assert_fix_pr_diff "$fix_pr" 2> >(tee -a "$RUN_LOG" >&2) || fail "fix PR $fix_pr is not exactly two changed lines"
-  assert_fix_pr_body "$body" "$cause" act || fail "fix PR body: wrong or missing Cause line or act footer"
+  assert_fix_pr_body "$body" "$cause" act "$change_ref" || fail "fix PR body: wrong Cause line, act footer or Timeline line (above)"
 
   step "wait MERGED with no human action (policy-check, then auto-merge or the bridge's fallback)"
   wait_for "fix PR $fix_pr MERGED" "$MERGED_WAIT_S" pr_state_is "$fix_pr" MERGED \
     || { gh pr checks "$fix_pr" --repo "$REPO_SLUG" >&2 || true; fail "fix PR $fix_pr not merged within ${MERGED_WAIT_S}s"; }
-  # O13: the demo script forces the refresh as soon as it sees the merge (kubectl, read-only Argo annotation).
-  k annotate application checkout -n "$NS_ARGOCD" argocd.argoproj.io/refresh=normal --overwrite >/dev/null
+  # O13: nothing on the `make night` path refreshes Argo after the merge (the unit ends at rearm,
+  # the bridge has no cluster write), so by default this run waits for Argo's own reconciliation,
+  # as the stage would. RUNG3_REFRESH=1 nudges it (kubectl annotate refresh=normal), as an
+  # operator's demo script could; the summary records which.
+  if ((RUNG3_REFRESH)); then
+    k annotate application checkout -n "$NS_ARGOCD" argocd.argoproj.io/refresh=normal --overwrite >/dev/null
+  fi
   local v merged_by auto merge_sha t_merge reviews slug="${BOT_LOGIN%\[bot\]}"
   v="$(gh pr view "$fix_pr" --repo "$REPO_SLUG" --json mergedBy,autoMergeRequest,mergeCommit,mergedAt,reviews)"
   merged_by="$(jq -r '.mergedBy.login // ""' <<<"$v")"
@@ -244,8 +260,9 @@ main() {
   t_merge="$(date -d "$(jq -r .mergedAt <<<"$v")" +%s)"
   reviews="$(jq '.reviews | length' <<<"$v")"
   log_info "rung3: merged by ${merged_by:-?} (autoMergeRequest: $auto), merge ${merge_sha:0:7}"
-  [[ "$merged_by" == "$BOT_LOGIN" || "$merged_by" == "$slug" || "$merged_by" == "app/$slug" || "$auto" == yes ]] \
-    || fail "fix PR $fix_pr merged by '$merged_by', not the bot or auto-merge"
+  # autoMergeRequest stays on the PR after any merge, so only mergedBy counts.
+  [[ "$merged_by" == "$BOT_LOGIN" || "$merged_by" == "$slug" || "$merged_by" == "app/$slug" ]] \
+    || fail "fix PR $fix_pr merged by '$merged_by', not the bot"
   ((reviews == 0)) || fail "fix PR $fix_pr has $reviews review(s)"
 
   local deadline=$(($(now) + 120)) t_synced
@@ -289,15 +306,17 @@ main() {
   step "O23: label the fix PR demo-reset"
   label_demo_reset "$fix_pr" || fail "could not label fix PR $fix_pr demo-reset"
 
-  local trig_pr=$((t_pr - run_ts)) t0_pr=$((t_pr - t0)) pr_merged=$((t_merge - t_pr))
+  local trig_pr=$((t_pr - run_ts)) t0_pr=$((t_pr - t0)) pr_merged=$((t_merge - t_pr)) typed_pr=$((t_pr - t_typed))
   local merge_synced=$((t_synced - t_merge)) merged_healthy=$((t_healthy - t_merge)) summary
-  summary="rung3: run=$run_id run_ts=$run_ts until=$until_ts cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr reset_s=$((t_reset1 - t_reset0)) promotion_s=$((t_promo1 - t_promo0)) trigger_to_pr_s=$trig_pr t0_to_pr_s=$t0_pr pr_to_merged_s=$pr_merged merged_to_synced_s=$merge_synced merged_to_healthy_s=$merged_healthy merged_by=${merged_by:-auto} auto_merge=$auto"
+  summary="rung3: run=$run_id run_ts=$run_ts until=$until_ts cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr reset_s=$((t_reset1 - t_reset0)) promotion_s=$((t_promo1 - t_promo0)) typed_to_pr_s=$typed_pr trigger_to_pr_s=$trig_pr t0_to_pr_s=$t0_pr pr_to_merged_s=$pr_merged merged_to_synced_s=$merge_synced merged_to_healthy_s=$merged_healthy merged_by=${merged_by:-auto} auto_merge=$auto argo_refresh=$RUNG3_REFRESH change_ref=$change_ref"
   printf '%s\n' "$summary" | tee -a "$RUN_LOG"
-  [[ -s "$evdir/rung3-runs.tsv" ]] \
-    || printf 'run\trun_ts\tuntil\tcause\tpromo_pr\tfix_pr\treset_s\tpromotion_s\ttrigger_to_pr_s\tt0_to_pr_s\tpr_to_merged_s\tmerged_to_synced_s\tmerged_to_healthy_s\tmerged_by\tauto_merge\tfix_pr_url\n' >"$evdir/rung3-runs.tsv"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$run_ts" "$until_ts" "$cause" "$PROMO_PR" \
-    "$fix_pr" "$((t_reset1 - t_reset0))" "$((t_promo1 - t_promo0))" "$trig_pr" "$t0_pr" "$pr_merged" "$merge_synced" "$merged_healthy" \
-    "${merged_by:-auto}" "$auto" "$fix_url" >>"$evdir/rung3-runs.tsv"
+  # v2 adds typed_to_pr_s (from T_TYPED, before night.sh's own preflight) and argo_refresh.
+  local tsv="$evdir/rung3-runs-v2.tsv"
+  [[ -s "$tsv" ]] \
+    || printf 'run\trun_ts\tuntil\tcause\tpromo_pr\tfix_pr\treset_s\tpromotion_s\ttyped_to_pr_s\ttrigger_to_pr_s\tt0_to_pr_s\tpr_to_merged_s\tmerged_to_synced_s\tmerged_to_healthy_s\tmerged_by\tauto_merge\targo_refresh\tfix_pr_url\n' >"$tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$run_ts" "$until_ts" "$cause" "$PROMO_PR" \
+    "$fix_pr" "$((t_reset1 - t_reset0))" "$((t_promo1 - t_promo0))" "$typed_pr" "$trig_pr" "$t0_pr" "$pr_merged" "$merge_synced" \
+    "$merged_healthy" "$merged_by" "$auto" "$RUNG3_REFRESH" "$fix_url" >>"$tsv"
   log_info "rung3: PASS"
 }
 

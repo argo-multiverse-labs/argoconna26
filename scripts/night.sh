@@ -3,7 +3,10 @@
 # optional timer (make timer-arm AT=...).
 #
 #   scripts/night.sh job-install          render and install argoconna26-rearm.service (idempotent)
-#   scripts/night.sh night                start that unit now; exit with its ExecMainStatus
+#   scripts/night.sh night                start that unit now; exit with its ExecMainStatus.
+#                                         .operator/last-run gets RUN_TS (the unit's start, the
+#                                         verifier's window start), RUN_MONO and T_TYPED (when
+#                                         the command was typed, before its own preflight)
 #   scripts/night.sh timer-arm "YYYY-MM-DD HH:MM"   install and start argoconna26-rearm.timer
 #   scripts/night.sh timer-disarm         stop and remove the timer and job.env
 #   scripts/night.sh timer-status         the next trigger
@@ -13,6 +16,9 @@
 #   exit 6  autonomy on the tracked branch (read from GitHub) is not "act"
 #   exit 9  scripts/preflight.sh 3 --armed fails
 #   exit 2  usage, a past or malformed AT, or an unusable runtime dir
+# `night` otherwise exits with the unit's ExecMainStatus: the quiet preflight's 1, rearm's own
+# code (7: already armed), and so on. Through `make night` / `make timer-arm` every failure
+# shows as make's 2 (make maps any recipe failure to 2); call scripts/night.sh for the real code.
 # They then write $XDG_RUNTIME_DIR/argoconna26/job.env (0600, outside the repo) with GH_TOKEN
 # from `gh auth token` (P13). The unit's ExecStopPost removes it.
 # Never starts anything except units named argoconna26-* (systemctl --user).
@@ -127,7 +133,8 @@ _require_unit() {
 
 # -------------------------------------------------------------------- night
 cmd_night() {
-  local rc=0 status run_ts run_mono root
+  local rc=0 status run_ts run_mono root t_typed
+  t_typed="$(date +%s)"  # when the operator typed it, before this script's own preflight
   _refuse_if_locked
   _require_unit
   _refuse_unless_armed
@@ -136,8 +143,8 @@ cmd_night() {
   run_ts="$(date +%s)"
   run_mono="$(_monotonic_us)"
   mkdir -p "$root/.operator"
-  printf 'RUN_TS=%s\nRUN_MONO=%s\n' "$run_ts" "$run_mono" >"$root/.operator/last-run"
-  beat "running the 03:00 job now"
+  printf 'RUN_TS=%s\nRUN_MONO=%s\nT_TYPED=%s\n' "$run_ts" "$run_mono" "$t_typed" >"$root/.operator/last-run"
+  beat "running the nightly job now"
   _sctl start "$UNIT_NAME.service" >/dev/null 2>&1 || rc=$?
   status="$(_sctl show "$UNIT_NAME.service" -p ExecMainStatus --value 2>/dev/null || true)"
   if [[ "$status" =~ ^[0-9]+$ && "$status" -ne 0 ]]; then

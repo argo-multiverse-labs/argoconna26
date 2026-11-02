@@ -347,14 +347,14 @@ preflight: ## Pre-flight checks (exit 1 on any FAIL); RUNG=3 PREFLIGHT_ARGS="--a
 	@$(ROOT)/scripts/preflight.sh $(RUNG) $(PREFLIGHT_ARGS)
 
 .PHONY: preflight-rung3-quiet
-preflight-rung3-quiet: ## What the scheduled unit runs before rearm: rung-3 armed checks, failures only
+preflight-rung3-quiet: ## The check the scheduled unit runs before rearm (rung-3 armed checks, failures only)
 	@$(ROOT)/scripts/preflight.sh 3 --armed --job-run --quiet
 
 # The rung-3 job (Task 5.5). Not under the cluster lock: the unit can't inherit it (P12).
 .PHONY: job-install night timer-arm timer-disarm timer-status
 job-install: ## Install the user unit argoconna26-rearm.service (re-run when the repo path or PATH changes)
 	@$(ROOT)/scripts/night.sh job-install
-night: ## Run the 03:00 job now: the same unit the timer starts (needs autonomy act)
+night: ## Run the nightly job now: the same unit the timer starts (needs autonomy act; failures exit 2, see scripts/night.sh)
 	@$(ROOT)/scripts/night.sh night
 timer-arm: ## Optional timer for the same unit: make timer-arm AT="YYYY-MM-DD HH:MM"
 	@$(ROOT)/scripts/night.sh timer-arm "$(AT)"

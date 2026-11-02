@@ -200,9 +200,10 @@ section_bridge_hooks() {
 }
 
 # job (rung 3): the GitHub-side state the scheduled job needs, from the operator credential
-# alone (GH_TOKEN inside the unit, Luke's gh login outside it). Needs no ruleset or repo-settings
-# state: github-admin (Task 4.5 Step 2) is deferred and never runs under --job-run. The App
-# installation permission checks join here as section_github_runtime when that task lands.
+# alone (GH_TOKEN inside the unit, Luke's gh login outside it). With --armed it also reads
+# (never changes) the rules on the tracked branch: the required policy-check must be live.
+# github-admin (Task 4.5 Step 2) is deferred and never runs under --job-run. The App
+# installation permission checks (section_github_runtime) are still to come with L5b.
 section_job() {
   local want="" lvl code
   [[ "$RUNG" == 3 ]] || return 0
@@ -223,6 +224,20 @@ section_job() {
       check_pass "job: autonomy on $TRACKED_BRANCH is $want"
     else
       check_fail "job: autonomy on $TRACKED_BRANCH is '${lvl:-unreadable}', expected $want"
+    fi
+  fi
+  # Armed rung 3 relies on GitHub refusing to merge without the check, so read (never change) the
+  # rules that apply to the tracked branch. Read access is enough, so this runs before L5b.
+  if ((ARMED)); then
+    local rules
+    rules="$(gh api "repos/${REPO_SLUG}/rules/branches/${TRACKED_BRANCH}" 2>/dev/null || true)"
+    if jq -e --arg c "$POLICY_CHECK_CONTEXT" --argjson i "$POLICY_CHECK_INTEGRATION_ID" \
+        'any(.[]?; .type == "required_status_checks"
+             and any(.parameters.required_status_checks[]?; .context == $c and .integration_id == $i))' \
+        <<<"${rules:-[]}" >/dev/null 2>&1; then
+      check_pass "job: $TRACKED_BRANCH requires $POLICY_CHECK_CONTEXT (integration $POLICY_CHECK_INTEGRATION_ID)"
+    else
+      check_fail "job: $TRACKED_BRANCH does not require $POLICY_CHECK_CONTEXT (integration $POLICY_CHECK_INTEGRATION_ID); act would merge on the bridge's fallback alone"
     fi
   fi
   code="$(gh api -X GET "repos/${REPO_SLUG}/contents/.github/CODEOWNERS?ref=${TRACKED_BRANCH}" --jq .name 2>/dev/null || true)"

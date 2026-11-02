@@ -14,7 +14,9 @@
 #   commits    the only operator commits on the tracked branch with committer dates in the window
 #              are that pair (cause, then bump), and the cause carries a Demo-Rearm: trailer
 #   pr         exactly one PR from BOT_LOGIN on agent/checkout-* opened in the window (or PR=)
-#   merger     mergedBy is the bot, or the PR has an autoMergeRequest
+#   merger     mergedBy is the bot (GitHub's auto-merge credits the bot that enabled it, and the
+#              bridge's fallback merges as the bot). autoMergeRequest is reported, never counted:
+#              GitHub keeps it after a merge, so a human --admin merge of an auto-merge PR has it too
 #   merged     merged inside the window
 #   reviews    no reviews (no human acted)
 #   check      policy-check (GitHub Actions) concluded success on the PR's head SHA, and its log
@@ -172,10 +174,10 @@ check_merge() {
   HEAD_SHA="$(jq -r '.headRefOid' <<<"$v")"
   # gh shows the App as "app/<slug>" or "<slug>"; BOT_LOGIN is "<slug>[bot]".
   local slug="${BOT_LOGIN%\[bot\]}"
-  if [[ "$merged_by" == "$BOT_LOGIN" || "$merged_by" == "$slug" || "$merged_by" == "app/$slug" || "$auto" == yes ]]; then
-    pass merger "merged by ${merged_by:-?} (autoMergeRequest: $auto)"
+  if [[ "$merged_by" == "$BOT_LOGIN" || "$merged_by" == "$slug" || "$merged_by" == "app/$slug" ]]; then
+    pass merger "merged by $merged_by (autoMergeRequest: $auto, for information)"
   else
-    failc merger "merged by '${merged_by:-nobody}', not the bot, and no autoMergeRequest"
+    failc merger "merged by '${merged_by:-nobody}', not the bot (autoMergeRequest: $auto does not count)"
   fi
   if [[ -n "$merged_at" ]] && t="$(epoch_of "$merged_at")" && in_window "$t"; then
     pass merged "merged at $merged_at, inside the window"

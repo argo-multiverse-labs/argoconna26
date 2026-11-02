@@ -20,6 +20,7 @@ setup() {
     "auth token") echo tok123 ;;
     *contents/aiops/autonomy.yaml*) printf "level: %s\n" "${AUTONOMY:-act}" ;;
     *contents/.github/CODEOWNERS*) echo CODEOWNERS ;;
+    *rules/branches/*) if [[ -n "${RULES_JSON:-}" ]]; then printf "%s\n" "$RULES_JSON"; else echo "[{\"type\":\"required_status_checks\",\"parameters\":{\"required_status_checks\":[{\"context\":\"policy-check\",\"integration_id\":15368}]}}]"; fi ;;
     "api user"*)
       echo "gh GH_TOKEN=${GH_TOKEN:-}" >>"$LOG"
       if [[ -n "${GH_CHECK:-}" && "GH_TOKEN=${GH_TOKEN:-}" != "$(cat "$GH_CHECK")" ]]; then exit 1; fi
@@ -27,7 +28,8 @@ setup() {
   esac'
   make_stub "$STUBS" kubectl 'echo kind-argoconna26'
   make_stub "$STUBS" preflight 'echo "preflight $*" >>"$LOG"; exit "${PREFLIGHT_RC:-0}"'
-  for t in kind uv docker jq; do make_stub "$STUBS" "$t" 'exit 0'; done
+  # jq is the real one: preflight reads the rules JSON with it.
+  for t in kind uv docker; do make_stub "$STUBS" "$t" 'exit 0'; done
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS" NIGHT_PREFLIGHT="$STUBS/preflight"
   export STAGE_STRICT=1
 }
@@ -99,8 +101,9 @@ started() { grep -c -- '--user start argoconna26-rearm.service' "$LOG" || true; 
 @test "night under STAGE=1 prints one line within STAGE_COLS" {
   STAGE=1 run night night
   [ "$status" -eq 0 ]
-  [ "$output" = "running the 03:00 job now" ]
+  [ "$output" = "running the nightly job now" ]
   [ "${#output}" -le 30 ]
+  [[ "$output" != *03:00* ]]
 }
 
 @test "night records RUN_TS and RUN_MONO under .operator" {
@@ -108,6 +111,16 @@ started() { grep -c -- '--user start argoconna26-rearm.service' "$LOG" || true; 
   [ "$status" -eq 0 ]
   grep -qE '^RUN_TS=[0-9]+$' "$FIXTURE/.operator/last-run"
   grep -qE '^RUN_MONO=[0-9]+$' "$FIXTURE/.operator/last-run"
+}
+
+@test "night records T_TYPED, taken before its own preflight, no later than RUN_TS" {
+  make_stub "$STUBS" preflight 'echo "preflight $*" >>"$LOG"; sleep 1.2; exit 0'
+  run night night
+  [ "$status" -eq 0 ]
+  typed="$(sed -n 's/^T_TYPED=//p' "$FIXTURE/.operator/last-run")"
+  run_ts="$(sed -n 's/^RUN_TS=//p' "$FIXTURE/.operator/last-run")"
+  [[ "$typed" =~ ^[0-9]+$ ]]
+  [ "$typed" -lt "$run_ts" ]
 }
 
 @test "timer-arm refuses past time" {
@@ -142,13 +155,31 @@ started() { grep -c -- '--user start argoconna26-rearm.service' "$LOG" || true; 
   [ ! -e "$XDG_RUNTIME_DIR/argoconna26/job.env" ]
 }
 
-@test "rendered service runs preflight-rung3-quiet before rearm" {
+@test "rendered service runs the quiet rung-3 preflight before rearm, without make" {
   night job-install
   line="$(grep '^ExecStart=' "$SYSTEMD_USER_DIR/argoconna26-rearm.service")"
-  [[ "$line" == *"preflight-rung3-quiet rearm"* ]]
+  [[ "$line" == *"$FIXTURE/scripts/preflight.sh\" 3 --armed --job-run --quiet && \"$FIXTURE/scripts/rearm.sh\""* ]]
+  [[ "$line" != *"make "* ]]
   [[ "$line" == *"rung3-run-"* ]]
   grep -qx "Environment=KUBECONFIG=$FIXTURE/.kube/argoconna26.yaml" "$SYSTEMD_USER_DIR/argoconna26-rearm.service"
   ! grep -q '@[A-Z_]*@' "$SYSTEMD_USER_DIR/argoconna26-rearm.service"
+}
+
+# The rendered ExecStart as bash would run it: systemd's $$ and %% escapes undone.
+exec_start() { sed -n 's/^ExecStart=\/usr\/bin\/env bash -o pipefail -c //p' "$SYSTEMD_USER_DIR/argoconna26-rearm.service" \
+  | sed -e "s/^'//" -e "s/'\$//" -e 's/\$\$/$/g' -e 's/%%/%/g'; }
+
+@test "rendered service passes rearm's own exit status through (no make, no 2)" {
+  night job-install
+  mkdir -p "$FIXTURE/scripts" "$BATS_TEST_TMPDIR/ev"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$FIXTURE/scripts/preflight.sh"
+  printf '#!/usr/bin/env bash\necho "rearm: armed already"; exit 7\n' >"$FIXTURE/scripts/rearm.sh"
+  chmod +x "$FIXTURE/scripts/preflight.sh" "$FIXTURE/scripts/rearm.sh"
+  run bash -o pipefail -c "$(exec_start)"
+  [ "$status" -eq 7 ]
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$FIXTURE/scripts/preflight.sh"
+  run bash -o pipefail -c "$(exec_start)"
+  [ "$status" -eq 1 ]
 }
 
 @test "rendered service PATH resolves the pinned tools" {
@@ -202,5 +233,18 @@ run_job_preflight() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"expected act"* ]]
   AUTONOMY=propose run run_job_preflight 3 --pre-promotion --quiet
+  [ "$status" -eq 0 ]
+}
+
+@test "preflight 3 --armed fails unless the tracked branch requires policy-check (read-only rules)" {
+  RULES_JSON='[{"type":"pull_request","parameters":{}}]' AUTONOMY=act run run_job_preflight 3 --armed --quiet
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not require policy-check"* ]]
+  RULES_JSON='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"policy-check","integration_id":1}]}}]' \
+    AUTONOMY=act run run_job_preflight 3 --armed --quiet
+  [ "$status" -eq 1 ]
+  AUTONOMY=act run run_job_preflight 3 --armed --quiet
+  [ "$status" -eq 0 ]
+  AUTONOMY=propose RULES_JSON='[]' run run_job_preflight 3 --pre-promotion --quiet
   [ "$status" -eq 0 ]
 }
