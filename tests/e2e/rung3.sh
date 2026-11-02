@@ -189,8 +189,9 @@ main() {
   [[ "$approved" == admin-bypass || "$approved" == promotion-board\ member* ]] || fail "approved_by is '$approved'"
   "$ROOT/scripts/preflight.sh" 3 --armed >>"$RUN_LOG" 2>&1 || fail "preflight 3 --armed failed (see $RUN_LOG)"
 
-  local pass_series='aiops_policy_checks_total{result="pass"}' pass_start
+  local pass_series='aiops_policy_checks_total{result="pass"}' pass_start pass_want
   pass_start="$(bridge_metric "$pass_series")"
+  pass_want="$(awk -v a="$pass_start" 'BEGIN {printf "%d", a + 1}')" # /metrics prints floats ("0.0")
   log_info "rung3: policy passes at the start: $pass_start"
 
   step "release the lock; T0 = make night"
@@ -268,13 +269,13 @@ main() {
     || fail "the incident is not resolved on /incidents"
 
   step "policy pass counted (Task 5.4 reconciler)"
-  wait_for "the bridge's $pass_series = $pass_start + 1" "$METRIC_WAIT_S" \
-    bridge_metric_is "$pass_series" "$((pass_start + 1))" \
-    || fail "the bridge's $pass_series is $(bridge_metric "$pass_series"), expected $((pass_start + 1))"
+  wait_for "the bridge's $pass_series = $pass_want" "$METRIC_WAIT_S" \
+    bridge_metric_is "$pass_series" "$pass_want" \
+    || fail "the bridge's $pass_series is $(bridge_metric "$pass_series"), expected $pass_want"
   # Prometheus scrapes the bridge every 30 s at most: wait until it has the new value, so the
   # verifier's query at UNTIL sees it.
-  wait_for "Prometheus has $pass_series = $((pass_start + 1))" 90 grafana_value_is \
-    "sum($pass_series) or vector(0)" "$((pass_start + 1))" || fail "Prometheus never saw the new pass count"
+  wait_for "Prometheus has $pass_series = $pass_want" 90 grafana_value_is \
+    "sum($pass_series) or vector(0)" "$pass_want" || fail "Prometheus never saw the new pass count"
 
   step "overnight-verify.sh for the run window"
   local until_ts
