@@ -117,13 +117,13 @@ class FakeForge:
         if any(o.branch == branch for o in self.opened):
             raise ForgeConflict(f"branch {branch} already exists", 422)
         n = len(self.opened) + 1
-        pr = PullRequest(n, f"https://forge.test/pull/{n}", f"PR_{n}", f"{n:040x}")
+        pr = PullRequest(n, f"https://forge.test/pull/{n}", f"PR_{n}", f"{n:040x}", branch)
         self.opened.append(OpenedPR(base, branch, title, body, dict(changes), commit_message, pr))
         return pr
 
-    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
+    async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:
         self._read("list_open_agent_prs", app)
-        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-" if app is not None else AGENT_BRANCH_PREFIX
         return [o.pr for o in self.opened if o.branch.startswith(prefix)]
 
     async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:

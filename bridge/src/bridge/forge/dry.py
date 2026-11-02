@@ -61,7 +61,7 @@ class DryForge:
         check_agent_branch(branch)
         return PullRequest(0, self._skip("open pr", branch), "", "")
 
-    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
+    async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:
         return await self.inner.list_open_agent_prs(app)
 
     async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:

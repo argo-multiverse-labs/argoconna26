@@ -56,6 +56,10 @@ spec:
             - {name: ARGO_UI_URL, value: "http://127.0.0.1:30080"}
             - {name: GITHUB_APP_KEY_PATH, value: /etc/bridge/github/github-app-key}
             - {name: DRYRUN_SUMMARY_PATH, value: /etc/bridge/dryrun/summary.json}
+            - {name: ROLLOUT_FILE, value: apps/checkout/deploy/rollout.yaml}
+            - {name: KUSTOMIZATION_FILE, value: apps/checkout/kustomization.yaml}
+            - {name: CHECKOUT_CVE_TAG, value: v1.4.2}
+            - {name: BOT_LOGIN, value: "argoconna26-agent[bot]"}
             # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
             - name: BRIDGE_WEBHOOK_TOKEN
               valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}

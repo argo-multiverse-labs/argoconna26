@@ -177,12 +177,18 @@ TRACKED_BRANCH=build/demo
 REPO_SLUG=example-org/example-repo
 BRIDGE_EVENT_SOURCE=/argoconna26/bridge
 BRIDGE_TAG=v0.1.0
+ROLLOUT_FILE=apps/checkout/deploy/rollout.yaml
+KUSTOMIZATION_FILE=apps/checkout/kustomization.yaml
+CHECKOUT_CVE_TAG=v1.4.2
+BOT_LOGIN=example-agent[bot]
 ENV
   declare -A v=(
     [REPO_SLUG]=example-org/example-repo [TRACKED_BRANCH]=build/demo
     [HOLMES_URL]='"http://holmes-holmes.aiops.svc"' [HOLMES_TIMEOUT_S]='"115"' [STAGE_COLS]='"30"'
     [CDEVENTS_URL]='"http://cdevents-sim.aiops.svc:8080/events"' [BRIDGE_EVENT_SOURCE]=/argoconna26/bridge
-    [ARGO_UI_URL]='"http://127.0.0.1:30080"'
+    [ARGO_UI_URL]='"http://127.0.0.1:30080"' [ROLLOUT_FILE]=apps/checkout/deploy/rollout.yaml
+    [KUSTOMIZATION_FILE]=apps/checkout/kustomization.yaml [CHECKOUT_CVE_TAG]=v1.4.2
+    [BOT_LOGIN]='"example-agent[bot]"'
   )
   local kv tag=v0.1.0
   for kv in "$@"; do
@@ -190,7 +196,8 @@ ENV
   done
   {
     printf '          env:\n'
-    for k in REPO_SLUG TRACKED_BRANCH HOLMES_URL HOLMES_TIMEOUT_S STAGE_COLS CDEVENTS_URL BRIDGE_EVENT_SOURCE ARGO_UI_URL; do
+    for k in REPO_SLUG TRACKED_BRANCH HOLMES_URL HOLMES_TIMEOUT_S STAGE_COLS CDEVENTS_URL BRIDGE_EVENT_SOURCE ARGO_UI_URL \
+        ROLLOUT_FILE KUSTOMIZATION_FILE CHECKOUT_CVE_TAG BOT_LOGIN; do
       printf '            - {name: %s, value: %s}\n' "$k" "${v[$k]}"
     done
   } > "$WORK/bridge/deploy/deployment.yaml"
@@ -213,7 +220,9 @@ ENV
 
 @test "flags each bridge env value that differs from demo.env" {
   for kv in REPO_SLUG=other/repo TRACKED_BRANCH=main HOLMES_URL=http://x.aiops.svc HOLMES_TIMEOUT_S='"60"' \
-            STAGE_COLS='"40"' CDEVENTS_URL='"http://other:8080/events"' ARGO_UI_URL='"http://127.0.0.1:1"'; do
+            STAGE_COLS='"40"' CDEVENTS_URL='"http://other:8080/events"' ARGO_UI_URL='"http://127.0.0.1:1"' \
+            ROLLOUT_FILE=apps/x/rollout.yaml KUSTOMIZATION_FILE=apps/x/kustomization.yaml CHECKOUT_CVE_TAG=v9.9.9 \
+            BOT_LOGIN='"someone[bot]"'; do
     rm -rf "$WORK"; setup
     bridge_files "$kv"
     run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"

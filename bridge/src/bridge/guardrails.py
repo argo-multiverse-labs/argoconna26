@@ -23,7 +23,10 @@ from .rca import RCA
 
 log = logging.getLogger("bridge.guardrails")
 
-Reason = Literal["low_confidence", "cause_not_in_history", "file_not_allowed", "from_mismatch", "key_not_found"]
+# `patch_failed` is the fix builder's check (Task 4.3): the answer passed, but no safe two-line edit exists.
+Reason = Literal[
+    "low_confidence", "cause_not_in_history", "file_not_allowed", "from_mismatch", "key_not_found", "patch_failed"
+]
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHORT_SHA = re.compile(r"^[0-9a-f]{7,39}$")
