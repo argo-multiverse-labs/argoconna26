@@ -171,13 +171,30 @@ litellm-install: ## Install LiteLLM and its Postgres (needs the litellm Secrets 
 	fi
 
 .PHONY: holmes-install
-holmes-install: helm-repos ## Install HolmesGPT (read-only; needs make litellm-keys and make secrets-late first)
+holmes-install: helm-repos ## Install HolmesGPT (read-only; needs make litellm-keys and make secrets-late first). HOLMES_SET=a.b=v,... overrides values (the dry-run ablation)
 	@$(LOCKED)
 	for s in holmes-llm holmes-argocd holmes-api; do
 	  k get secret "$$s" -n "$$NS_AIOPS" >/dev/null 2>&1 || die "Secret $$s missing: run 'make litellm-keys secrets-late' first"
 	done
 	$(ROOT)/scripts/holmes-rbac.sh check
-	helm_ensure "$$HOLMES_RELEASE" robusta/holmes "$$HOLMES_CHART_VERSION" "$$NS_AIOPS" $(ROOT)/platform/holmes/values.yaml
+	# HOLMES_SET (Task 6.2's ablation) becomes one more values file, so helm_ensure still sees
+	# exactly what is installed. Keys are dotted paths; values are read as YAML (false, 3, text).
+	extra=()
+	if [[ -n "$(HOLMES_SET)" ]]; then
+	  setf="$$(mktemp --suffix=.yaml)"
+	  trap 'rm -f "$$setf"' EXIT
+	  printf '{}\n' >"$$setf"
+	  IFS=, read -ra sets <<<"$(HOLMES_SET)"
+	  for kv in "$${sets[@]}"; do
+	    path="$${kv%%=*}"
+	    [[ "$$kv" == *=* && "$$path" =~ ^[A-Za-z0-9_/-]+(\.[A-Za-z0-9_/-]+)*$$ ]] || die "HOLMES_SET: bad entry '$$kv'"
+	    yqpath="$$(awk -F. '{for (i = 1; i <= NF; i++) printf "[\"%s\"]", $$i}' <<<"$$path")"
+	    V="$${kv#*=}" yq -i ".$$yqpath = env(V)" "$$setf"
+	  done
+	  log_info "holmes-install: values overridden by HOLMES_SET ($(HOLMES_SET))"
+	  extra=("$$setf")
+	fi
+	helm_ensure "$$HOLMES_RELEASE" robusta/holmes "$$HOLMES_CHART_VERSION" "$$NS_AIOPS" $(ROOT)/platform/holmes/values.yaml "$${extra[@]}"
 	k rollout status deployment/"$$HOLMES_RELEASE"-holmes -n "$$NS_AIOPS" --timeout=300s
 	$(ROOT)/scripts/holmes-rbac.sh live
 
@@ -341,6 +358,14 @@ build-all: ## Create the whole stack (safe to run twice)
 rebuild: ## Delete the cluster and build it again
 	@$(PRE)
 	$(MAKE) --no-print-directory rm-kind build-all
+
+# The dry-run harness (Task 6.2): N runs in N/BATCH batches of re-armed incidents. Needs autonomy
+# suggest; takes the cluster lock. ABLATE_TIMELINE=1 runs with the timeline toolset off (no summary).
+N ?= 20
+BATCH ?= 5
+.PHONY: dry-runs
+dry-runs: ## Score the agent: N=20 BATCH=5 dry runs on re-armed incidents (ABLATE_TIMELINE=1 for the ablation)
+	@ABLATE_TIMELINE="$(ABLATE_TIMELINE)" $(ROOT)/scripts/dry-runs.sh "$(N)" "$(BATCH)"
 
 .PHONY: preflight
 preflight: ## Pre-flight checks (exit 1 on any FAIL); RUNG=3 PREFLIGHT_ARGS="--armed"
