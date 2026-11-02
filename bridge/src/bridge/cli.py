@@ -198,6 +198,8 @@ def summarize(results: list[AttemptResult]) -> str:
 SPIKE_BASE = "rehearse/merge-spike"
 _SPIKE_FILE = "apps/pricing/README.md"
 _REV_LINE = re.compile(r"^(Notes revision: )(\d+)$", re.MULTILINE)
+_SPIKE_AUTONOMY_FILE = "aiops/autonomy.yaml"
+_LEVEL_LINE = re.compile(r"^level:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
 _ENABLE_AUTO_MERGE = (
     "mutation($id: ID!, $method: PullRequestMergeMethod!) {"
     " enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {"
@@ -221,6 +223,7 @@ class SpikeResult:
     mergeable_state: str
     waited_s: float
     branch_deleted: bool = False
+    rest_merge_status: int | None = None
 
 
 async def run_spike_pr(
@@ -239,31 +242,45 @@ async def run_spike_pr(
 ) -> SpikeResult:
     """Open an App-authored PR that changes one line, enable auto-merge, wait on the PR state.
 
-    Refuses any base but the scratch branch, before any request. Only `two-line` exists
-    here; `autonomy-raise` is Task 4.5a Step 2.
+    Refuses any base but the scratch branch, before any request. `two-line` changes a line
+    nobody owns and should auto-merge. `autonomy-raise` (Task 4.5a Step 2) sets `level: act`
+    in the code-owned autonomy file; it also tries a REST merge with the App token, and never
+    waits for a merge: the check is that both are refused.
     """
     if base != SPIKE_BASE:
         raise SpikeError(f"spike-pr only runs against {SPIKE_BASE}, not {base!r}")
-    if scenario != "two-line":
-        raise SpikeError(f"scenario {scenario!r} is not implemented here (autonomy-raise is Task 4.5a Step 2)")
+    if scenario not in ("two-line", "autonomy-raise"):
+        raise SpikeError(f"unknown scenario {scenario!r}")
+    raise_level = scenario == "autonomy-raise"
+    path = _SPIKE_AUTONOMY_FILE if raise_level else _SPIKE_FILE
     gh = _Gh(http, tokens, repo, api_url)
     stamp = stamp or str(int(time.time()))
     branch = f"agent/spike-{stamp}"
 
     head = await gh.head(base)
-    cur = await gh.call("GET", f"/contents/{_SPIKE_FILE}", params={"ref": base})
+    cur = await gh.call("GET", f"/contents/{path}", params={"ref": base})
     cur.raise_for_status()
     text = base64.b64decode(cur.json()["content"]).decode()
-    if not _REV_LINE.search(text):
-        raise SpikeError(f"{_SPIKE_FILE} has no 'Notes revision: N' line")
-    new_text = _REV_LINE.sub(lambda m: f"{m.group(1)}{int(m.group(2)) + 1}", text, count=1)
+    if raise_level:
+        m = _LEVEL_LINE.search(text)
+        if not m:
+            raise SpikeError(f"{path} has no 'level:' line")
+        if m.group(1) == "act":
+            raise SpikeError(f"{path} on {base} is already at act")
+        new_text = _LEVEL_LINE.sub("level: act", text, count=1)
+        title = "spike: raise autonomy to act"
+    else:
+        if not _REV_LINE.search(text):
+            raise SpikeError(f"{_SPIKE_FILE} has no 'Notes revision: N' line")
+        new_text = _REV_LINE.sub(lambda m: f"{m.group(1)}{int(m.group(2)) + 1}", text, count=1)
+        title = "spike: bump the notes revision"
 
     (await gh.call("POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": head})).raise_for_status()
     put = await gh.call(
         "PUT",
-        f"/contents/{_SPIKE_FILE}",
+        f"/contents/{path}",
         json={
-            "message": "spike: bump the notes revision",
+            "message": title,
             "content": base64.b64encode(new_text.encode()).decode(),
             "sha": cur.json()["sha"],
             "branch": branch,
@@ -273,7 +290,7 @@ async def run_spike_pr(
     pr = await gh.call(
         "POST",
         "/pulls",
-        json={"title": "spike: bump the notes revision", "head": branch, "base": base,
+        json={"title": title, "head": branch, "base": base,
               "body": "Merge-mechanics spike (Task 4.5a). Scratch branch only."},
     )
     pr.raise_for_status()
@@ -290,6 +307,13 @@ async def run_spike_pr(
         enabled = True
     else:
         err = "; ".join(e.get("message", "") for e in body.get("errors", [])) or f"HTTP {g.status_code}"
+
+    rest_status: int | None = None
+    if raise_level:
+        # The App's own merge must be refused too (code-owner review), not only auto-merge.
+        rm = await gh.call("PUT", f"/pulls/{number}/merge", json={"merge_method": "merge"})
+        rest_status = rm.status_code
+        wait = False
 
     merged, state, mstate, waited = False, "OPEN", "", 0.0
     while True:
@@ -309,7 +333,7 @@ async def run_spike_pr(
     if state in ("MERGED", "CLOSED"):
         d = await gh.call("DELETE", f"/git/refs/heads/{quote(branch, safe='/')}")
         deleted = d.status_code < 300
-    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited, deleted)
+    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited, deleted, rest_status)
 
 
 # --- open-test-pr / test-pr-try-merge: policy-negative e2e (Task 5.6 Step 2) -----------------
@@ -666,6 +690,11 @@ async def _spike_pr(args: argparse.Namespace) -> int:
     print(f"auto_merge_enabled={res.auto_merge_enabled} error={res.auto_merge_error or '-'}")
     print(f"final_state={res.final_state} merged={res.merged} mergeable_state={res.mergeable_state or '-'} waited_s={res.waited_s:.0f}")
     print(f"head_branch_deleted={res.branch_deleted}")
+    if res.rest_merge_status is not None:
+        print(f"rest_merge_status={res.rest_merge_status}")
+    if args.scenario == "autonomy-raise":
+        refused = res.rest_merge_status is not None and 400 <= res.rest_merge_status < 500
+        return 0 if refused and not res.merged else 1
     return 0 if res.merged or args.no_wait else 1
 
 

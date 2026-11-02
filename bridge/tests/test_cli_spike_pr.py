@@ -91,11 +91,6 @@ async def test_timeout_reports_final_state(_no_unmocked_http) -> None:
     assert not res.merged and res.final_state == "OPEN" and res.mergeable_state == "blocked"
 
 
-async def test_unknown_scenario_rejected(_no_unmocked_http) -> None:
-    with pytest.raises(SpikeError, match="autonomy-raise"):
-        await _run(scenario="autonomy-raise")
-
-
 async def test_token_never_in_result(_no_unmocked_http) -> None:
     _mock_happy(_no_unmocked_http)
     res = await _run(scenario="two-line")
@@ -121,3 +116,44 @@ async def test_head_branch_kept_while_pr_still_open(_no_unmocked_http) -> None:
     res = await _run(scenario="two-line")
     assert not [c for c in _no_unmocked_http.calls if c.request.method == "DELETE"]
     assert res.final_state == "OPEN" and not res.branch_deleted
+
+
+AUTONOMY = "apiVersion: aiops.example.dev/v1\nkind: Autonomy\nlevel: suggest\npromotion: null\n"
+
+
+def _mock_raise(r, *, autonomy=AUTONOMY, merge_status=405):
+    r.get(f"{R}/git/ref/heads/{SPIKE_BASE}").mock(return_value=httpx.Response(200, json={"object": {"sha": "a" * 40}}))
+    r.get(f"{R}/contents/aiops/autonomy.yaml").mock(
+        return_value=httpx.Response(200, json={"sha": "c" * 40, "content": base64.b64encode(autonomy.encode()).decode()})
+    )
+    r.post(f"{R}/git/refs").mock(return_value=httpx.Response(201, json={}))
+    put = r.put(f"{R}/contents/aiops/autonomy.yaml").mock(return_value=httpx.Response(200, json={}))
+    r.post(f"{R}/pulls").mock(return_value=httpx.Response(201, json={"number": 9, "node_id": "PR_9", "html_url": "u9"}))
+    r.post(f"{API}/graphql").mock(return_value=httpx.Response(200, json={"data": {"enablePullRequestAutoMerge": {}}}))
+    merge = r.put(f"{R}/pulls/9/merge").mock(return_value=httpx.Response(merge_status, json={"message": "blocked"}))
+    view = r.get(f"{R}/pulls/9").mock(return_value=httpx.Response(
+        200, json={"number": 9, "state": "open", "merged": False, "mergeable_state": "blocked"}))
+    return put, merge, view
+
+
+async def test_autonomy_raise_sets_act_tries_rest_merge_and_does_not_wait(_no_unmocked_http) -> None:
+    put, merge, view = _mock_raise(_no_unmocked_http)
+    res = await _run(scenario="autonomy-raise")
+    sent = json.loads(put.calls.last.request.content)
+    assert "level: act\n" in base64.b64decode(sent["content"]).decode()
+    assert sent["branch"] == "agent/spike-T1"
+    assert merge.call_count == 1 and res.rest_merge_status == 405
+    assert view.call_count == 1  # one read, no waiting for a merge
+    assert res.final_state == "OPEN" and not res.merged and not res.branch_deleted
+
+
+async def test_autonomy_raise_refuses_when_already_act(_no_unmocked_http) -> None:
+    _mock_raise(_no_unmocked_http, autonomy=AUTONOMY.replace("level: suggest", "level: act"))
+    with pytest.raises(SpikeError, match="already at act"):
+        await _run(scenario="autonomy-raise")
+
+
+async def test_unknown_scenario_refused_before_any_http(_no_unmocked_http) -> None:
+    with pytest.raises(SpikeError, match="unknown scenario"):
+        await _run(scenario="something-else")
+    assert not _no_unmocked_http.calls
