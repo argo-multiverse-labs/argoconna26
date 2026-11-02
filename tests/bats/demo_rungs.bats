@@ -237,11 +237,23 @@ happy_rung3() {
 
 @test "rung 3 on a policy failure prints policy: left for review and exits 0" {
   happy_rung3
+  export NO_WAIT=false
   echo '{"check_runs":[{"app":{"id":15368},"started_at":"2999-01-01T00:00:00Z","conclusion":"failure"}]}' >"$ST/checkruns.json"
-  run rung 3
+  cd "$FIXTURE"
+  run bash -c "yes '' | '$REPO_ROOT/scripts/demo-rung-3.sh'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"policy: left for review"* ]]
   grep -q '^open https://github.com/x/y/pull/7/checks' "$LOG"
+  ! grep -q '^gh pr merge' "$LOG"
+}
+
+@test "under NO_WAIT=true, rung 3 fails when policy-check fails" {
+  happy_rung3
+  echo '{"check_runs":[{"app":{"id":15368},"started_at":"2999-01-01T00:00:00Z","conclusion":"failure"}]}' >"$ST/checkruns.json"
+  run rung 3
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"policy: left for review"* ]]
+  [[ "$output" == *"FAIL: policy failure"* ]]
   ! grep -q '^gh pr merge' "$LOG"
 }
 

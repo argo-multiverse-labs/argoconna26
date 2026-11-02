@@ -66,6 +66,8 @@ main() {
   if [[ "$conclusion" != success ]]; then
     beat "policy: left for review"
     open_tab "$OUT_URL/checks" # the policy working, shown as a feature
+    # Under NO_WAIT the run needs the PR path through to Healthy: a failed check is a FAIL.
+    [[ "$NO_WAIT" == true ]] && { log_error "FAIL: policy ${conclusion:-none}"; exit 1; }
     exit 0
   fi
   beat "policy-check: pass"
