@@ -118,3 +118,31 @@ review after the fact.
   does not talk to the Kubernetes API.
 - Secrets are created from `.env` by `scripts/secrets.sh` (`make secrets-base`,
   `make secrets-late`). No secret value is committed.
+
+## Version pins
+
+From [versions.env](../versions.env). Nothing else in the repo hardcodes these.
+
+| Component | Version |
+|-----------|---------|
+| kind / node image | v0.33.0 / `kindest/node:v1.36.4` (digest-pinned) |
+| kubectl | v1.37.2 |
+| Argo CD (chart) | v3.5.6 (10.11.6) |
+| Argo Rollouts (chart) / plugin | v1.10.1 (2.43.8) / v1.10.0 |
+| kube-prometheus-stack (chart) | 92.14.0 |
+| Prometheus / Prometheus Operator | v3.15.1 / v0.94.2 |
+| Grafana | 13.2.4 |
+| HolmesGPT (chart) | 0.45.0 |
+| LiteLLM (chart and image tag) | 1.106.4 / v1.106.4 |
+| LiteLLM Postgres image | `postgres:16.11-alpine` (digest-pinned) |
+| conftest | v0.71.1 |
+| gitleaks | v8.30.1 |
+| bats | 1.14.0 |
+| CDEvents spec | v0.5.1 |
+| Python base image / uv image | `python:3.13-slim` / `ghcr.io/astral-sh/uv:0.13.6` (digest-pinned) |
+| prometheus-client / OpenTelemetry SDK | 0.26.0 / 1.45.1 |
+| Grafana Infinity plugin | 4.1.3 |
+| asciinema / agg | v3.2.1 / v1.9.0 |
+| demo-magic | commit `142f0e7` |
+
+The LLM models are set in `platform/litellm/config.yaml` (aliases `rca` and `judge`).

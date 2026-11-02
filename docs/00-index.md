@@ -24,7 +24,8 @@ Start with the [README](../README.md) for what the demo shows and how to run it.
 
 | If you want to | Read |
 |----------------|------|
-| Run the demo | README, then 06 |
+| Run the demo | README (Demo Flow), then 06 |
+| Pinned versions | 01 |
 | Understand the safety model | 02, then 04 and 05, then github-setup |
 | Understand the incident | 03, then 01 |
 | Fork it | README (Quick Start), github-setup, 06 |

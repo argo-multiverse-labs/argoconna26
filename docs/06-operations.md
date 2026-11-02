@@ -85,6 +85,74 @@ reference. Under `STAGE=1` they print one short line per step, cut to `STAGE_COL
 SHAs, and the machine-readable results (`cause`, `bump`, `change_ref`) go to files under
 `.operator/` in the main checkout, which is gitignored. Without `STAGE=1` they print to stdout.
 
+## Running the rungs by hand
+
+What the scene and rung scripts do, step by step. Start from a built, healthy cluster at autonomy
+`suggest`, and follow the bridge in a second terminal with `make bridge-log`.
+
+### Rung 1: suggest
+
+```bash
+make seed-history      # first run: disarm, then commit the PR-242 timeout change and a docs change
+make bump              # bump the image tag: the deploy that gets aborted
+# later runs: make rearm   (re-applies the timeout, then bumps)
+```
+
+The canary fails its gate, Argo CD reports Degraded, and the bridge comments on the cause commit
+with the root cause, evidence, the change reference from the timeline, and what a human should
+change. Then `make fix` restores the timeout and bumps config-version in one commit, and the
+application goes Healthy.
+
+### Rung 2: propose
+
+```bash
+make promotion-pr-ensure LEVEL=propose   # opens a promotion PR that changes only aiops/autonomy.yaml
+# a promotion-board member approves and merges it on GitHub
+make promotion-record-approval PR=<number>
+make rearm                               # the same incident
+```
+
+The agent opens one fix PR with two changed lines (the timeout and config-version). A human
+reviews and merges it, Argo CD syncs, and the application recovers.
+
+### Rung 3: act
+
+At `act` the bridge enables GitHub's auto-merge on its fix PR. GitHub merges it once the required
+`policy-check` passes. If the check passed and the PR is still open 30 s later
+(`ACT_AUTOMERGE_GRACE_S`), the bridge merges it itself at the PR's head SHA; GitHub enforces the
+required check on that merge too. If auto-merge cannot be enabled at all, the bridge waits for
+the check and merges only on `success`. The trigger is a scheduled job: one user-level systemd unit that runs the
+rung-3 preflight and then `rearm`.
+
+```bash
+make promotion-pr-ensure LEVEL=act
+make job-install        # installs the user unit argoconna26-rearm.service
+make night              # starts that unit now: preflight, then rearm
+```
+
+From the trigger to Healthy no human acts: the agent opens the PR, `policy-check` passes, GitHub
+merges it, and Argo CD syncs on its own reconciliation (nothing nudges it). A person reviews
+afterwards. `make night` is the nightly job run on demand; no timer is armed unless you run
+`make timer-arm`. `scripts/night.sh night` returns the job's own exit code (make reports any
+failure as 2).
+
+Measured on the kind cluster (one run, no Argo refresh): 74 s from typing `make night` to the
+PR, 53 s from the PR to the merge, 69 s from the merge to Healthy. PR to merge depends on
+GitHub's auto-merge and ranged from 18 s to 200 s across earlier runs, which is why the bridge
+now merges itself after the grace period.
+
+The end-to-end tests: `tests/e2e/rung3.sh` runs the rung from the pre-promotion state;
+`tests/e2e/overnight-verify.sh SINCE=... UNTIL=...` checks a run after the fact (the job started
+the rearm, the bot merged its own PR with no reviews, the check passed with the auto-fix rules
+applied); `tests/e2e/policy-negative.sh` opens App-authored PRs that should fail the check. Those
+test PRs are titled `[policy negative test]` and labelled `policy-negative-test`: the operator
+opened them with the agent's identity, the agent did not.
+
+### Going back down
+
+`make demote` lowers the level by one step with a forward commit. `make disarm` puts the timeout
+back to 2000 (`IMAGE=vX.Y.Z` also pins the image tag).
+
 ## Resets between runs
 
 `scripts/reset.sh` puts the demo back at a rung's starting state. Every step is a forward commit
@@ -139,10 +207,42 @@ Measured (one session): rung 1 trigger to comment 52 to 72 s; rung 2 merge to He
 rung 3 PR to merge 57 to 140 s and merge to Healthy 55 to 66 s, 210 s from `make night` to Healthy.
 The History deep link the scripts open is a best guess and has not had its visual check.
 
+## Scenes and demo-full
+
+The talk's linear flow (the README's Demo Flow) wraps the rung scripts in scenes:
+`demo-cold-open`, `demo-prologue`, `demo-scene-1` to `demo-scene-3`, `demo-epilogue` and
+`demo-close`, and `make demo-full` runs them in order with no reset between them.
+`scripts/stage-day.sh morning` leaves the start state, including the open `propose` promotion PR.
+
+- Scenes 1 to 3 call the rung scripts' bodies, so every failure branch above carries over. Inside
+  a scene, a branch that ends the rung early (a handoff, no fix PR, `policy-check` left for
+  review) exits 10, and `demo-full` stops there and returns it. A refusal or PII block ends after
+  the human fix with exit 0, so the talk goes on.
+- Scene 2 opens the `act` promotion PR at its end when the level is `propose`. Scene 3 uses it,
+  or opens one; below `propose` (after an on-stage reject and demote) it exits 6: play the
+  recording.
+- In scene 3 `make night` is typed first and the teaching narration runs while the job re-arms
+  and the agent works. The verifier's PASS lines print on stage and are saved to
+  `.operator/last-verify`; the epilogue replays them, then demotes back to `suggest` (two steps
+  from `act`).
+- `DEMO_PACE=talk` stops for Enter only at `scene_break`, `fourth_wall` and `speaker_beat`;
+  `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
+- Narration: `narrate SCENE KEY` prints the `[KEY]` section of `narration/<scene>.txt` as comment
+  lines folded to `STAGE_COLS`. The directory is local and not in the repository; without it the
+  scripts print no narration and work the same. `NARRATION_DIR` points elsewhere.
+- `make reset-to-scene-N` is the matching reset (`0` is `reset-demo`). `reset-rung-1` and
+  `reset-demo` close any promotion PR a scene run left open.
+
+Measured (one run, kind, real model): `stage-day.sh morning` 41 s; `DEMO_PACE=auto make
+demo-full` 8 min 54 s of machine time (cold open and prologue about 2 s, scene 1 105 s, scene 2
+177 s, scene 3 241 s, epilogue and close 9 s); `reset-to-scene-2` 68 s, then `demo-scene-2`
+201 s.
+
 ## Recording
 
-`make record-rung-1|2|3` runs the rung script under `asciinema` at `STAGE_COLS` x `STAGE_ROWS` and
-writes `recordings/rung-N-<timestamp>.cast` (gitignored). `RECORD_CMD` replaces the command.
+`make record-rung-1|2|3`, `make record-scene-1|2|3` and `make record-full` run the matching
+script under `asciinema` at `STAGE_COLS` x `STAGE_ROWS` and write
+`recordings/<rung-N|scene-N|full>-<timestamp>.cast` (gitignored). `RECORD_CMD` replaces the command.
 `make gif CAST=<file>` converts a cast with `agg` (the newest cast by default).
 
 ## Scoring the agent: the dry-run harness
@@ -171,12 +271,14 @@ the stage shows). With N=20 and BATCH=5 that is four incidents with five runs ea
   and no summary, and restores the toolset on exit.
 - **Cost.** Each batch lets the live bridge post one `suggest` comment on the re-armed incident.
 
-**Results so far.** The full 20 has not been run, so there is no n/20 and the dashboard and
-promotion PRs say "pending". An `N=1` smoke run matched its one incident. The ablation ran twice
-on one incident: the timeline's change reference was cited 0 of 2 times and the cause commit was
-named 0 of 2 times, with the right key and values both times. Two runs on one incident say nothing
-about cause, so treat it as a check that the scorer notices the missing timeline. A caveat for the
-slides when the 20 completes: "n of 20 across 4 incidents, 5 runs each, at temperature 1".
+**Results.** The full run (11-02): 20/20 matched the root cause and every other check, across 4
+incidents with 5 runs each, model `anthropic/claude-sonnet-5-5` at temperature 1. The judge rated
+20 correct; the change reference was cited 20 of 20 times; 0 PII blocks, 0 refusals; answer time
+p50 28 s, p95 37 s. Confidence ranged 0.70 to 0.90, so the threshold stays 0.7 (one answer sat on
+it). The ablation ran twice on one incident: the change reference was cited 0 of 2 times and the
+cause commit named 0 of 2 times, with the right key and values both times. Two runs on one
+incident say nothing about cause; treat it as a check that the scorer notices the missing
+timeline. On a slide: "20/20 across 4 incidents, 5 runs each, at temperature 1".
 
 ## Stage day
 
@@ -242,11 +344,12 @@ run (N below the bar, or the incident and run counts do not multiply to N) or di
 ConfigMap, and it warns "pending" when neither exists. `PREFLIGHT_REQUIRE_SCORE=1` (stage-day
 morning sets it) turns pending into a failure.
 
-Checks that need the promotion-board team or code-owner review (the tracked ruleset's code-owner
-rule, the team's repo permission, the stage approver's membership, the App's installation
-permissions) print `WARN ... (deferred to L5b)` while code-owner review is off, and are failures once the full `scripts/github-ruleset.sh apply` has
-turned code-owner review on. The setting is read from the live rules, and an unreadable read is a
-failure, not a deferral. To make them hard earlier set `PREFLIGHT_L5B=1`; `PREFLIGHT_L5B=0` keeps them deferred.
+Checks that need the promotion-board team or code-owner review (the team's permission, the
+approver's membership, the App's permissions) are failures while code-owner review is on, which
+it is. They print `WARN ... (deferred to L5b)` only on a repository where code-owner review is
+off, such as a fresh fork. The setting is read from the live rules, and an unreadable read is a
+failure, not a deferral. `PREFLIGHT_L5B=1` makes them hard regardless; `PREFLIGHT_L5B=0` defers
+them.
 
 Flags: `--armed` (autonomy on the tracked branch must be `act`), `--pre-promotion` (must still be
 `propose`), `--job-run` (GH_TOKEN is the credential; skips `github_admin` and `job`) and `--quiet`.
@@ -281,7 +384,7 @@ the real model, so they spend LLM budget and open PRs on the repo.
 | `tests/e2e/failure-paths.sh` | A guardrail refusal, a HolmesGPT timeout handoff, a rejected PR and a demotion. Takes `refusal`, `timeout`, `reject` |
 | `tests/e2e/rung3.sh` | Rung 3 from the pre-promotion state: promotion to `act`, `make night`, one bot PR that merges with no human action, sync, Healthy, then `overnight-verify.sh` over the run window. Leaves autonomy at `act` (`make demote` lowers it) |
 | `tests/e2e/overnight-verify.sh` | Checks a rung-3 run after the fact for `SINCE=... UNTIL=...`: only the job's rearm commits, one bot PR merged by the bot with no reviews, `policy-check` passed with the auto-fix rules applied, the metric rose, the merge deployed, the incident resolved |
-| `tests/e2e/policy-negative.sh` | Opens App-authored PRs that break a rule (image change, edits to the auto-fix policy, golden path, workflow, autonomy, a planted `conftest.toml` or `yaml.py`) and checks each one fails `policy-check`, shows `BLOCKED` and stays unmerged. The workflow edit is refused by GitHub before a PR exists. The code-owner `REVIEW_REQUIRED` assertion for the autonomy case waits until code-owner review is on |
+| `tests/e2e/policy-negative.sh` | Opens App-authored PRs that break a rule (image change, edits to the auto-fix policy, golden path, workflow, autonomy, a planted `conftest.toml` or `yaml.py`) and checks each one fails `policy-check`, shows `BLOCKED` and stays unmerged. The workflow edit is refused by GitHub before a PR exists. For the autonomy case the code-owner block is also expected (the review request goes to the promotion board) |
 
 `tests/e2e/assert.sh` holds shared assertions. Evidence from a run goes to `EVIDENCE_DIR` (default
 `.evidence/` in the main checkout, gitignored). PRs the tests open are labelled `demo-reset` or
