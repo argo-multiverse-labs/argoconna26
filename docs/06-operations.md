@@ -149,20 +149,23 @@ Rung 3 runs a user-level systemd unit, `argoconna26-rearm.service`: check, then 
 | Target | What it does |
 |--------|--------------|
 | `make job-install` | Renders and installs the unit. Re-run when the repo path or `PATH` changes |
-| `make night` | Starts that unit now and exits with its status |
+| `make night` | Starts that unit now (the nightly job, run on demand). `scripts/night.sh night` exits with the unit's own status; through make any failure shows as 2 |
 | `make timer-arm AT="YYYY-MM-DD HH:MM"` | Optional: installs a timer for the same unit |
 | `make timer-status` | Shows the next trigger |
 | `make timer-disarm` | Removes the timer and the job env file |
 
-The unit runs `make preflight-rung3-quiet rearm`. `make night` and `make timer-arm` refuse
+The unit runs `scripts/preflight.sh 3 --armed --job-run --quiet` and then `scripts/rearm.sh`
+directly (not through make, so its status is the script's own: 1 for a failed preflight, 7
+when already armed). `preflight 3 --armed` also reads the tracked branch's rules and fails
+unless `policy-check` is a required status there. `make night` and `make timer-arm` refuse
 before starting anything when the cluster lock is held (exit 5), when autonomy on the tracked
 branch is not `act` (exit 6), or when `preflight 3 --armed` fails (exit 9). They then write a
 runtime file (`$XDG_RUNTIME_DIR/argoconna26/job.env`, mode 0600, outside the repo) holding
 `GH_TOKEN` from `gh auth token`, because `gh` keeps its token in the desktop keyring and the unit
 cannot read it. The unit deletes the file when it stops. The unit starts only when you run
 `make night` or `make timer-arm` yourself; a timer then fires on its own, but only while the
-machine is awake and your session is logged in. The target is in progress; see the
-[README](../README.md).
+machine is awake and your session is logged in. Nothing on this path nudges Argo CD after the
+merge; it syncs on its own reconciliation. See the [README](../README.md).
 
 ## Troubleshooting
 

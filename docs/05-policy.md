@@ -13,10 +13,11 @@ The second is what makes the `act` level possible. It does not judge the model o
 judges a set of Git facts about the PR.
 
 > **Status.** The policies, the facts extractor, the `policy-check` workflow and the laptop
-> runner are on `build/demo`. Rung 3 as a whole is in progress: the end-to-end run of the
-> required check against a real agent PR on the tracked branch has not been recorded yet. PRs
-> that break a rule on purpose, to show the check failing, are labelled `policy-negative-test`
-> and are not counted as fix-PR outcomes.
+> runner are on `build/demo`, and `policy-check` is a required status on the tracked branch
+> (code-owner review is not on yet). Rung 3 has run end to end against the required check
+> (`tests/e2e/rung3.sh`, verified after the fact by `tests/e2e/overnight-verify.sh`), and
+> `tests/e2e/policy-negative.sh` shows the check failing on App-authored PRs that break a rule.
+> Those PRs are labelled `policy-negative-test` and are not counted as fix-PR outcomes.
 
 ## Golden-path labels
 
@@ -75,8 +76,10 @@ bridge's fix builder and PR template satisfy rules 1, 2, 4 and 5.
 `.github/workflows/policy.yml` produces the status check `policy-check` (GitHub Actions,
 `integration_id` 15368). On every pull request it:
 
-1. Checks out the PR, and separately checks out the **base branch's** `policy/` into
-   `.base-policy`.
+1. Checks out the PR into `pr/`, and separately checks out the **base branch's** `policy/` into
+   `base/`. Every later step runs from `$RUNNER_TEMP` with explicit paths, and Python runs with
+   `-P`, so a `conftest.toml` or a `yaml.py` the PR adds is only a file in `pr/`: it can neither
+   configure conftest nor shadow PyYAML.
 2. Installs conftest at the pinned version, verifying its SHA-256.
 3. Runs the Rego unit tests from the base copy.
 4. Runs the golden-path rule on `kubectl kustomize` of every app, with the base copy.
@@ -108,9 +111,14 @@ The check is only worth something if the agent cannot change how it runs.
   What stops an agent PR doing that:
   - the GitHub App has no `workflows` permission, so GitHub refuses its commits under
     `.github/workflows/`;
+  - for the agent's own PRs, auto-fix rule 1 denies any change outside the two fix files, so a
+    PR that touches `.github/`, `policy/` or `aiops/autonomy.yaml` fails the required check;
   - `.github/` is code-owned by the promotion team, so a change there needs one of its members
-    to review once `require_code_owner_review` is on in the tracked ruleset (a plain `apply`; the
-    `--minimal` modes leave it off).
+    to review once `require_code_owner_review` is on in the tracked ruleset
+    (`apply --with-policy-check`; the `--minimal` modes leave it off). It is off today.
+- **The PR's tree configures nothing.** The tools run outside the PR's checkout (see the steps
+  above). `policy-negative.sh` has two cases for this: `tamper-config` (a root `conftest.toml`
+  with `no-fail = true` and a `yaml.py`) and `shadow-yaml` (a fix-shaped PR plus a `yaml.py`).
 - **The policy directory is code-owned too** (`/policy/`), and so is `aiops/autonomy.yaml`.
 
 The check is a *required* status on the tracked branch only in the `--with-policy-check` mode of

@@ -173,12 +173,12 @@ make rearm                               # the same incident
 The agent opens one fix PR with two changed lines (the timeout and config-version). A human
 reviews and merges it, Argo CD syncs, and the application recovers.
 
-### Rung 3: act (in progress)
+### Rung 3: act
 
-Rung 3 is still being built. What exists on this branch: the `act` path in the bridge (auto-merge,
-with a fallback that merges only on a `success` from `policy-check`), the policy rules, the
-`policy-check` workflow, and the scheduled job. Not yet in place: the end-to-end test for the
-rung and the stage script.
+At `act` the bridge enables GitHub's auto-merge on its fix PR. GitHub merges it once the required
+`policy-check` passes; if auto-merge cannot be enabled, the bridge waits for the check and merges
+only on `success`. The trigger is a scheduled job: one user-level systemd unit that runs the
+rung-3 preflight and then `rearm`.
 
 ```bash
 make promotion-pr-ensure LEVEL=act
@@ -186,9 +186,18 @@ make job-install        # installs the user unit argoconna26-rearm.service
 make night              # starts that unit now: preflight, then rearm
 ```
 
-The intended run: from the trigger to Healthy no human acts. The agent opens the PR,
-`policy-check` passes, the PR merges, and Argo CD syncs. A person reviews afterwards. This run has
-not been recorded end to end yet.
+From the trigger to Healthy no human acts: the agent opens the PR, `policy-check` passes, GitHub
+merges it, and Argo CD syncs on its own reconciliation (nothing nudges it). A person reviews
+afterwards. `make night` is the nightly job run on demand; no timer is armed unless you run
+`make timer-arm`. `scripts/night.sh night` returns the job's own exit code (make reports any
+failure as 2).
+
+The end-to-end tests: `tests/e2e/rung3.sh` runs the rung from the pre-promotion state;
+`tests/e2e/overnight-verify.sh SINCE=... UNTIL=...` checks a run after the fact (the job started
+the rearm, the bot merged its own PR with no reviews, the check passed with the auto-fix rules
+applied); `tests/e2e/policy-negative.sh` opens App-authored PRs that should fail the check. Those
+test PRs are titled `[policy negative test]` and labelled `policy-negative-test`: the operator
+opened them with the agent's identity, the agent did not.
 
 ### Going back down
 
@@ -238,10 +247,12 @@ back to 2000 (`IMAGE=vX.Y.Z` also pins the image tag).
 - *GitHub:* the three standing rulesets (nobody deletes or force-pushes a tracked branch; changes
   to it arrive by pull request, with only a repository admin able to bypass; only an admin
   creates, moves or deletes `promote/*`); and the required `policy-check`
-  status. Code-owner review on `aiops/autonomy.yaml`, `policy/` and `.github/` comes on with a
-  plain `scripts/github-ruleset.sh apply` once the promotion-board team exists; with it on, an
-  agent PR that raises `aiops/autonomy.yaml` stays blocked until the board reviews it.
-  `scripts/github-ruleset.sh show` prints which mode is live.
+  status. Code-owner review on `aiops/autonomy.yaml`, `policy/` and `.github/` comes on with
+  `scripts/github-ruleset.sh apply --with-policy-check` once the promotion-board team exists
+  (a plain `apply` also keeps a live required check); with it on, an agent PR that raises
+  `aiops/autonomy.yaml` stays blocked until the board reviews it. Until then, the required
+  check's auto-fix rule 1 is what denies an agent PR that touches `aiops/autonomy.yaml`,
+  `policy/` or `.github/`. `scripts/github-ruleset.sh show` prints which mode is live.
 - *The bridge:* at `suggest` it opens no PR; at `propose` it never calls merge or auto-merge, so
   "a human merges" holds there because of the bridge, not a GitHub approval rule. The tracked
   ruleset requires zero approvals on purpose, so that `act` can auto-merge. The bridge also
@@ -249,8 +260,11 @@ back to 2000 (`IMAGE=vX.Y.Z` also pins the image tag).
 - *The required check's trust boundary:* `policy-check` judges a PR with the policy on the PR's
   base branch, not the copy the PR carries. The workflow itself runs from the PR's merge ref, so
   a PR that edits it could change how it runs. What stops an agent PR doing that: the App has no
-  `workflows` permission, so GitHub refuses its commits under `.github/workflows/`, and
-  `.github/` is code-owned. See [docs/05-policy.md](docs/05-policy.md).
+  `workflows` permission, so GitHub refuses its commits under `.github/workflows/`, and for the
+  agent's PRs auto-fix rule 1 denies any change outside the two fix files. `.github/` is also
+  code-owned, which binds once code-owner review is on. The workflow runs every tool outside the
+  PR's checkout, so a `conftest.toml` or `yaml.py` in the PR cannot configure the check either.
+  See [docs/05-policy.md](docs/05-policy.md).
 - The policy sees Git facts only (the diff, the history of the tracked branch, the PR author and
   body). It does not look at the cluster or the model's reasoning.
 - Fix-PR outcomes and `policy-check` results on the dashboard are counted by polling GitHub,
