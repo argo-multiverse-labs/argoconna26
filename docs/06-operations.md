@@ -299,9 +299,11 @@ main checkout. Exit codes: 0 done, 1 a step failed, 2 usage, 3 stopped at a huma
 | `scripts/stage-day.sh morning` | Reset, `preflight 1` with a full dry-run score required, the LLM budget (at least `STAGE_LLM_MIN_REMAINING_USD`, default 2.00), `gh` auth, the job unit current, `preflight 3` |
 | `scripts/stage-day.sh arm-rung-3 [--admin]` | `reset-rung-3` (from `suggest`: merge the `propose` promotion, record it, reset again), `preflight 3 --pre-promotion`, the human step to approve the `act` promotion PR, merge (`--admin` is logged as `admin-bypass`), record the approval, `preflight 3 --armed` |
 
-Because the morning check requires a published score, it fails until the full 20 has run. Steps
-and timings are saved under `EVIDENCE_DIR`. These scripts have been tried against stubs and, in
-part, the cluster; the human steps need the promotion board.
+The morning check requires a published score from a full run (the 20-run score is published, so
+it passes; on a fresh cluster run `make dry-runs N=20 BATCH=5` first). Steps and timings are saved
+under `EVIDENCE_DIR`. Both subcommands have been run on the cluster (morning about 97 s,
+`arm-rung-3 --admin` about 98 s); the human step merges with a promotion-board approval, or with
+`--admin`, which is recorded as `admin-bypass`.
 
 ## Retargeting the tracked branch
 
