@@ -1,9 +1,5 @@
 # Observability Is a Platform Problem Now: Closing the AIOps Loop with ArgoCD and GitOps
 
-**ArgoCon NA 2026** | Monday 2026-11-09 | Luke Philips
-
-<!-- credits: held -->
-
 A demo of an AIOps agent that earns the right to act. An Argo CD rollout fails, the platform
 records it as CDEvents, an agent investigates read-only, and the result goes back into Git as a
 comment, a pull request, or a pull request that merges itself. What the agent may do is itself a
