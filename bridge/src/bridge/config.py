@@ -50,6 +50,16 @@ class Settings(BaseSettings):
         default="example.dev/config-version", validation_alias=_env("CONFIG_VERSION_ANNOTATION")
     )
     argo_ui_url: str = Field(default="", validation_alias=_env("ARGO_UI_URL"))
+    # The fix PR (Task 4.3): the file whose config-version annotation rolls the pods, the
+    # file that pins the image (named in the PR's blast radius), and the first image tag
+    # with the security fix. Defaults match demo.env.
+    rollout_file: str = Field(default="apps/checkout/deploy/rollout.yaml", validation_alias=_env("ROLLOUT_FILE"))
+    kustomization_file: str = Field(
+        default="apps/checkout/kustomization.yaml", validation_alias=_env("KUSTOMIZATION_FILE")
+    )
+    cve_fix_tag: str = Field(default="", validation_alias=_env("CHECKOUT_CVE_TAG"))
+    # The App's login; open agent PRs by anyone else are ignored (D6).
+    bot_login: str = Field(default="argoconna26-agent[bot]", validation_alias=_env("BOT_LOGIN"))
     dry_forge: bool = Field(default=False, validation_alias=_env("DRY_FORGE"))
     # How often /status probes (GitHub token, HolmesGPT readiness) and the touchpoints
     # gauge (aiops/autonomy.yaml) are refreshed. The first refresh runs at startup.

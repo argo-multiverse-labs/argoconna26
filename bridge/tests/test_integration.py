@@ -161,6 +161,8 @@ class World:
         else:
             self.holmes = router.post(f"{HOLMES}/api/chat").mock(return_value=holmes)
         self.sink = router.post(SINK).mock(return_value=httpx.Response(202, json={"id": "x"}))
+        # Startup rehydrates the incident registry from open agent PRs (Task 4.3); none by default.
+        self.open_prs = router.get(f"{REPO_API}/pulls").mock(return_value=httpx.Response(200, json=[]))
         self.readyz = router.get(f"{HOLMES}/readyz").mock(return_value=httpx.Response(200, text="ok"))
 
     def posted(self) -> list[tuple[str, str]]:
@@ -342,3 +344,85 @@ async def test_holmes_connection_error_is_not_reachable(respx_mock, settings: Se
     world.readyz.mock(side_effect=httpx.ConnectError("refused"))
     result = await started_status(settings)
     assert result["status"]["holmes_reachable"] is False
+
+
+ROLLOUT = "apps/checkout/deploy/rollout.yaml"
+KUSTOMIZATION = "apps/checkout/kustomization.yaml"
+ROLLOUT_TEXT = """\
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: checkout
+spec:
+  template:
+    metadata:
+      annotations:
+        example.dev/config-version: "7"
+"""
+KUSTOMIZATION_TEXT = """\
+images:
+  - name: checkout
+    newTag: v1.4.2
+"""
+TRACKED_HEAD = "f" * 40
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_propose_end_to_end_opens_pr(respx_mock, settings: Settings, stage_lines) -> None:
+    """Git Data API and `POST /pulls` stubbed: one commit with two files, one PR, no merge call."""
+    envelope = recorded("rca_toolcall_timeline.json")
+    envelope["analysis"] = json.dumps(GOOD_ANALYSIS)
+    world = World(respx_mock, httpx.Response(200, json=envelope))
+    respx_mock.get(f"{REPO_API}/contents/aiops/autonomy.yaml", params={"ref": BRANCH}).mock(
+        return_value=httpx.Response(200, json=content(AUTONOMY.replace("level: suggest", "level: propose")))
+    )
+    respx_mock.get(f"{REPO_API}/contents/{ROLLOUT}", params={"ref": BRANCH}).mock(
+        return_value=httpx.Response(200, json=content(ROLLOUT_TEXT))
+    )
+    respx_mock.get(f"{REPO_API}/contents/{KUSTOMIZATION}", params={"ref": BRANCH}).mock(
+        return_value=httpx.Response(200, json=content(KUSTOMIZATION_TEXT))
+    )
+    respx_mock.get(f"{REPO_API}/git/ref/heads/{BRANCH}").mock(
+        return_value=httpx.Response(200, json={"object": {"sha": TRACKED_HEAD}})
+    )
+    respx_mock.get(f"{REPO_API}/git/commits/{TRACKED_HEAD}").mock(
+        return_value=httpx.Response(200, json={"sha": TRACKED_HEAD, "tree": {"sha": "t" * 40}})
+    )
+    blobs = respx_mock.post(f"{REPO_API}/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "b" * 40}))
+    trees = respx_mock.post(f"{REPO_API}/git/trees").mock(return_value=httpx.Response(201, json={"sha": "d" * 40}))
+    commits = respx_mock.post(f"{REPO_API}/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "9" * 40})
+    )
+    refs = respx_mock.post(f"{REPO_API}/git/refs").mock(return_value=httpx.Response(201, json={}))
+    pr_url = f"https://github.test/{REPO}/pull/7"
+    pulls = respx_mock.post(f"{REPO_API}/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 7, "html_url": pr_url, "node_id": "PR_7", "head": {"sha": "9" * 40}}
+        )
+    )
+    merge = respx_mock.put(url__regex=rf"^{REPO_API}/pulls/\d+/merge$").mock(return_value=httpx.Response(200))
+    graphql = respx_mock.post(f"{GITHUB}/graphql").mock(return_value=httpx.Response(200, json={}))
+
+    result = await run_incident(settings)
+
+    assert result["status"]["level_last_seen"] == "propose"
+    assert result["status"]["last_incident"]["action"] == "pr_opened"
+    assert result["status"]["last_incident"]["url"] == pr_url
+    assert blobs.call_count == 2
+    [tree_call] = trees.calls
+    assert sorted(e["path"] for e in json.loads(tree_call.request.content)["tree"]) == [CONFIG, ROLLOUT]
+    assert commits.call_count == 1
+    [ref_call] = refs.calls
+    assert json.loads(ref_call.request.content)["ref"] == f"refs/heads/agent/checkout-{CAUSE[:7]}-{SYNC[:7]}"
+    [pull_call] = pulls.calls
+    pr = json.loads(pull_call.request.content)
+    assert pr["base"] == BRANCH
+    assert pr["title"] == "fix(checkout): restore UPSTREAM_TIMEOUT_MS to 2000 and roll config"
+    assert f"Cause: {CAUSE} (PR-242: tune upstream timeout)" in pr["body"].splitlines()
+    assert "v1.4.2" in pr["body"]
+    assert merge.call_count == 0 and graphql.call_count == 0  # a human merges at propose
+    assert world.posted() == [] and world.pr_comments.call_count == 0
+    types = [e["context"]["type"] for e in world.events()]
+    assert "dev.cdevents.change.created.0.4.0" in types
+    assert 'aiops_actions_total{action="pr_opened"} 1.0' in result["metrics"]
+    assert stage_lines[-1] == "▸ propose: pr opened"

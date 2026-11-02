@@ -194,11 +194,12 @@ class GitHubForge:
             url=str(pr.get("html_url", "")),
             node_id=str(pr.get("node_id", "")),
             head_sha=str((pr.get("head") or {}).get("sha", commit_sha)),
+            branch=branch,
         )
 
-    async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
-        """Open PRs from `agent/<app>-*` branches whose author is the bot."""
-        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+    async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:
+        """Open PRs from `agent/<app>-*` branches (any `agent/*` when `app` is None) whose author is the bot."""
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-" if app is not None else AGENT_BRANCH_PREFIX
         found: list[PullRequest] = []
         page = 1
         while True:
@@ -216,6 +217,7 @@ class GitHubForge:
                         url=str(pr.get("html_url", "")),
                         node_id=str(pr.get("node_id", "")),
                         head_sha=str(head.get("sha", "")),
+                        branch=str(head.get("ref", "")),
                     )
                 )
             if len(batch) < 100:

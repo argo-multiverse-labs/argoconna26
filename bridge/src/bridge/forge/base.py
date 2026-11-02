@@ -28,6 +28,8 @@ class PullRequest:
     url: str
     node_id: str
     head_sha: str
+    #: The head branch (`agent/<app>-<cause7>-<revision7>` for a fix PR); "" when unknown.
+    branch: str = ""
 
 
 #: Every branch the bridge creates starts with this, and every guard keys on it.
@@ -75,4 +77,6 @@ class Forge(Protocol):
         commit_message: str,
     ) -> PullRequest: ...
 
-    async def list_open_agent_prs(self, app: str) -> list[PullRequest]: ...
+    async def list_open_agent_prs(self, app: str | None = None) -> list[PullRequest]:
+        """Open bot PRs from `agent/<app>-*` branches, or from any `agent/*` branch when `app` is None."""
+        ...

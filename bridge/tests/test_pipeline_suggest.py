@@ -254,8 +254,8 @@ async def test_failsafe_level_used_when_autonomy_unreadable(deps, stage_lines: l
     assert d.metrics.value("aiops_incidents_total", level="suggest") == 1
 
 
-@pytest.mark.parametrize("level", ["propose", "act"])
-async def test_propose_and_act_not_implemented_in_slice_3(deps, level: str) -> None:
+@pytest.mark.parametrize("level", ["act"])
+async def test_act_not_implemented_before_task_5_4(deps, level: str) -> None:
     forge = make_forge()
     forge.files[("aiops/autonomy.yaml", BRANCH)] = AUTONOMY.replace("level: suggest", f"level: {level}")
     d = deps(forge=forge)

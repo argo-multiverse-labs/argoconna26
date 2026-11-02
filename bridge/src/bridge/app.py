@@ -28,7 +28,13 @@ from .holmes import HolmesClient
 from .incidents import IncidentRegistry
 from .metrics import Metrics
 from .models import ArgoDegradedHook
-from .pipeline import Deps, Outcome, handle_incident, outcome_for_status
+from .pipeline import (
+    Deps,
+    Outcome,
+    handle_incident,
+    outcome_for_status,
+    rehydrate_at_startup,
+)
 
 log = logging.getLogger("bridge")
 
@@ -74,7 +80,9 @@ def build_pipeline(
         api_url=settings.github_api_url,
         http=http,
     )
-    github = GitHubForge(settings.github_repo, tokens, api_url=settings.github_api_url, http=http)
+    github = GitHubForge(
+        settings.github_repo, tokens, api_url=settings.github_api_url, http=http, bot_login=settings.bot_login
+    )
     forge: Forge = DryForge(github, settings.stage_cols) if settings.dry_forge else github
     holmes = HolmesClient(
         settings.holmes_url,
@@ -187,12 +195,15 @@ def create_app(
     handler: Handler | None = None,
     registry: IncidentRegistry | None = None,
     metrics: Metrics | None = None,
+    probes: Probes | None = None,
 ) -> FastAPI:
+    """`probes` is for tests that pass their own `handler` but still want a forge for the
+    startup rehydrate and the status refresh; the real pipeline builds its own."""
     settings = settings or Settings()
     registry = registry or IncidentRegistry()
     metrics = metrics or Metrics(dryrun_summary_path=settings.dryrun_summary_path)
     http = httpx.AsyncClient(timeout=20.0)
-    probes = Probes()
+    probes = probes or Probes()
     if handler is None:
         handler, probes = build_pipeline(settings, registry, metrics, http)
     state = BridgeState(settings=settings, handler=handler, registry=registry, probes=probes, metrics=metrics)
@@ -203,6 +214,9 @@ def create_app(
         # The queue must belong to the running loop.
         state.queue = asyncio.Queue()
         state.refreshed = asyncio.Event()
+        # Before the first webhook: open fix PRs mark their incidents as seen (Review Focus 5).
+        if state.probes.forge is not None:
+            await rehydrate_at_startup(state.registry, state.probes.forge)
         tasks = [
             asyncio.create_task(state.worker(), name="incident-worker"),
             asyncio.create_task(state.refresher(), name="status-refresh"),
