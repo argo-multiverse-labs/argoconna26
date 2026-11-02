@@ -43,7 +43,7 @@ setup() {
       *"get rollout"*) echo "{\"status\": {\"abort\": true}}" ;;
       *"get events"*) jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{items: [{lastTimestamp: \$t}]}" ;;
       *"get secret judge-llm"*) printf judge-key-not-a-secret | base64 ;;
-      *port-forward*) echo $$ >"$STATE/pf.pid"; exec sleep 30 ;;
+      *port-forward*) echo $$ >"$STATE/pf.pid"; ls /proc/$$/fd >"$STATE/pf.fds"; exec sleep 30 ;;
     esac'
   make_stub "$STUBS" helm 'echo "helm $*" >>"$LOG"
     case "$*" in *"get values"*) printf "{\"toolsets\": {\"cdevents-timeline\": {\"enabled\": %s}}}\n" "$(cat "$STATE/toolset")" ;; esac'
@@ -82,7 +82,7 @@ dry_runs() { (cd "$FIXTURE" && "$REPO_ROOT/scripts/dry-runs.sh" "$@"); }
 steps() { grep -E '^(make|dryrun) ' "$LOG" | sed -E 's/ -C [^ ]+ --no-print-directory//'; }
 
 @test "dry-runs disarms then rearms before every batch" {
-  run dry_runs 4 2
+  DRYRUNS_PUBLISH=1 run dry_runs 4 2
   [ "$status" -eq 0 ]
   mapfile -t s < <(steps)
   [ "${s[0]}" = "make disarm IMAGE=v1.4.1" ]
@@ -113,6 +113,8 @@ steps() { grep -E '^(make|dryrun) ' "$LOG" | sed -E 's/ -C [^ ]+ --no-print-dire
   [[ "$pf_line" != *"127.0.0.1:"* ]]
   # the port-forward this script started is gone
   ! kill -0 "$(cat "$STATE/pf.pid")" 2>/dev/null
+  # and it never held the cluster lock's fd (a SIGKILLed run must not leave an orphan holding it)
+  ! grep -qx 200 "$STATE/pf.fds"
 }
 
 @test "dry-runs waits for abort at the new bump revision" {
@@ -188,4 +190,33 @@ steps() { grep -E '^(make|dryrun) ' "$LOG" | sed -E 's/ -C [^ ]+ --no-print-dire
   [ "$status" -eq 5 ]
   [ "$(steps | tail -1)" = "make holmes-install" ]
   [ "$(cat "$STATE/toolset")" = true ]
+}
+
+@test "a smoke run below the bar's N writes summary-smoke, not summary.json, and restores no ConfigMap" {
+  echo '{"n": 20, "root_cause_matched": 17}' >"$FIXTURE/.dryruns-keep.json"
+  mkdir -p "$FIXTURE/.dryruns"
+  cp "$FIXTURE/.dryruns-keep.json" "$FIXTURE/.dryruns/summary.json"
+  run dry_runs 1 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"smoke run"* ]]
+  grep -q -- "--summary-out $FIXTURE/.dryruns/summary-smoke-" "$LOG"
+  ! grep -q -- "--summary-out $FIXTURE/.dryruns/summary.json" "$LOG"
+  ! grep -q 'dryrun-summary-restore' "$LOG"
+  # the published summary is untouched
+  cmp "$FIXTURE/.dryruns/summary.json" "$FIXTURE/.dryruns-keep.json"
+  ls "$FIXTURE"/.dryruns/summary-smoke-*.json
+}
+
+@test "a full run (N at least the bar's denominator) publishes summary.json and the ConfigMap" {
+  run dry_runs 20 10
+  [ "$status" -eq 0 ]
+  grep -q -- "--summary-out $FIXTURE/.dryruns/summary.json" "$LOG"
+  [ "$(steps | tail -1)" = "make dryrun-summary-restore" ]
+}
+
+@test "DRYRUNS_PUBLISH=0 keeps even a full-size run as a smoke run" {
+  DRYRUNS_PUBLISH=0 run dry_runs 20 10
+  [ "$status" -eq 0 ]
+  ! grep -q -- "--summary-out $FIXTURE/.dryruns/summary.json" "$LOG"
+  ! grep -q 'dryrun-summary-restore' "$LOG"
 }

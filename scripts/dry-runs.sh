@@ -18,8 +18,10 @@
 # window. Needs autonomy `suggest` on the tracked branch. HolmesGPT is reached through a
 # port-forward this script starts and stops. Secrets stay in the environment (load_env): the
 # GitHub App, HOLMES_API_KEY, LITELLM_MASTER_KEY (to read the model ID behind the `rca` alias)
-# and the judge's key, read from Secret judge-llm. Results go to <main checkout>/.dryruns/;
-# summary.json is then applied as ConfigMap dryrun-summary (make dryrun-summary-restore).
+# and the judge's key, read from Secret judge-llm. Results go to <main checkout>/.dryruns/.
+# Only a full run (N at least PROMOTION_SCORE_BAR's denominator, or DRYRUNS_PUBLISH=1) writes
+# summary.json and applies it as ConfigMap dryrun-summary (make dryrun-summary-restore); a
+# smoke run (make dry-runs N=1 BATCH=1) writes summary-smoke-<ts>.json and publishes nothing.
 #
 # Exit codes: 1 generic, 2 usage, 3 wrong context, 4 wait timed out, 5 cluster lock held,
 # 6 autonomy not suggest or a test hook active; a batch's own code otherwise (3 drift,
@@ -134,11 +136,13 @@ free_port() {
 
 holmes_ready() { kill -0 "$PF_PID" 2>/dev/null && curl -sf --max-time 3 "http://127.0.0.1:$PF_PORT/readyz"; }
 
+# The port-forward starts with the cluster lock's fd closed: if this script is SIGKILLed (no EXIT
+# trap), an orphaned kubectl must not keep holding the lock.
 start_port_forward() {
   [[ "${KUBECONFIG:-}" == "$(_isolated_kubeconfig)" ]] || die "refusing kubectl: not the isolated kubeconfig"
   PF_PORT="$(free_port)"
   kubectl --context "$CLUSTER_CONTEXT" -n "$NS_AIOPS" port-forward "svc/${HOLMES_RELEASE}-holmes" \
-    --address 127.0.0.1 "${PF_PORT}:80" >"$RUN_DIR/port-forward.log" 2>&1 &
+    --address 127.0.0.1 "${PF_PORT}:80" >"$RUN_DIR/port-forward.log" 2>&1 {CLUSTER_LOCK_FD}>&- &
   PF_PID=$!
   poll "HolmesGPT on 127.0.0.1:$PF_PORT" 60 holmes_ready
 }
@@ -179,6 +183,19 @@ on_exit() {
   stop_port_forward
   if ((ABLATED)); then ablate_off || rc=1; fi
   exit "$rc"
+}
+
+# publishes N : only a full run becomes the published score (summary.json, ConfigMap
+# dryrun-summary, panel 4, promotion PRs): N at least PROMOTION_SCORE_BAR's denominator, or
+# DRYRUNS_PUBLISH=1. DRYRUNS_PUBLISH=0 keeps any run a smoke run.
+publishes() {
+  local bn="${PROMOTION_SCORE_BAR#*/}"
+  case "${DRYRUNS_PUBLISH:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [[ "$bn" =~ ^[1-9][0-9]*$ ]] || die "PROMOTION_SCORE_BAR is not M/N: '$PROMOTION_SCORE_BAR'"
+  (($1 >= bn))
 }
 
 # ------------------------------------------------------------------ the scratch clone
@@ -263,6 +280,12 @@ main() {
   if ((ABLATED)); then
     dryrun_py --summarize "$RUN_DIR" --batches "$batches" --ablation \
       --results-out "$DRYRUNS_DIR/results-ablation-$ts.json"
+    return 0
+  fi
+  if ! publishes "$n"; then
+    dryrun_py --summarize "$RUN_DIR" --batches "$batches" --results-out "$DRYRUNS_DIR/results-$ts.json" \
+      --summary-out "$DRYRUNS_DIR/summary-smoke-$ts.json" --model-temperature "$temp" --model-id "$model_id"
+    log_info "dry-runs: smoke run ($n < ${PROMOTION_SCORE_BAR#*/}): summary-smoke-$ts.json; summary.json and ConfigMap dryrun-summary untouched"
     return 0
   fi
   dryrun_py --summarize "$RUN_DIR" --batches "$batches" --results-out "$DRYRUNS_DIR/results-$ts.json" \

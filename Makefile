@@ -374,7 +374,7 @@ rebuild: ## Delete the cluster and build it again
 N ?= 20
 BATCH ?= 5
 .PHONY: dry-runs
-dry-runs: ## Score the agent: N=20 BATCH=5 dry runs on re-armed incidents (ABLATE_TIMELINE=1 for the ablation)
+dry-runs: ## Score the agent: N=20 BATCH=5 dry runs on re-armed incidents (fewer = smoke run, not published; ABLATE_TIMELINE=1 for the ablation)
 	@ABLATE_TIMELINE="$(ABLATE_TIMELINE)" $(ROOT)/scripts/dry-runs.sh "$(N)" "$(BATCH)"
 
 .PHONY: preflight
