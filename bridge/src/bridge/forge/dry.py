@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from .. import stagelog
-from .base import Forge, PullRequest, check_agent_branch
+from .base import Forge, PullRequest, PullRequestInfo, check_agent_branch
 
 log = logging.getLogger("bridge.forge")
 
@@ -62,3 +63,6 @@ class DryForge:
 
     async def list_open_agent_prs(self, app: str) -> list[PullRequest]:
         return await self.inner.list_open_agent_prs(app)
+
+    async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:
+        return await self.inner.list_agent_prs(app, state)

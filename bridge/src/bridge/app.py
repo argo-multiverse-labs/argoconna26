@@ -29,6 +29,7 @@ from .incidents import IncidentRegistry
 from .metrics import Metrics
 from .models import ArgoDegradedHook
 from .pipeline import Deps, Outcome, handle_incident, outcome_for_status
+from .reconcile import Reconciler
 
 log = logging.getLogger("bridge")
 
@@ -207,6 +208,16 @@ def create_app(
             asyncio.create_task(state.worker(), name="incident-worker"),
             asyncio.create_task(state.refresher(), name="status-refresh"),
         ]
+        if probes.forge is not None:
+            rec = Reconciler(
+                probes.forge,
+                metrics,
+                CDEventsEmitter(settings.cdevents_url, http=http),
+                app=settings.reconcile_app,
+                source=settings.bridge_event_source,
+                repo=settings.github_repo,
+            )
+            tasks.append(asyncio.create_task(rec.loop(settings.reconcile_interval_s), name="fix-pr-reconcile"))
         try:
             yield
         finally:

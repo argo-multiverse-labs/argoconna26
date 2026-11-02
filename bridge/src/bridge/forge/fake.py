@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from .base import (
     AGENT_BRANCH_PREFIX,
     ForgeConflict,
     ForgeNotFound,
     PullRequest,
+    PullRequestInfo,
     check_agent_branch,
 )
 
@@ -45,6 +47,7 @@ class FakeForge:
     fail_writes: BaseException | None = None
     commit_comments: list[tuple[str, str]] = field(default_factory=list)
     pr_comments: list[tuple[int, str]] = field(default_factory=list)
+    agent_prs: list[PullRequestInfo] = field(default_factory=list)
     opened: list[OpenedPR] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
 
@@ -122,3 +125,8 @@ class FakeForge:
         self._read("list_open_agent_prs", app)
         prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
         return [o.pr for o in self.opened if o.branch.startswith(prefix)]
+
+    async def list_agent_prs(self, app: str, state: Literal["open", "closed", "all"]) -> list[PullRequestInfo]:
+        self._read("list_agent_prs", app, state)
+        prefix = f"{AGENT_BRANCH_PREFIX}{app}-"
+        return [p for p in self.agent_prs if p.branch.startswith(prefix) and state in ("all", p.state)]

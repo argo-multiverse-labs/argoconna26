@@ -1,6 +1,13 @@
 """Forge interface and implementations."""
 
-from .base import Forge, ForgeConflict, ForgeError, ForgeNotFound, PullRequest
+from .base import (
+    Forge,
+    ForgeConflict,
+    ForgeError,
+    ForgeNotFound,
+    PullRequest,
+    PullRequestInfo,
+)
 from .dry import DryForge
 
-__all__ = ["DryForge", "Forge", "ForgeConflict", "ForgeError", "ForgeNotFound", "PullRequest"]
+__all__ = ["DryForge", "Forge", "ForgeConflict", "ForgeError", "ForgeNotFound", "PullRequest", "PullRequestInfo"]

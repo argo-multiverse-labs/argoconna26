@@ -54,3 +54,6 @@ class Settings(BaseSettings):
     # How often /status probes (GitHub token, HolmesGPT readiness) and the touchpoints
     # gauge (aiops/autonomy.yaml) are refreshed. The first refresh runs at startup.
     status_refresh_s: float = Field(default=60, gt=0, validation_alias=_env("STATUS_REFRESH_S"))
+    # The fix-PR outcome reconciler (Task 4.3a) polls agent/<app>-* PRs this often.
+    reconcile_app: str = Field(default="checkout", validation_alias=_env("RECONCILE_APP"))
+    reconcile_interval_s: float = Field(default=30, gt=0, validation_alias=_env("RECONCILE_INTERVAL_S"))
