@@ -20,7 +20,7 @@ spec:
         example.dev/tier: "1"
         slo.example.dev/success-rate: "99"
       annotations:
-        example.dev/config-version: "7"
+        example.dev/config-version: "8"
     spec:
       terminationGracePeriodSeconds: 2
       containers:
