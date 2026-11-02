@@ -105,10 +105,33 @@ make preflight                         # general
 make preflight RUNG=3 PREFLIGHT_ARGS="--armed"   # rung 3, with autonomy already at act
 ```
 
-`scripts/preflight.sh` exits 1 on any FAIL. Sections: tools, context, cluster, nodes, pods,
-endpoints, LLM, bridge test hooks, and for rung 3 the operator credential and CODEOWNERS.
+`scripts/preflight.sh [RUNG] [flags]` exits 1 on any FAIL. Without a rung it runs the platform
+sections: tools, context, cluster, nodes, pods (every namespace), endpoints, apps (every Argo CD
+Application Synced and Healthy), bridge (Deployment ready; `/status` has `github_token_ok`,
+`holmes_reachable` and `dry_forge` false), bridge test hooks, holmes (the read-only `can-i` checks),
+LLM and local (pre-commit hooks, one kube context, free disk).
+
+With a rung it adds:
+
+| Section | Rungs | Checks |
+|---------|-------|--------|
+| `fleet` | 1, 2, 3 | Every Ready checkout pod reports 2000, the 1 m success rate meets the SLO, no checkout pod has restarted; rungs 1 and 2 also need the stable image |
+| `github_admin` | 2, 3 (not under `--job-run`) | Repo settings, the three rulesets, the required `policy-check`, the team's access, the labels, the stage approver's membership (`STAGE_APPROVER_LOGIN` in `.env`) |
+| `github_runtime` | 1, 2, 3 | The operator credential, the autonomy level for the rung and mode, the promotion state, CODEOWNERS, the required `policy-check` when armed, the App's installation permissions |
+| `job` | 3 (not under `--job-run`) | The rung-3 unit is installed, current, with a PATH that resolves the pinned tools; no stale `job.env`; with `--armed`, `cluster_lock` is free |
+
+Promotion state: rung 2 needs autonomy `suggest` and exactly one open `propose` promotion PR;
+`3 --pre-promotion` needs `propose` and exactly one open `act` promotion PR; `3 --armed` needs `act`
+with `approved_by` recorded (an `admin-bypass` approval is a WARN so the slide can say so).
+
+Checks that need the promotion-board team or code-owner review (the tracked ruleset's code-owner
+rule, the team's repo permission, the stage approver's membership, the App's installation
+permissions) print `WARN ... (deferred to L5b)` until the full `scripts/github-ruleset.sh apply` has
+turned code-owner review on. From then on they are failures, with no flag to change. To make them
+hard earlier set `PREFLIGHT_L5B=1`; `PREFLIGHT_L5B=0` keeps them deferred.
+
 Flags: `--armed` (autonomy on the tracked branch must be `act`), `--pre-promotion` (must still be
-`propose`), `--job-run` and `--quiet`.
+`propose`), `--job-run` (GH_TOKEN is the credential; skips `github_admin` and `job`) and `--quiet`.
 
 Other checks:
 

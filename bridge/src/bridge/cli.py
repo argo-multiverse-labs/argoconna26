@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import json
 import os
 import re
 import sys
@@ -37,7 +38,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .github_auth import InstallationTokenProvider
+from .github_auth import GitHubAuthError, InstallationTokenProvider
 
 _RULESET_MSG = re.compile(r"repository rule violation|argoconna26-", re.IGNORECASE)
 _API = "https://api.github.com"
@@ -682,6 +683,48 @@ def _app_provider(http: httpx.AsyncClient, repo: str) -> InstallationTokenProvid
     )
 
 
+class AppCheckError(Exception):
+    pass
+
+
+@dataclass
+class AppCheckResult:
+    token_minted: bool
+    permissions: dict[str, str]
+
+
+async def run_app_check(provider: InstallationTokenProvider) -> AppCheckResult:
+    """Preflight github-runtime: does an installation token mint, and what does the App hold?
+
+    The token is minted and dropped; only the fact is reported. An unreadable installation
+    raises, so the caller cannot mistake it for an empty permission set.
+    """
+    try:
+        await provider.token()
+        minted = True
+    except GitHubAuthError:
+        minted = False
+    try:
+        perms = await provider.installation_permissions()
+    except GitHubAuthError as e:
+        raise AppCheckError(str(e)) from None
+    return AppCheckResult(token_minted=minted, permissions=perms)
+
+
+async def _app_check(args: argparse.Namespace) -> int:
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        provider = _app_provider(http, args.repo)
+        if provider is None:
+            return 2
+        try:
+            res = await run_app_check(provider)
+        except AppCheckError as e:
+            print(f"app-check failed: {e}", file=sys.stderr)
+            return 1
+    print(json.dumps({"token_minted": res.token_minted, "permissions": res.permissions}, sort_keys=True))
+    return 0
+
+
 async def _open_test_pr(args: argparse.Namespace) -> int:
     async with httpx.AsyncClient(timeout=30.0) as http:
         provider = _app_provider(http, args.repo)
@@ -751,9 +794,13 @@ def main(argv: list[str] | None = None) -> int:
     tm.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
     tm.add_argument("--pr", type=int, required=True)
     tm.add_argument("--rest", action="store_true", help="also try a REST merge")
+    ac = sub.add_parser("app-check", help="preflight: an installation token mints; print the installation's permissions as JSON")
+    ac.add_argument("--repo", default=os.environ.get("REPO_SLUG", ""), help="OWNER/NAME (default: $REPO_SLUG)")
     args = ap.parse_args(argv)
     if args.repo.count("/") != 1:
         ap.error("--repo must be OWNER/NAME")
+    if args.cmd == "app-check":
+        return asyncio.run(_app_check(args))
     if args.cmd == "spike-pr":
         return asyncio.run(_spike_pr(args))
     if args.cmd == "open-test-pr":

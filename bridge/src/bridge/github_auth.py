@@ -105,3 +105,21 @@ class InstallationTokenProvider:
             self._expires_at = datetime.fromisoformat(str(data["expires_at"]))
             log.info("installation token minted; expires %s", self._expires_at.isoformat())
             return self._token
+
+    async def installation_permissions(self) -> dict[str, str]:
+        """The permissions the App installation holds (read with the App JWT, not a token)."""
+        try:
+            r = await self._http.get(
+                f"{self._api}/app/installations/{self.installation_id}",
+                headers={
+                    "Authorization": f"Bearer {self.app_jwt()}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise GitHubAuthError(f"installation read failed: {type(exc).__name__}") from None
+        if r.status_code != 200:
+            raise GitHubAuthError(f"installation read returned {r.status_code}")
+        perms = r.json().get("permissions") or {}
+        return {str(k): str(v) for k, v in perms.items()}
