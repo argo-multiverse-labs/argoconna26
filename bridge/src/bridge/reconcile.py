@@ -2,10 +2,12 @@
 
 The App's webhook is inactive (GitHub cannot reach a laptop), so the bridge polls. Each pass
 lists the agent's PRs and *sets* `aiops_fix_prs_total{outcome}` from the full listing, so a
-restart never double counts. A PR closed unmerged is `rejected`, unless a label marks it as
-harness traffic (closed by `reset.sh`, or a policy negative test).
+restart never double counts. A merged PR is `merged` and a PR closed unmerged is `rejected`,
+unless a label marks it as harness traffic (`demo-reset`: closed by `reset.sh` or run by an e2e or
+rehearsal script; `policy-negative-test`), which counts as neither (O23).
 
-Events (`change.merged`, `agent_action(rejected)`) go out once per PR per process. The first
+Events (`change.merged`, `agent_action(rejected)`) go out once per PR per process. Every merge
+emits `change.merged`, labelled or not; an excluded rejection emits nothing. The first
 successful pass is a silent baseline: history already on the forge when the bridge starts is
 counted, not announced again.
 """
@@ -24,6 +26,10 @@ log = logging.getLogger("bridge.reconcile")
 
 #: PRs carrying one of these labels are not fix-PR outcomes.
 EXCLUDED_LABELS = frozenset({"demo-reset", "policy-negative-test"})
+
+
+def _excluded(pr: PullRequestInfo) -> bool:
+    return bool(EXCLUDED_LABELS & set(pr.labels))
 
 
 class Reconciler:
@@ -57,9 +63,13 @@ class Reconciler:
             log.warning("fix-PR reconcile failed: %s", type(exc).__name__)
             return
         merged = [p for p in prs if p.state == "closed" and p.merged]
-        rejected = [p for p in prs if p.state == "closed" and not p.merged and not EXCLUDED_LABELS & set(p.labels)]
-        self.metrics.set_fix_prs("merged", len(merged))
+        rejected = [p for p in prs if p.state == "closed" and not p.merged and not _excluded(p)]
+        # O23: harness PRs count as neither outcome. The label usually lands just after the merge,
+        # so a PR can be counted for a pass or two and then drop out; the gauge is set, not added to.
+        self.metrics.set_fix_prs("merged", sum(1 for p in merged if not _excluded(p)))
         self.metrics.set_fix_prs("rejected", len(rejected))
+        # change.merged goes out for every merge, labelled or not: the merge really landed on the
+        # tracked branch, and the label's timing must not decide whether the timeline shows it.
         fresh = [(p, True) for p in merged if p.number not in self.seen]
         fresh += [(p, False) for p in rejected if p.number not in self.seen]
         self.seen.update(p.number for p, _ in fresh)

@@ -87,6 +87,57 @@ async def test_reset_and_test_labels_excluded() -> None:
     assert all(e["subject"]["id"] != "https://forge.test/pull/1" for e in emitter.events)
 
 
+async def test_merged_pr_with_demo_reset_not_counted() -> None:
+    """O23: an e2e or rehearsal merge never counts on panel 4."""
+    _, metrics, _, rec = make([pr(1, "closed", merged=True, labels=("demo-reset",)), pr(2, "closed", merged=True)])
+    await rec.run_once()
+    assert counts(metrics) == (1, 0)
+
+
+async def test_merged_pr_with_policy_negative_test_not_counted() -> None:
+    _, metrics, _, rec = make([pr(1, "closed", merged=True, labels=("other", "policy-negative-test"))])
+    await rec.run_once()
+    assert counts(metrics) == (0, 0)
+
+
+async def test_merged_pr_labelled_later_drops_out_of_the_gauge() -> None:
+    """The e2e scripts label the PR after its merge assertions; the next pass must drop it."""
+    forge, metrics, _, rec = make([pr(1, "closed", merged=True), pr(2, "closed", merged=True)])
+    await rec.run_once()
+    assert counts(metrics) == (2, 0)
+    forge.agent_prs[1] = pr(2, "closed", merged=True, labels=("demo-reset",))
+    await rec.run_once()
+    assert counts(metrics) == (1, 0)
+
+
+async def test_rejected_pr_labelled_later_drops_out_of_the_gauge() -> None:
+    forge, metrics, _, rec = make([pr(1, "closed")])
+    await rec.run_once()
+    assert counts(metrics) == (0, 1)
+    forge.agent_prs[0] = pr(1, "closed", labels=("demo-reset",))
+    await rec.run_once()
+    assert counts(metrics) == (0, 0)
+
+
+async def test_change_merged_emitted_once_whether_or_not_labelled() -> None:
+    """A merge is a real change on the tracked branch, so the timeline gets change.merged either
+    way: the label only keeps it off panel 4's count. Labelling after the merge (the usual order)
+    must not emit it a second time, and a PR already labelled when first seen still emits once."""
+    forge, metrics, emitter, rec = make([pr(1), pr(2)])
+    await rec.run_once()  # baseline
+    forge.agent_prs[0] = pr(1, "closed", merged=True)
+    await rec.run_once()
+    assert emitter.types() == [events.CHANGE_MERGED]
+    assert counts(metrics) == (1, 0)
+    forge.agent_prs[0] = pr(1, "closed", merged=True, labels=("demo-reset",))
+    forge.agent_prs[1] = pr(2, "closed", merged=True, labels=("demo-reset",))  # labelled before we looked
+    await rec.run_once()
+    await rec.run_once()
+    assert counts(metrics) == (0, 0)
+    assert emitter.types() == [events.CHANGE_MERGED, events.CHANGE_MERGED]
+    assert [e["subject"]["id"] for e in emitter.events] == ["https://forge.test/pull/1", "https://forge.test/pull/2"]
+
+
 async def test_restart_does_not_double_count() -> None:
     forge, metrics, _, rec = make([pr(1, "closed", merged=True), pr(2, "closed")])
     await rec.run_once()

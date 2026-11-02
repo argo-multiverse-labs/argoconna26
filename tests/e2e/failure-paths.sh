@@ -11,6 +11,9 @@
 #   + demote    make demote -> level suggest on the tracked branch -> disarm, rearm -> the bridge
 #               logs "▸ autonomy: suggest" and comments on the cause commit, no PR
 #
+# O23: no PR from this run stays on Grafana panel 4. Case 3 labels its rejected PR demo-reset, and
+# the run ends by checking the bridge's merged and rejected counts equal the counts it started with.
+#
 # The test hooks live in the optional Secret bridge-env (Argo CD self-heals the Deployment, so its
 # env can't be edited). Each case deletes the Secret and the bridge pod again, then `make fix`,
 # and waits Healthy. The run ends at autonomy suggest, disarmed at CHECKOUT_STABLE_TAG.
@@ -146,6 +149,17 @@ stage_line_seen() { # SINCE LINE
     fail "the bridge did not log '$2'"
   }
   record "stage: $2"
+}
+
+# ---------------------------------------------------------------- panel 4 (O23)
+fix_pr_counts() { # -> "merged M rejected R" as the bridge reports them
+  printf 'merged %s rejected %s' "$(bridge_metric 'aiops_fix_prs_total{outcome="merged"}')" \
+    "$(bridge_metric 'aiops_fix_prs_total{outcome="rejected"}')"
+}
+
+fix_pr_counts_are() { # MERGED REJECTED
+  bridge_metric_is 'aiops_fix_prs_total{outcome="merged"}' "$1" \
+    && bridge_metric_is 'aiops_fix_prs_total{outcome="rejected"}' "$2"
 }
 
 # ---------------------------------------------------------------- start state
@@ -298,6 +312,12 @@ main() {
   if k get secret bridge-env -n "$NS_AIOPS" >/dev/null 2>&1; then clear_bridge_env; fi
   close_open_agent_prs demo-reset
   ensure_propose
+  local merged_start rejected_start
+  merged_start="$(merged_fix_prs_on_github checkout)"
+  rejected_start="$(rejected_fix_prs_on_github checkout)"
+  wait_for "the bridge's fix-PR counts equal GitHub's (merged $merged_start, rejected $rejected_start)" 90 \
+    fix_pr_counts_are "$merged_start" "$rejected_start" \
+    || fail "the bridge's fix-PR counts are $(fix_pr_counts), GitHub says merged $merged_start rejected $rejected_start"
 
   for c in "${cases[@]}"; do
     case "$c" in
@@ -310,6 +330,9 @@ main() {
   step "finish: disarm --image $CHECKOUT_STABLE_TAG"
   run_make disarm IMAGE="$CHECKOUT_STABLE_TAG" >/dev/null
   wait_for "every Application Synced and Healthy" 180 all_apps_synced_healthy
+  wait_for "panel 4 counts back to the start (merged $merged_start, rejected $rejected_start)" 90 \
+    fix_pr_counts_are "$merged_start" "$rejected_start" \
+    || fail "the bridge's fix-PR counts are $(fix_pr_counts), expected merged $merged_start rejected $rejected_start (O23)"
   record "failure-paths: PASS (${cases[*]}), level $(tracked_file "$AUTONOMY_FILE" | yq -r .level)"
 }
 

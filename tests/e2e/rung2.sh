@@ -15,14 +15,21 @@
 #     footer and a root-cause section within the projector caps; no open agent PR at the end
 #   - merge -> Argo synced at the merge commit <= MERGE_SYNC_MAX_S (30 s), a new pod hash, Healthy
 #   - the timeline has the bridge's change.created for checkout and the incident is resolved
-#   - aiops_fix_prs_total{outcome="merged"} rose by one (the reconciler, Task 4.3a), and
-#     Grafana panel 4's merged-count query returns the same value
+#   - aiops_fix_prs_total{outcome="merged"} rose by exactly one over the start count (the
+#     reconciler, Task 4.3a), and Grafana panel 4's merged-count query returns the same value;
+#     then the fix PR is labelled demo-reset (O23: test PRs never stay on panel 4) and both the
+#     bridge and panel 4 fall back to the start count
 #   - the Task 3.16 budget: T0 -> PR <= 150 s, merge -> Healthy <= 90 s, and the machine total
 #     plus the budgeted human dwell (HUMAN_DWELL_S, 90 s) <= 330 s (spec §8, 5.5 min)
 #
 # The fix PR is merged by this script with `gh pr merge --merge` (Luke's gh login). With
 # RUNG2_MERGE=browser it waits (up to BROWSER_MERGE_WAIT_S) for someone to merge it in the
 # browser instead, then measures from GitHub's mergedAt the same way.
+#
+# RUNG2_KEEP_COUNT=1 leaves the fix PR unlabelled, so it stays counted on panel 4 (for the panel-4
+# screenshot). Label it afterwards, or the next run's start count includes it:
+#   gh api -X POST repos/<slug>/issues/<pr>/labels -f 'labels[]=demo-reset'
+# A failed run labels a merged fix PR on its way out unless RUNG2_KEEP_COUNT=1.
 #
 # Timings: one "rung2:" line on stdout and a row in $EVIDENCE_DIR/slice-4/rung2-runs.tsv
 # (EVIDENCE_DIR from .env or the caller, default <main checkout>/.evidence).
@@ -71,6 +78,10 @@ machine() { sed -n "s/^$1: //p" <<<"$2" | tail -n1; } # KEY TEXT
 
 commit_time() { _og show -s --format=%ct "$1"; }
 
+label_demo_reset() { # PR : REST, not `gh pr edit --add-label` (it fails on the classic-projects GraphQL field)
+  gh api -X POST "repos/$REPO_SLUG/issues/$1/labels" -f "labels[]=demo-reset" >/dev/null
+}
+
 delete_remote_branch() { # BRANCH : best effort, through the API with the operator's gh login
   if gh api -X DELETE "repos/$REPO_SLUG/git/refs/heads/$1" >/dev/null 2>&1; then
     log_info "rung2: deleted branch $1"
@@ -93,8 +104,7 @@ close_open_agent_prs() { # leftovers would make the bridge comment instead of op
   local n branch
   for n in $(open_agent_prs checkout); do
     branch="$(gh pr view "$n" --repo "$REPO_SLUG" --json headRefName --jq .headRefName)"
-    # REST, not `gh pr edit --add-label`: that fails on the classic-projects GraphQL field.
-    gh api -X POST "repos/$REPO_SLUG/issues/$n/labels" -f "labels[]=demo-reset" >/dev/null
+    label_demo_reset "$n"
     gh pr close "$n" --repo "$REPO_SLUG" --comment "closed by tests/e2e/rung2.sh (demo reset)" >/dev/null
     log_warn "rung2: closed leftover agent PR $n"
     delete_remote_branch "$branch"
@@ -107,6 +117,13 @@ on_exit() {
   if ((rc != 0)) && [[ -n "${RUN_LOG:-}" ]] && [[ "${RUNG2_NO_CLEANUP:-0}" != "1" ]]; then
     log_warn "rung2: failed (exit $rc); closing this run's open PRs and disarming to $CHECKOUT_STABLE_TAG"
     (close_open_agent_prs) || true
+    if [[ -n "${FIX_PR:-}" && "${RUNG2_KEEP_COUNT:-0}" != 1 ]] && pr_state_is "$FIX_PR" MERGED; then
+      if (label_demo_reset "$FIX_PR"); then
+        log_warn "rung2: labelled merged fix PR $FIX_PR demo-reset (O23)"
+      else
+        log_error "rung2: could not label fix PR $FIX_PR demo-reset; label it by hand"
+      fi
+    fi
     if [[ -n "${PROMO_PR:-}" ]] && pr_state_is "$PROMO_PR" OPEN; then
       gh pr close "$PROMO_PR" --repo "$REPO_SLUG" --comment "closed by tests/e2e/rung2.sh (failed run)" >/dev/null || true
     fi
@@ -120,8 +137,9 @@ on_exit() {
 # ---------------------------------------------------------------- main
 main() {
   (($# == 0)) || die "usage: tests/e2e/rung2.sh   (RUNG2_MERGE=browser to merge the fix PR by hand)"
-  local merge_mode="${RUNG2_MERGE:-script}"
+  local merge_mode="${RUNG2_MERGE:-script}" keep_count="${RUNG2_KEEP_COUNT:-0}"
   [[ "$merge_mode" == script || "$merge_mode" == browser ]] || die "RUNG2_MERGE must be script or browser"
+  [[ "$keep_count" == 0 || "$keep_count" == 1 ]] || die "RUNG2_KEEP_COUNT must be 0 or 1"
   load_env
   require_context
   ROOT="$(main_root)"
@@ -150,6 +168,14 @@ main() {
   lower_to_suggest
   close_open_agent_prs
   run_make disarm IMAGE="$CHECKOUT_STABLE_TAG" >/dev/null
+  # O23: earlier test PRs carry demo-reset, so this is usually 0; the bridge must agree before the
+  # run, or "rose by one" below proves nothing.
+  local merged_series='aiops_fix_prs_total{outcome="merged"}' merged_start
+  merged_start="$(merged_fix_prs_on_github checkout)"
+  wait_for "the bridge's merged count equals GitHub's ($merged_start)" 90 \
+    bridge_metric_is "$merged_series" "$merged_start" \
+    || fail "the bridge's merged count is $(bridge_metric "$merged_series"), GitHub says $merged_start"
+  log_info "rung2: merged fix PRs at the start: $merged_start"
 
   step "promotion PR to propose (fresh branch, Δ25)"
   local out head
@@ -198,11 +224,12 @@ main() {
   step "wait for the agent's fix PR"
   wait_for "a PR from $BOT_LOGIN on agent/checkout-* created after T0" "$PR_WAIT_S" have_agent_pr_since "$t0" checkout \
     || { bridge_status >&2; fail "no fix PR within ${PR_WAIT_S}s"; }
-  local prs n fix_pr fix_url fix_branch t_pr body
+  local prs n fix_url fix_branch t_pr body
   prs="$(agent_prs_since "$t0" checkout)"
   n="$(grep -c . <<<"$prs")"
   ((n == 1)) || fail "$n fix PRs from $BOT_LOGIN after T0, expected exactly one"
-  fix_pr="$(jq -r .number <<<"$prs")"
+  FIX_PR="$(jq -r .number <<<"$prs")"
+  local fix_pr="$FIX_PR"
   fix_url="$(jq -r .url <<<"$prs")"
   fix_branch="$(jq -r .branch <<<"$prs")"
   t_pr="$(jq -r .created <<<"$prs")"
@@ -254,15 +281,32 @@ main() {
     || fail "the incident is not resolved on /incidents"
 
   step "outcome counted (Task 4.3a) and shown on Grafana panel 4"
-  # The reconciler sets the count from the full PR listing, so it must equal GitHub's own count.
+  # The reconciler sets the count from the full PR listing, so it must equal GitHub's own count,
+  # and this run's merge is the only new one.
   local want panel4='sum(aiops_fix_prs_total{outcome="merged"}) or vector(0)'
   want="$(merged_fix_prs_on_github checkout)"
-  ((want >= 1)) || fail "GitHub shows no merged fix PR"
-  wait_for "the bridge's aiops_fix_prs_total{outcome=merged} = $want" 90 \
-    bridge_metric_is 'aiops_fix_prs_total{outcome="merged"}' "$want" || fail "the bridge's merged count is not $want"
+  ((want == merged_start + 1)) || fail "GitHub shows $want merged fix PRs, expected $merged_start + 1"
+  wait_for "the bridge's $merged_series = $want" 90 \
+    bridge_metric_is "$merged_series" "$want" || fail "the bridge's merged count is not $want"
   wait_for "Grafana panel 4 merged count = $want" 90 grafana_value_is "$panel4" "$want" \
     || fail "Grafana panel 4 merged count is $(grafana_prom_value "$panel4"), expected $want"
-  log_info "rung2: merged fix PRs: $want (GitHub, bridge, Grafana panel 4)"
+  log_info "rung2: merged fix PRs: $merged_start -> $want (GitHub, bridge, Grafana panel 4)"
+
+  if [[ "$keep_count" == 1 ]]; then
+    log_warn "rung2: RUNG2_KEEP_COUNT=1: fix PR $fix_pr stays counted on panel 4. After the screenshot:"
+    log_warn "  gh api -X POST repos/$REPO_SLUG/issues/$fix_pr/labels -f 'labels[]=demo-reset'"
+  else
+    step "O23: label the fix PR demo-reset; panel 4 back to $merged_start"
+    label_demo_reset "$fix_pr" || fail "could not label fix PR $fix_pr demo-reset"
+    [[ "$(merged_fix_prs_on_github checkout)" == "$merged_start" ]] \
+      || fail "GitHub still counts $(merged_fix_prs_on_github checkout) merged fix PRs after the label"
+    wait_for "the bridge's $merged_series back to $merged_start" 90 \
+      bridge_metric_is "$merged_series" "$merged_start" \
+      || fail "the bridge's merged count is $(bridge_metric "$merged_series"), expected $merged_start after the label"
+    wait_for "Grafana panel 4 merged count back to $merged_start" 90 grafana_value_is "$panel4" "$merged_start" \
+      || fail "Grafana panel 4 merged count is $(grafana_prom_value "$panel4"), expected $merged_start after the label"
+    log_info "rung2: fix PR $fix_pr labelled demo-reset; merged count back to $merged_start (bridge, panel 4)"
+  fi
   local left
   left="$(open_agent_prs checkout | tr '\n' ' ')"
   [[ -z "$left" ]] || fail "open agent PRs left for checkout at the end: $left(one open agent PR per app)"
@@ -273,7 +317,7 @@ main() {
   ((rearm_s >= 0)) || rearm_s=0
   machine_total=$((rec_s + rearm_s + t0_pr + merge_healthy))
   total=$((machine_total + HUMAN_DWELL_S))
-  summary="rung2: run=$run_id merge=$merge_mode cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr record_approval_s=$rec_s rearm_s=$rearm_s t0_to_degraded_s=$t0_deg t0_to_pr_s=$t0_pr degraded_to_pr_s=$deg_pr merge_to_synced_s=$merge_synced synced_to_healthy_s=$synced_healthy merge_to_healthy_s=$merge_healthy machine_total_s=$machine_total with_dwell_s=$total approved_by=$approved"
+  summary="rung2: run=$run_id merge=$merge_mode keep_count=$keep_count cause=${cause:0:7} promo_pr=$PROMO_PR fix_pr=$fix_pr record_approval_s=$rec_s rearm_s=$rearm_s t0_to_degraded_s=$t0_deg t0_to_pr_s=$t0_pr degraded_to_pr_s=$deg_pr merge_to_synced_s=$merge_synced synced_to_healthy_s=$synced_healthy merge_to_healthy_s=$merge_healthy machine_total_s=$machine_total with_dwell_s=$total approved_by=$approved"
   printf '%s\n' "$summary" | tee -a "$RUN_LOG"
   [[ -s "$evdir/rung2-runs.tsv" ]] \
     || printf 'run\tmerge\tcause\tpromo_pr\tfix_pr\trecord_approval_s\trearm_s\tt0_to_degraded_s\tt0_to_pr_s\tdegraded_to_pr_s\tmerge_to_synced_s\tsynced_to_healthy_s\tmerge_to_healthy_s\tmachine_total_s\twith_dwell_s\tfix_pr_url\n' >"$evdir/rung2-runs.tsv"
