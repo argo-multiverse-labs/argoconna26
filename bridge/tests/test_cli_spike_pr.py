@@ -157,3 +157,30 @@ async def test_unknown_scenario_refused_before_any_http(_no_unmocked_http) -> No
     with pytest.raises(SpikeError, match="unknown scenario"):
         await _run(scenario="something-else")
     assert not _no_unmocked_http.calls
+
+
+async def test_autonomy_raise_records_the_rest_merge_message(_no_unmocked_http) -> None:
+    _mock_raise(_no_unmocked_http)
+    res = await _run(scenario="autonomy-raise")
+    assert res.rest_merge_message == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("status", "message", "refused"),
+    [
+        (405, "Repository rule violations found\n\nWaiting on code owner review from org/promotion-board.", True),
+        (405, "At least 1 approving review is required by reviewers with write access.", True),
+        # the required check refuses too, but that proves nothing about code-owner review
+        (405, 'Required status check "policy-check" is expected.', False),
+        (405, "Base branch was modified. Review and try the merge again.", False),
+        (200, "Pull Request successfully merged", False),
+        (None, "", False),
+    ],
+)
+def test_autonomy_raise_counts_only_a_code_owner_refusal(status, message, refused) -> None:
+    from bridge.cli import SpikeResult, autonomy_raise_refused
+
+    res = SpikeResult(number=9, url="u", branch="b", auto_merge_enabled=True, auto_merge_error="",
+                      merged=False, final_state="OPEN", mergeable_state="blocked", waited_s=0,
+                      rest_merge_status=status, rest_merge_message=message)
+    assert autonomy_raise_refused(res) is refused

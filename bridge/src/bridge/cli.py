@@ -224,6 +224,23 @@ class SpikeResult:
     waited_s: float
     branch_deleted: bool = False
     rest_merge_status: int | None = None
+    rest_merge_message: str = ""
+
+
+# GitHub's refusal text when a review rule blocks the merge (code-owner review, or a required
+# approving review). A required-check refusal ("Required status check ... is expected") or any
+# other 4xx proves nothing about code-owner review.
+_REVIEW_REFUSAL = re.compile(r"code owner|approving review|review required|required review", re.IGNORECASE)
+
+
+def autonomy_raise_refused(res: SpikeResult) -> bool:
+    """True only when the App's REST merge of the autonomy raise was refused for review."""
+    return (
+        res.rest_merge_status is not None
+        and 400 <= res.rest_merge_status < 500
+        and not res.merged
+        and bool(_REVIEW_REFUSAL.search(res.rest_merge_message or ""))
+    )
 
 
 async def run_spike_pr(
@@ -309,10 +326,15 @@ async def run_spike_pr(
         err = "; ".join(e.get("message", "") for e in body.get("errors", [])) or f"HTTP {g.status_code}"
 
     rest_status: int | None = None
+    rest_message = ""
     if raise_level:
         # The App's own merge must be refused too (code-owner review), not only auto-merge.
         rm = await gh.call("PUT", f"/pulls/{number}/merge", json={"merge_method": "merge"})
         rest_status = rm.status_code
+        try:
+            rest_message = str(rm.json().get("message", ""))
+        except ValueError:
+            rest_message = rm.text[:300]
         wait = False
 
     merged, state, mstate, waited = False, "OPEN", "", 0.0
@@ -333,7 +355,7 @@ async def run_spike_pr(
     if state in ("MERGED", "CLOSED"):
         d = await gh.call("DELETE", f"/git/refs/heads/{quote(branch, safe='/')}")
         deleted = d.status_code < 300
-    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited, deleted, rest_status)
+    return SpikeResult(number, url, branch, enabled, err, merged, state, mstate, waited, deleted, rest_status, rest_message)
 
 
 # --- open-test-pr / test-pr-try-merge: policy-negative e2e (Task 5.6 Step 2) -----------------
@@ -692,9 +714,11 @@ async def _spike_pr(args: argparse.Namespace) -> int:
     print(f"head_branch_deleted={res.branch_deleted}")
     if res.rest_merge_status is not None:
         print(f"rest_merge_status={res.rest_merge_status}")
+        print(f"rest_merge_message={' '.join(res.rest_merge_message.split()) or '-'}")
     if args.scenario == "autonomy-raise":
-        refused = res.rest_merge_status is not None and 400 <= res.rest_merge_status < 500
-        return 0 if refused and not res.merged else 1
+        # Pass only when GitHub names a review rule: the spike ruleset also requires the
+        # policy-check, whose own refusal would otherwise pass for the wrong reason.
+        return 0 if autonomy_raise_refused(res) else 1
     return 0 if res.merged or args.no_wait else 1
 
 
