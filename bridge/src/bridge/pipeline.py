@@ -456,7 +456,8 @@ class _Run:
 
     async def suggest_target(self, sha: str) -> tuple[str, int | None]:
         try:
-            prs = await self.deps.forge.prs_for_commit(sha)
+            # Only the change's own PR: an open PR that merely contains the commit is not it.
+            prs = await self.deps.forge.prs_for_commit(sha, self.s.tracked_branch)
         except ForgeError:
             prs = []
         return sha, (prs[0] if prs else None)
@@ -692,7 +693,8 @@ class _Run:
             return await self.finish("auto_merge_enabled", pr.url, None)
         if result == "enabled":
             self.stage("act", "auto-merge on")
-            return await self.finish("auto_merge_enabled", pr.url, None)
+            outcome = await self.finish("auto_merge_enabled", pr.url, None)
+            return await self.catch_up(pr, method, outcome)
 
         self.stage("act", "waiting on policy")
         status = await self.wait_for_check(pr)
@@ -709,6 +711,40 @@ class _Run:
         text = pr_sections()["policy"]["no_result"].format(minutes=minutes)
         url = await self.post(forge.comment_on_pr(pr.number, text))
         return await self.finish("policy_failed", url, f"check_{status}")
+
+    async def catch_up(self, pr: PullRequest, method: MergeMethod, enabled: Outcome) -> Outcome:
+        """GitHub's auto-merge once took 3 minutes after the check passed. Once the check has
+        passed and `act_automerge_grace_s` has gone by, merge the PR if GitHub still hasn't.
+        Never on a dry run, and never without a real `success`."""
+        grace = self.s.act_automerge_grace_s
+        if grace <= 0 or self.s.dry_forge:
+            return enabled
+        if await self.wait_for_check(pr) != "success":
+            return enabled  # a failure is the reconciler's; a missing check stays with GitHub
+        await self.deps.sleep(grace)
+        forge = self.deps.forge
+        try:
+            if await forge.pr_merged(pr.number):
+                return enabled
+        except ForgeError as exc:
+            log.warning("incident %s: merge state unknown: %s", self.hook.key, exc)
+            return enabled
+        self.stage("act", "auto-merge late")
+        registry = self.deps.registry
+        registry.announce_merge(pr.number)
+        try:
+            sha = await forge.merge_pr(pr, method)
+        except ForgeError as exc:
+            registry.forget_merge(pr.number)
+            # GitHub merging first is the expected race, not a failure.
+            log.info("incident %s: catch-up merge not made: %s", self.hook.key, exc)
+            return enabled
+        self.stage("act", "merged")
+        merged = events.change_merged(
+            pr.url, sha, self.s.bot_login, source=self.s.bridge_event_source, repo=self.s.github_repo,
+            app=self.hook.app, now=self.deps.clock(),
+        )
+        return await self.finish("merged", pr.url, None, merged)
 
     async def merge_method(self) -> MergeMethod:
         """The repo's allowed method, preferring `merge`; `merge` when the settings can't be read."""

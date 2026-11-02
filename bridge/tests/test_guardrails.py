@@ -303,3 +303,48 @@ def test_repo_slug_beats_github_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPO_SLUG", "argo-multiverse-labs/argoconna26")
     monkeypatch.setenv("GITHUB_REPO", "someone/else")
     assert Settings().github_repo == "argo-multiverse-labs/argoconna26"
+
+
+# -- a full SHA the model mistyped (rung-3 run 1: last 3 hex digits wrong) -------------------
+
+
+async def test_mistyped_full_sha_snaps_to_unique_history_revision(settings_: Settings) -> None:
+    typo = PREVIOUS[:-3] + "000"
+    assert typo != PREVIOUS
+    rca, refusals = await evaluate(make_rca(cause_commit_sha=typo), make_hook(), make_forge(), settings_)
+    assert refusals == []
+    assert rca.cause_commit_sha == PREVIOUS
+
+
+async def test_mistyped_full_sha_needs_seven_shared_characters(settings_: Settings) -> None:
+    typo = PREVIOUS[:6] + "0" * 34
+    _, refusals = await evaluate(make_rca(cause_commit_sha=typo), make_hook(), make_forge(), settings_)
+    assert reasons(refusals) == ["cause_not_in_history"]
+
+
+async def test_mistyped_full_sha_ambiguous_prefix_refused(settings_: Settings) -> None:
+    twin = PREVIOUS[:10] + "f" * 30
+    hook = ArgoDegradedHook.model_validate(
+        hook_body(
+            revision=SYNCED,
+            sync_revision=SYNCED,
+            history=[
+                {"id": 1, "revision": PREVIOUS, "deployedAt": "2026-11-01T10:00:00Z"},
+                {"id": 2, "revision": twin, "deployedAt": "2026-11-01T11:00:00Z"},
+                {"id": 3, "revision": SYNCED, "deployedAt": "2026-11-02T10:00:00Z"},
+            ],
+        )
+    )
+    typo = PREVIOUS[:10] + "0" * 30
+    _, refusals = await evaluate(make_rca(cause_commit_sha=typo), hook, make_forge(), settings_)
+    assert reasons(refusals) == ["cause_not_in_history"]
+
+
+async def test_full_sha_github_knows_is_not_snapped(settings_: Settings) -> None:
+    """A real commit outside the history keeps the ancestor check; no prefix guess replaces it."""
+    lookalike = PREVIOUS[:12] + UNRELATED[12:]
+    forge = make_forge()
+    forge.commits.append(lookalike)
+    forge.ancestors[SYNCED].add(lookalike)
+    _, refusals = await evaluate(make_rca(cause_commit_sha=lookalike), make_hook(), forge, settings_)
+    assert reasons(refusals) == ["cause_not_in_history"]

@@ -169,6 +169,26 @@ async def test_prs_for_commit(respx_mock, forge: GitHubForge) -> None:
     assert await forge.prs_for_commit(SHA) == [12, 15]
 
 
+@respx.mock(assert_all_mocked=True)
+async def test_prs_for_commit_merged_into_branch(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/commits/{SHA}/pulls").mock(
+        return_value=httpx.Response(200, json=[
+            {"number": 12, "merged_at": "2026-11-02T05:00:00Z", "base": {"ref": "build/demo"}},
+            {"number": 13, "merged_at": None, "base": {"ref": "build/demo"}},  # an open test PR
+            {"number": 14, "merged_at": "2026-11-02T05:00:00Z", "base": {"ref": "main"}},
+        ])
+    )
+    assert await forge.prs_for_commit(SHA, "build/demo") == [12]
+
+
+@respx.mock(assert_all_mocked=True)
+async def test_pr_merged(respx_mock, forge: GitHubForge) -> None:
+    respx_mock.get(f"{BASE}/pulls/7").mock(return_value=httpx.Response(200, json={"merged": True}))
+    respx_mock.get(f"{BASE}/pulls/8").mock(return_value=httpx.Response(200, json={"merged": False}))
+    assert await forge.pr_merged(7) is True
+    assert await forge.pr_merged(8) is False
+
+
 @respx.mock(assert_all_mocked=True, assert_all_called=False)
 async def test_dry_forge_reads_through_and_never_writes(respx_mock, caplog: pytest.LogCaptureFixture) -> None:
     encoded = base64.b64encode(b"level: suggest\n").decode()

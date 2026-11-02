@@ -49,8 +49,8 @@ class DryForge:
     async def commit_changed_key(self, sha: str, path: str, key: str) -> bool:
         return await self.inner.commit_changed_key(sha, path, key)
 
-    async def prs_for_commit(self, sha: str) -> list[int]:
-        return await self.inner.prs_for_commit(sha)
+    async def prs_for_commit(self, sha: str, merged_into: str | None = None) -> list[int]:
+        return await self.inner.prs_for_commit(sha, merged_into)
 
     async def commit_title(self, sha: str) -> str | None:
         return await self.inner.commit_title(sha)
@@ -93,6 +93,9 @@ class DryForge:
         # "enabled" ends the act flow here: a dry run never polls a check or merges.
         self._skip("enable auto-merge", f"pr {pr.number}")
         return "enabled"
+
+    async def pr_merged(self, number: int) -> bool:
+        return await self.inner.pr_merged(number)
 
     async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
         return self._skip("merge", f"pr {pr.number}")

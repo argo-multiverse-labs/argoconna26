@@ -30,6 +30,7 @@ Reason = Literal[
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHORT_SHA = re.compile(r"^[0-9a-f]{7,39}$")
+_MIN_SNAP = 7  # characters a mistyped full SHA must share with a history revision
 
 
 @dataclass(frozen=True)
@@ -68,11 +69,28 @@ def _short(sha: str) -> str:
     return sha[:7] if sha else "(empty)"
 
 
+def _snap_to_history(sha: str, history: list[str]) -> str | None:
+    """A full SHA that GitHub doesn't know, matched to the one Argo history revision it shares
+    the longest prefix (7+ characters) with. Models mistype the tail of a 40-character SHA."""
+    def shared(rev: str) -> int:
+        return next((i for i, (a, b) in enumerate(zip(sha, rev, strict=True)) if a != b), len(sha))
+
+    scored = sorted({rev: shared(rev) for rev in history if _FULL_SHA.match(rev)}.items(), key=lambda kv: -kv[1])
+    if not scored or scored[0][1] < _MIN_SNAP:
+        return None
+    if len(scored) > 1 and scored[1][1] >= _MIN_SNAP:
+        return None  # two candidates: refuse rather than guess
+    log.warning("cause %s is unknown; using history revision %s", _short(sha), _short(scored[0][0]))
+    return scored[0][0]
+
+
 async def _resolve_cause(raw_sha: str, hook: ArgoDegradedHook, forge: Forge) -> str | None:
     sha = raw_sha.strip().lower()
     history = [h.revision.lower() for h in hook.history]
     if _FULL_SHA.match(sha):
-        return sha
+        if sha in history or await forge.resolve_sha(sha):
+            return sha
+        return _snap_to_history(sha, history)
     if not _SHORT_SHA.match(sha):
         return None
     local = sorted({rev for rev in history if rev.startswith(sha)})

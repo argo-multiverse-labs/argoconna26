@@ -437,9 +437,15 @@ async def test_propose_end_to_end_opens_pr(respx_mock, settings: Settings, stage
 async def test_act_end_to_end_enables_auto_merge(respx_mock, settings: Settings, stage_lines) -> None:
     """Task 5.4: at `act`, the same one-commit PR, then `enablePullRequestAutoMerge` over GraphQL
     with the PR's node id and the repo's merge method. GitHub merges once the required check
-    passes, so the bridge makes no REST merge call and reads no check run here."""
+    passes; the bridge reads the check, waits the grace period, sees the merge and leaves it."""
     envelope = recorded("rca_toolcall_timeline.json")
     envelope["analysis"] = json.dumps(GOOD_ANALYSIS)
+    # Before World, whose catch-all answers 404 for any other /commits path.
+    checks = respx_mock.get(url__regex=rf"^{REPO_API}/commits/[0-9a-f]{{40}}/check-runs").mock(
+        return_value=httpx.Response(200, json={"check_runs": [
+            {"id": 1, "name": "policy-check", "status": "completed", "conclusion": "success", "app": {"id": 15368}}
+        ]})
+    )
     world = World(respx_mock, httpx.Response(200, json=envelope))
     respx_mock.get(f"{REPO_API}/contents/aiops/autonomy.yaml", params={"ref": BRANCH}).mock(
         return_value=httpx.Response(200, json=content(AUTONOMY.replace("level: suggest", "level: act")))
@@ -475,9 +481,9 @@ async def test_act_end_to_end_enables_auto_merge(respx_mock, settings: Settings,
         )
     )
     merge = respx_mock.put(url__regex=rf"^{REPO_API}/pulls/\d+/merge$").mock(return_value=httpx.Response(200))
-    checks = respx_mock.get(url__regex=rf"^{REPO_API}/commits/[0-9a-f]{{40}}/check-runs").mock(
-        return_value=httpx.Response(200, json={"check_runs": []})
-    )
+    # GitHub's auto-merge has merged it by the end of the grace period, so the bridge doesn't.
+    state = respx_mock.get(f"{REPO_API}/pulls/7").mock(return_value=httpx.Response(200, json={"merged": True}))
+    settings.act_automerge_grace_s = 0.01
 
     result = await run_incident(settings)
 
@@ -492,7 +498,7 @@ async def test_act_end_to_end_enables_auto_merge(respx_mock, settings: Settings,
     assert "enablePullRequestAutoMerge" in sent["query"]
     assert sent["variables"] == {"id": "PR_7", "method": "MERGE"}
     assert call.request.headers["Authorization"] == f"Bearer {INSTALLATION_TOKEN}"
-    assert merge.call_count == 0 and checks.call_count == 0
+    assert merge.call_count == 0 and checks.call_count == 1 and state.call_count == 1
     assert world.posted() == [] and world.pr_comments.call_count == 0
     actions = [e["customData"].get("action") for e in world.events() if "action" in e.get("customData", {})]
     assert actions[-2:] == ["pr_opened", "auto_merge_enabled"]

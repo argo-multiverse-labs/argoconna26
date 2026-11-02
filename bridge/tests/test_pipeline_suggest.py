@@ -632,3 +632,13 @@ def test_timeline_label_given_twice_is_stripped_twice() -> None:
     from bridge.pipeline import timeline_text
 
     assert timeline_text("Timeline: Timeline change CHG-KBMAEZ merged.") == "change CHG-KBMAEZ merged."
+
+
+async def test_suggest_ignores_pr_not_merged_into_tracked_branch(deps) -> None:
+    """An open test PR that happens to contain the cause commit never gets the RCA comment."""
+    d = deps(forge=make_forge(prs={CAUSE: [42]}, unmerged_prs={42}))
+    out = await handle_incident(make_hook(), d)
+    assert out.action == "commented"
+    assert d.forge.pr_comments == []
+    assert [sha for sha, _ in d.forge.commit_comments] == [CAUSE]
+    assert ("prs_for_commit", CAUSE, d.settings.tracked_branch) in d.forge.calls

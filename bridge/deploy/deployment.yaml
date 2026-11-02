@@ -76,6 +76,7 @@ spec:
             - {name: RECONCILE_INTERVAL_S, value: "30"}
             - {name: ACT_CHECK_POLL_S, value: "5"}
             - {name: ACT_CHECK_TIMEOUT_S, value: "600"}
+            - {name: ACT_AUTOMERGE_GRACE_S, value: "30"}
             # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
             - name: BRIDGE_WEBHOOK_TOKEN
               valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}

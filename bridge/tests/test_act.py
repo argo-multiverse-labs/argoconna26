@@ -96,9 +96,9 @@ async def test_act_enables_auto_merge(deps) -> None:
     assert out.action == "auto_merge_enabled"
     assert out.level == "act"
     assert out.url == opened.pr.url
-    # GitHub merges once the required check passes; the bridge never merges itself here.
+    # The fake's check never reports, so GitHub's auto-merge is left to do the merge.
     assert forge.merged == []
-    assert calls(forge, "check_run_status") == []
+    assert calls(forge, "merge_pr") == []
     assert d.metrics.value("aiops_actions_total", action="pr_opened") == 1
     assert d.metrics.value("aiops_actions_total", action="auto_merge_enabled") == 1
 
@@ -290,3 +290,56 @@ async def test_act_open_pr_guard_blocks_second_pr(deps) -> None:
     out = await handle_incident(make_hook(), d)
     assert out.action == "duplicate"
     assert len(forge.opened) == 1 and len(forge.auto_merges) == 1
+
+
+# -- auto-merge lag: the bridge merges if GitHub hasn't, after the check passed --------------
+
+
+async def test_enabled_path_merges_when_auto_merge_lags(deps) -> None:
+    forge = act_forge()
+    forge.check_runs = {f"{1:040x}": ["pending", "success"]}
+    d, out = await run(deps, forge=forge)
+    assert forge.auto_merges == [(1, "merge")]
+    assert d.sleep.waits == [d.settings.act_check_poll_s, d.settings.act_automerge_grace_s]
+    assert forge.merged == [(1, "merge", f"{1:040x}")]
+    assert out.action == "merged"
+    assert d.metrics.value("aiops_actions_total", action="auto_merge_enabled") == 1
+    assert d.metrics.value("aiops_actions_total", action="merged") == 1
+
+
+async def test_enabled_path_leaves_merge_to_github_when_it_merged(deps) -> None:
+    forge = act_forge(merged_prs={1})
+    forge.check_runs = {f"{1:040x}": ["success"]}
+    d, out = await run(deps, forge=forge)
+    assert calls(forge, "merge_pr") == []
+    assert out.action == "auto_merge_enabled"
+    assert d.metrics.value("aiops_actions_total", action="merged") == 0
+
+
+async def test_enabled_path_never_merges_on_check_failure(deps) -> None:
+    forge = act_forge()
+    forge.check_runs = {f"{1:040x}": ["failure"]}
+    _, out = await run(deps, forge=forge)
+    assert calls(forge, "merge_pr") == []
+    assert out.action == "auto_merge_enabled"
+
+
+async def test_enabled_path_merge_race_with_github_is_not_a_failure(deps) -> None:
+    """GitHub merged between our read and our merge: the 405 is not a post failure."""
+    forge = act_forge(fail_merge=ForgeError("PUT /pulls/1/merge: 405", 405), merged_after_merge_call=True)
+    forge.check_runs = {f"{1:040x}": ["success"]}
+    d, out = await run(deps, forge=forge)
+    assert out.action == "auto_merge_enabled"
+    assert not out.post_failed
+    assert d.metrics.value("aiops_actions_total", action="post_failed") == 0
+    assert d.registry.merge_announced(1) is False
+
+
+async def test_enabled_path_grace_zero_turns_the_catch_up_off(deps) -> None:
+    forge = act_forge()
+    forge.check_runs = {f"{1:040x}": ["success"]}
+    d = deps(forge=forge)
+    d.settings.act_automerge_grace_s = 0
+    out = await handle_incident(make_hook(), d)
+    assert calls(forge, "check_run_status") == []
+    assert out.action == "auto_merge_enabled"

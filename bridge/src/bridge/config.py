@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     policy_check_integration_id: int = Field(default=15368, validation_alias=_env("POLICY_CHECK_INTEGRATION_ID"))
     act_check_poll_s: float = Field(default=5, gt=0, validation_alias=_env("ACT_CHECK_POLL_S"))
     act_check_timeout_s: float = Field(default=600, gt=0, validation_alias=_env("ACT_CHECK_TIMEOUT_S"))
+    # After policy-check passes, how long GitHub's auto-merge gets before the bridge merges the
+    # PR itself (once it took 3 min). 0 turns the catch-up off.
+    act_automerge_grace_s: float = Field(default=30, ge=0, validation_alias=_env("ACT_AUTOMERGE_GRACE_S"))
 
     @property
     def test_hooks_active(self) -> bool:

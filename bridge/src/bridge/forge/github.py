@@ -150,12 +150,15 @@ class GitHubForge:
             return any(changed.match(line) for line in (f.get("patch") or "").splitlines())
         return False
 
-    async def prs_for_commit(self, sha: str) -> list[int]:
+    async def prs_for_commit(self, sha: str, merged_into: str | None = None) -> list[int]:
         try:
             r = await self._request("GET", f"/commits/{self._q(sha)}/pulls")
         except ForgeNotFound:
             return []
-        return [int(pr["number"]) for pr in r.json()]
+        return [
+            int(pr["number"]) for pr in r.json()
+            if merged_into is None or (pr.get("merged_at") and (pr.get("base") or {}).get("ref") == merged_into)
+        ]
 
     async def commit_title(self, sha: str) -> str | None:
         """The first line of the commit message, or None for an unknown commit."""
@@ -360,6 +363,10 @@ class GitHubForge:
         if newest.get("status") != "completed":
             return "pending"
         return "success" if newest.get("conclusion") == "success" else "failure"
+
+    async def pr_merged(self, number: int) -> bool:
+        r = await self._request("GET", f"/pulls/{int(number)}")
+        return bool(r.json().get("merged"))
 
     async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
         """REST merge, pinned to the PR's head SHA so a commit pushed since is refused (409)."""

@@ -47,6 +47,9 @@ class FakeForge:
     call, the last one repeating (an exception in the list is raised); an unknown SHA is
     `missing`. Merges are recorded in `merged` as (number, method, head SHA), and `fail_merge`
     makes `merge_pr` raise. `pr_comments` doubles as the bot's comment listing.
+    `pr_merged` is true for `merged_prs` and the fake's own merges; `merged_after_merge_call`
+    marks the PR merged when `merge_pr` is called (GitHub won the race). `unmerged_prs` are
+    left out of `prs_for_commit` when it asks for PRs merged into a branch.
     """
 
     files: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -70,6 +73,9 @@ class FakeForge:
     merged: list[tuple[int, str, str]] = field(default_factory=list)
     merge_shas: list[str] = field(default_factory=list)
     fail_merge: BaseException | None = None
+    unmerged_prs: set[int] = field(default_factory=set)
+    merged_prs: set[int] = field(default_factory=set)
+    merged_after_merge_call: bool = False
 
     def _read(self, *call: object) -> None:
         self.calls.append(call)
@@ -101,9 +107,9 @@ class FakeForge:
         self._read("commit_changed_key", sha, path, key)
         return key in self.changed_keys.get((sha, path), set())
 
-    async def prs_for_commit(self, sha: str) -> list[int]:
-        self._read("prs_for_commit", sha)
-        return list(self.prs.get(sha, []))
+    async def prs_for_commit(self, sha: str, merged_into: str | None = None) -> list[int]:
+        self._read("prs_for_commit", sha, merged_into)
+        return [n for n in self.prs.get(sha, []) if merged_into is None or n not in self.unmerged_prs]
 
     async def commit_title(self, sha: str) -> str | None:
         self._read("commit_title", sha)
@@ -181,8 +187,14 @@ class FakeForge:
             raise status
         return status
 
+    async def pr_merged(self, number: int) -> bool:
+        self._read("pr_merged", number)
+        return number in self.merged_prs or any(m[0] == number for m in self.merged)
+
     async def merge_pr(self, pr: PullRequest, method: MergeMethod) -> str:
         self.calls.append(("merge_pr", pr.number, method))
+        if self.merged_after_merge_call:
+            self.merged_prs.add(pr.number)  # GitHub's auto-merge won the race
         if self.fail_merge is not None:
             raise self.fail_merge
         if self.fail_writes is not None:
