@@ -216,6 +216,22 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   grep -q '^HEALTH checkout' "$CALLS"
 }
 
+@test "disarm waits for the old ReplicaSet's pods to be gone before it pins config-version back" {
+  ops_run "$REPO_ROOT/scripts/rearm.sh" >/dev/null     # armed, cv 7, tag v1.4.2
+  # After the cv-8 rollout, two pods of the old cv-7 ReplicaSet (started during the abort, so
+  # they read 200) are still there. Pinning now would hand them the canary.
+  echo '{"items":[
+    {"metadata":{"name":"checkout-new-1","labels":{"rollouts-pod-template-hash":"new"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+    {"metadata":{"name":"checkout-old-1","labels":{"rollouts-pod-template-hash":"old"},"deletionTimestamp":"2026-11-02T21:02:50Z"},"status":{}}]}' >"$STUBS/PODS_JSON"
+  before="$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)"
+  ONE_RS_WAIT_S=2 run ops_run "$REPO_ROOT/scripts/git-ops.sh" disarm --image v1.4.1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"old ReplicaSet"* ]]
+  # the value/tag/cv-8 commit went out; the pin did not
+  [ "$("$REAL_GIT" --git-dir="$ORIGIN" rev-list --count refs/heads/build/demo)" -eq $((before + 1)) ]
+  [ "$(cv_value)" = "8" ]
+}
+
 @test "disarm --image pins config-version back to 7 after a fix" {
   arm_origin
   ops_run "$REPO_ROOT/scripts/fix.sh" >/dev/null       # 2000, cv 8

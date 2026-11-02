@@ -211,6 +211,25 @@ op_wait_fleet_disarmed() {
   fi
 }
 
+# one_checkout_replicaset : every checkout pod (Terminating ones included) has one pod-template
+# hash. Until then an old ReplicaSet still has pods, and pinning config-version back to the
+# template they were made from would hand them the canary (they may have started while armed).
+one_checkout_replicaset() {
+  local hashes
+  hashes="$(k get pods -n "$NS_DEMO" -l "$CHECKOUT_POD_SELECTOR" -o json \
+    | jq -r '.items | if any(.[]; .metadata.deletionTimestamp != null) then "terminating"
+             else ([.[].metadata.labels["rollouts-pod-template-hash"] // "none"] | unique | length) end')" \
+    || return 1
+  [[ "$hashes" == 1 ]]
+}
+
+op_wait_one_replicaset() {
+  if ! stage_wait "the old ReplicaSet's pods gone" "${ONE_RS_WAIT_S:-120}" one_checkout_replicaset; then
+    log_error "the old ReplicaSet's pods are still there; not pinning config-version to $CONFIG_VERSION_START"
+    exit 4
+  fi
+}
+
 # ------------------------------------------------------------ YAML values
 # yaml_set FILE KEY VALUE : set a string value with yq, keeping the other keys and comments.
 # KEY is a yq path such as .data.UPSTREAM_TIMEOUT_MS. FILE is relative to the operator clone.
@@ -328,6 +347,7 @@ op_disarm() {
   op_wait_health checkout Healthy
   beat "healthy"
   if ((pin_after)); then
+    op_wait_one_replicaset
     local pin_sha pin_msg="chore(demo): pin config-version to $CONFIG_VERSION_START"
     yaml_set "$ROLLOUT_FILE" "$_cv_path" "$CONFIG_VERSION_START"
     pin_sha="$(op_commit_push "$pin_msg" "$ROLLOUT_FILE")"

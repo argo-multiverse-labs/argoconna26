@@ -145,7 +145,9 @@ case "\$*" in
     else echo Healthy; fi ;;
   *"get pods"*)
     echo "PODS" >> "$CALLS"
-    echo '{"items":[{"metadata":{"name":"checkout-abc-1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+    # PODS_JSON: the pod list to answer with (for example two ReplicaSets' pods during a scale-down).
+    if [ -s "$STUBS/PODS_JSON" ]; then cat "$STUBS/PODS_JSON"; exit 0; fi
+    echo '{"items":[{"metadata":{"name":"checkout-abc-1","labels":{"rollouts-pod-template-hash":"abc"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
   *) echo "kubectl stub: unexpected \$*" >&2; exit 1 ;;
 esac
 STUB
