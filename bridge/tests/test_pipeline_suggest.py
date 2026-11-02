@@ -481,3 +481,38 @@ async def test_comment_timeline_short_context_unchanged(deps) -> None:
     d = deps()
     await handle_incident(make_hook(), d)
     assert f"- Timeline: {MODEL_CONTEXT}" in comment_body(d).splitlines()
+
+
+@pytest.mark.parametrize("label", ["Timeline ", "timeline\t", "TIMELINE - ", "Timeline-"])
+def test_timeline_label_word_without_colon_is_stripped(label: str) -> None:
+    from bridge.pipeline import timeline_text
+
+    out = timeline_text(label + "change CHG-KBMAEZ merged at 10:02.")
+    assert out == "change CHG-KBMAEZ merged at 10:02."
+
+
+def test_timeline_word_that_is_part_of_another_word_is_kept() -> None:
+    from bridge.pipeline import timeline_text
+
+    assert timeline_text("Timelines show CHG-KBMAEZ.") == "Timelines show CHG-KBMAEZ."
+
+
+def test_timeline_never_appends_a_second_unrelated_change_ref() -> None:
+    from bridge.pipeline import ITEM_MAX, timeline_text
+
+    text = (
+        "Timeline change CHG-KBMAEZ (bcea2c6, " + "tune upstream timeout and roll config " * 6
+        + ") merged at 10:02. An earlier bump CHG-2SLM3T was unrelated."
+    )
+    out = timeline_text(text)
+    assert "CHG-KBMAEZ" in out
+    assert "CHG-2SLM3T" not in out
+    assert len(out) <= ITEM_MAX
+
+
+def test_timeline_appends_only_the_first_ref_when_the_cut_drops_it() -> None:
+    from bridge.pipeline import timeline_text
+
+    out = timeline_text("Config-only change, merged 3 days ago. Ref CHG-W4M4C4, not CHG-2SLM3T.")
+    assert "CHG-W4M4C4" in out
+    assert "CHG-2SLM3T" not in out
