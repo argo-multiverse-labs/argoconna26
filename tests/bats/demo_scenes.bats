@@ -271,6 +271,22 @@ scene close" ]
   [[ "$output" == *"promotion merged"* ]]
 }
 
+@test "scene 3 teaches under the make night wait, after the job starts (O32)" {
+  demo_setup propose
+  set_prs "$(fix_body act)"
+  echo "$BOT" >"$ST/auto-merge-by"
+  jq -n '{number: 12, state: "MERGED", url: "https://github.com/x/y/pull/12"}' >"$ST/pr-12.json"
+  export DEMO_AUTOMERGE_FOR_TEST=1
+  write_narration "$BATS_TEST_TMPDIR/text"
+  export NARRATION_DIR="$BATS_TEST_TMPDIR/text"
+  run scene scene-3
+  [ "$status" -eq 0 ]
+  night="$(grep -n 'make night' <<<"$output" | head -n1 | cut -d: -f1)"
+  teach="$(grep -n 'Hilliary: teach' <<<"$output" | head -n1 | cut -d: -f1)"
+  [ -n "$night" ] && [ -n "$teach" ]
+  [ "$teach" -gt "$night" ]
+}
+
 @test "scene 3 uses the open act promotion scene 2 left, without opening another" {
   demo_setup propose
   set_prs "$(fix_body act)"

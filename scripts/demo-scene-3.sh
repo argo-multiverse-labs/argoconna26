@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scene 3, "2:31 Back in bed?" (rung 3, act): the act promotion (opened offstage by scene 2, or
-# here when scene 2 left none), then the body of demo-rung-3.sh. `make night` is typed at the
-# start of the teaching beat, so the 210-370 s wait runs under it (O32). Below propose (after an
+# here when scene 2 left none), then the body of demo-rung-3.sh. `make night` is typed first and
+# the teaching beat follows with no stop, so the 210-370 s wait runs under it (O32). Below propose (after an
 # on-stage reject + demote) it refuses with exit 6: roll the clip. Narration keys: intro, board,
 # policy, teach, pr, policy-pass, merged, healthy, verify.
 set -euo pipefail
@@ -27,6 +27,7 @@ act_promotion_pr() {
 scene_init scene-3
 scene_break "2:31 Back in bed?"
 scene_say intro
+speaker_beat hilliary "time is compressed; the bar"
 if ! tracked_level_is act; then
   tracked_level_is propose || refuse 6 "below propose; clip" "autonomy on $TRACKED_BRANCH is below propose; roll the clip"
   act_pr="$(act_promotion_pr)"
@@ -34,6 +35,4 @@ if ! tracked_level_is act; then
   if [[ "$NO_WAIT" == true ]]; then check "approver is a role" approved_by_is_role; fi
 fi
 scene_say policy
-speaker_beat hilliary "time is compressed; the bar"
-scene_say teach
-rung3_main
+rung3_main # types make night, then the teach narration runs under the wait (no stop)

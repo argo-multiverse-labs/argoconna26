@@ -49,6 +49,7 @@ rung3_main() {
   bump="$(unit_value bump "$journal")"
   ref="$(unit_value change_ref "$journal")"
   if ! sha_ok "$cause" || ! sha_ok "$bump"; then die "the job's journal has no cause and bump"; fi
+  scene_say teach # O32: Hilliary teaches while the job re-arms and the agent works (no stop)
 
   READY_TIMEOUT_S="${DEGRADED_WAIT_S:-180}" until_ready "Degraded" degraded_at "$bump"
   beat "Degraded"
