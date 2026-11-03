@@ -3,8 +3,8 @@
 **Project:** ArgoCon NA 2026, "Observability Is a Platform Problem Now: Closing the AIOps Loop
 with ArgoCD and GitOps"
 
-These pages describe how the demo is built and why. They are written from the code on the
-`build/demo` branch. Where a part is still being built, the page says so.
+These pages describe how the demo is built and why. They are written from the code on
+`main`. Where a part is still being built, the page says so.
 
 Start with the [README](../README.md) for what the demo shows and how to run it.
 

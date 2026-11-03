@@ -2,7 +2,8 @@
 # Stage-day runbook (Task 6.9). Prints each step, times it, stops at the first failure and at
 # every human step.
 #
-#   scripts/stage-day.sh morning               11-09 morning: reset, preflight 1 (a full dry-run
+#   scripts/stage-day.sh morning               11-09 morning: the cluster is up (else make
+#                                              build-all), reset, preflight 1 (a full dry-run
 #                                              score required), LLM budget,
 #                                              gh auth, the job unit current + preflight 3, then
 #                                              leaves the propose promotion PR open (make demo-full
@@ -117,6 +118,12 @@ llm_budget_ok() {
     }' >&2
 }
 
+# cluster_ok : the kind cluster exists (from scratch, `make build-all` creates it first).
+# shellcheck disable=SC2329
+cluster_ok() {
+  kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME" \
+    || { log_error "no kind cluster '$CLUSTER_NAME' (run: make build-all, about 5 minutes)"; return 1; }
+}
 # shellcheck disable=SC2329
 gh_auth_ok() { gh auth status >/dev/null 2>&1 || { log_error "gh auth status failed (run: gh auth login)"; return 1; }; }
 
@@ -168,6 +175,7 @@ reset_rung_3() {
 # --------------------------------------------------------- subcommands
 cmd_morning() {
   record "stage-day morning, $(date -u +%Y-%m-%dT%H:%MZ)"
+  step "kind cluster up" cluster_ok
   step "make reset-demo" make_target reset-demo
   step "preflight 1" env PREFLIGHT_REQUIRE_SCORE=1 "$PREFLIGHT" 1
   step "LLM budget" llm_budget_ok

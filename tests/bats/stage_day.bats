@@ -21,6 +21,7 @@ setup() {
   make_stub "$STUBS" promotion 'echo "promotion $*" >>"$LOG"; [[ "$1" != "${FAIL_PROMOTION:-none}" ]]'
   make_stub "$STUBS" litellm 'echo "${SPEND:-live 1.0000 remaining 40.0000 cumulative 12.0000 budget 50.00}"'
   make_stub "$STUBS" grafana 'echo "http://kiosk.example/"'
+  make_stub "$STUBS" kind '[[ -n "${NO_CLUSTER:-}" ]] || echo argoconna26'
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
   export STAGE_DAY_PREFLIGHT="$STUBS/preflight" STAGE_DAY_PROMOTION="$STUBS/promotion" \
     STAGE_DAY_LITELLM="$STUBS/litellm" STAGE_DAY_GRAFANA_URL="$STUBS/grafana"
@@ -41,6 +42,13 @@ preflight 3
 promotion ensure propose" ]
   [[ "$output" == *"morning done"* ]]
   [[ "$output" == *"http://kiosk.example/"* ]]
+}
+
+@test "morning with no kind cluster stops first and says to run make build-all" {
+  NO_CLUSTER=1 run sd morning
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make build-all"* ]]
+  [ ! -s "$LOG" ]
 }
 
 @test "morning saves the timings under the evidence dir" {

@@ -212,7 +212,9 @@ The History deep link the scripts open is a best guess and has not had its visua
 The talk's linear flow (the README's Demo Flow) wraps the rung scripts in scenes:
 `demo-cold-open`, `demo-prologue`, `demo-scene-1` to `demo-scene-3`, `demo-epilogue` and
 `demo-close`, and `make demo-full` runs them in order with no reset between them.
-`scripts/stage-day.sh morning` leaves the start state, including the open `propose` promotion PR.
+From scratch, `make build-all` creates the kind cluster and the stack first (`stage-day.sh morning`
+stops with that hint when there is no cluster). `scripts/stage-day.sh morning` leaves the start
+state, including the open `propose` promotion PR.
 
 - Scenes 1 to 3 call the rung scripts' bodies, so every failure branch above carries over. Inside
   a scene, a branch that ends the rung early (a handoff, no fix PR, `policy-check` left for

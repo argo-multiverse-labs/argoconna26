@@ -13,7 +13,7 @@ The second is what makes the `act` level possible. It does not judge the model o
 judges a set of Git facts about the PR.
 
 > **Status.** The policies, the facts extractor, the `policy-check` workflow and the laptop
-> runner are on `build/demo`, and `policy-check` is a required status on the tracked branch.
+> runner are on `main`, and `policy-check` is a required status on the tracked branch.
 > Code-owner review is on too, owned by the promotion-board team, and binds on
 > `aiops/autonomy.yaml`, `policy/` and `.github/`. Rung 3 has run end to end against the required check
 > (`tests/e2e/rung3.sh`, verified after the fact by `tests/e2e/overnight-verify.sh`), and
