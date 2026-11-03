@@ -51,6 +51,7 @@ the one before it ended.
 ### Running the Demo
 
 ```bash
+make build-all                 # from scratch only: the kind cluster and the whole stack (~5 min)
 scripts/stage-day.sh morning   # reset to the start state, preflight, budget check
 make demo-cold-open            # then demo-prologue, demo-scene-1 ... demo-close
 
@@ -112,7 +113,7 @@ Running each rung by hand, the rung scripts, resets and stage day are in
  +-----------------+  GET /timeline, /incidents     |  | (only writer)         v
  |  cdevents-sim   |<-------------------+           |  |   +-----------------------------------+
  | (timeline,      |                    |           |  |   |  Argo CD  (ns argocd)             |
- |  stands in for  |<-- CDEvents -------|-----------|--|---|   syncs apps from build/demo      |
+ |  stands in for  |<-- CDEvents -------|-----------|--|---|   syncs apps from main            |
  |  a collector)   |   deployed,        |           |  |   |   Notifications -> CDEvents + hook|
  +-----------------+   degraded,        |           |  |   +----------------+------------------+
         ^              resolved         |           |  |                    |        |
@@ -197,8 +198,9 @@ scripts push to it. Without push rights there, point the demo at a fork of yours
 3. Copy [.env.example](.env.example) to `.env` (mode 0600) and add an LLM key.
 4. `make operator-clone`. It pushes with your own `gh` login, or with a fine-grained token for
    your fork in `GH_TOKEN`.
-5. `make build-all`, then `make reset-demo` (it restarts the bridge, re-seeds the timeline and
-   seeds the first incident's cause), then `make demo-rung-1`.
+5. `make build-all` (it creates the kind cluster), then `scripts/stage-day.sh morning` (the start
+   state and the checks), then `make demo-full`. With rung 1 only, `make reset-demo` then
+   `make demo-rung-1`.
 
 What each rung needs on top of the platform:
 
@@ -209,9 +211,8 @@ What each rung needs on top of the platform:
 | 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow). Until those exist, run preflight with `PREFLIGHT_L5B=auto` |
 
 `make retarget BRANCH=<branch>` moves the branch Argo CD, the bridge and the rulesets follow (for
-example from `build/demo` to `main` after the talk). It is built and tested against stubs; it has
-not been rehearsed against GitHub, and it refuses a destination the live rulesets do not already
-protect. See [docs/06-operations.md](docs/06-operations.md).
+example from `build/demo` to `main`, which is how the demo came to track `main`). It refuses a
+destination the live rulesets do not already protect. See [docs/06-operations.md](docs/06-operations.md).
 
 The fork path was checked on the upstream repository and by the tests in
 `tests/bats/configure_fork.bats` and `tests/bats/consistency.bats`, not from a real fork.
@@ -219,7 +220,7 @@ The fork path was checked on the upstream repository and by the tests in
 ## Quick Start
 
 Argo CD pulls from GitHub, so the cluster follows what is pushed to the tracked branch
-(`TRACKED_BRANCH` in [demo.env](demo.env), `build/demo`). To run it from your own fork,
+(`TRACKED_BRANCH` in [demo.env](demo.env), `main`). To run it from your own fork,
 use the section above first.
 
 ```bash
@@ -229,6 +230,7 @@ make operator-clone                        # the clone the operator scripts push
 make build-all                             # kind cluster, platform, images, apps (safe to run twice)
 make preflight                             # checks; RUNG=1|2|3 for a rung's extra checks
 make info                                  # URLs and where the credentials come from
+scripts/stage-day.sh morning               # the talk's start state; then make demo-full
 ```
 
 `make build-all` pushes a disarm commit before Argo CD first syncs, so a branch left armed never

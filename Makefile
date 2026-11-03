@@ -349,7 +349,7 @@ dryrun-summary-restore: ## ConfigMap dryrun-summary from .dryruns/summary.json, 
 WAIT_PLATFORM_S ?= 600
 
 .PHONY: wait-platform
-wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and every pod is Ready (pods_ready)
+wait-platform: ## Wait until every Argo CD Application is Synced and Healthy, every pod is Ready (pods_ready) and Prometheus scrapes checkout
 	@$(CTX)
 	apps_ok() {
 	  k get applications -n "$$NS_ARGOCD" -o json | jq -e '(.items | length) > 0 and
@@ -365,7 +365,12 @@ wait-platform: ## Wait until every Argo CD Application is Synced and Healthy and
 	  k get applications -n "$$NS_ARGOCD" >&2; exit 4
 	fi
 	wait_for "every pod Ready" "$(WAIT_PLATFORM_S)" pods_ok || { k get pods -A | grep -v Running >&2; exit 4; }
-	log_info "wait-platform: all Applications Synced and Healthy, all pods Ready"
+	# A new cluster: Prometheus picks up checkout's ServiceMonitor about a minute after the apps are
+	# Healthy. A canary started before that (the first reset) finds no data, goes Inconclusive and
+	# pauses, so wait until every Ready checkout pod is scraped and the success rate computes.
+	scraped_ok() { _fleet_gauge_complete && [[ -n "$$(_fleet_success_rate)" ]]; }
+	wait_for "Prometheus scraping checkout" "$(WAIT_PLATFORM_S)" scraped_ok || exit 4
+	log_info "wait-platform: all Applications Synced and Healthy, all pods Ready, checkout scraped"
 
 .PHONY: build-all
 build-all: ## Create the whole stack (safe to run twice)

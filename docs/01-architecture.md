@@ -4,7 +4,7 @@
 
 A kind cluster runs a small checkout service with a canary rollout, the platform that observes
 and deploys it, and an agent that reacts when a deploy fails. Argo CD tracks one Git branch
-(`TRACKED_BRANCH`, `build/demo` while building). Everything the agent changes goes through that
+(`TRACKED_BRANCH`, `main`; it was `build/demo` while building). Everything the agent changes goes through that
 branch as a pull request.
 
 ## Components
@@ -31,7 +31,7 @@ Argo CD. Argo CD manages `checkout`, `pricing`, `loadgen`, `bridge`, `cdevents-s
 ## Data flow
 
 ```
- 1  git push (operator or merged PR)  -->  GitHub build/demo
+ 1  git push (operator or merged PR)  -->  GitHub main
  2  Argo CD syncs checkout            -->  Rollout starts a canary (25%, 20 s, 50%, 20 s)
  3  AnalysisRun queries Prometheus    -->  success rate of canary pods vs the SLO label
  4  success rate under SLO            -->  Rollout aborted, Application Degraded

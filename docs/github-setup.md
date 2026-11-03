@@ -73,8 +73,8 @@ Three standing rulesets, created and updated by `scripts/github-ruleset.sh apply
 GitHub's repository rulesets (Settings, Rules), not classic branch protection, because rulesets
 let the integrity rule have an empty bypass list.
 
-`RULESET_BRANCHES` in `demo.env` lists the branches Argo CD tracks: `build/demo` while you
-build, `main` after the freeze. The first two rulesets cover every listed branch.
+`RULESET_BRANCHES` in `demo.env` lists the protected branches: `main`, which Argo CD tracks,
+and `build/demo`, where the demo was built. The first two rulesets cover every listed branch.
 
 ### `argoconna26-integrity`: nobody rewrites history
 
