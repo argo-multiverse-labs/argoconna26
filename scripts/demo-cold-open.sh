@@ -10,7 +10,7 @@ set -euo pipefail
 bridge_up() { curl -sf --max-time 5 "127.0.0.1:${PORT_BRIDGE}/status" >/dev/null; }
 
 scene_init cold-open
-scene_break "5:00 p.m. We Use AI Now"
+title_card "5:00 p.m." "We Use AI Now"
 scene_say mandate
 beat "autonomy: $(tracked_file "$AUTONOMY_FILE" | yq -r .level)"
 if bridge_up; then beat "bridge: up"; else beat "bridge: down"; fi
@@ -19,7 +19,7 @@ if [[ "$NO_WAIT" == true ]]; then
   check "autonomy is suggest" tracked_level_is suggest
   check "bridge is up" bridge_up
 fi
-scene_break "2:15 a.m. The page"
+title_card "2:15 a.m." "The page"
 speaker_beat sre "paged at 2:15; what changed?"
 scene_say page
 scene_say what-changed
