@@ -40,27 +40,26 @@ outside `agent/<name>` before it makes a call.
 is in [01](./01-architecture.md#containers).
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
+%%{init: {"flowchart": {"wrappingWidth": 200}}}%%
 flowchart LR
-  acd["<b>Argo CD Notifications</b><br/>[Container]"]
   holmesx["<b>HolmesGPT</b><br/>[Container]"]
   gh["<b>GitHub</b><br/>[Software System]"]
   sim["<b>cdevents-sim</b><br/>[Container]"]
 
   subgraph bridge["bridge [Container: Python, FastAPI]"]
-    hook["<b>Webhook receiver</b><br/>[app.py, incidents.py]<br/>Bearer token, one incident<br/>per app and revision"]
+    hook["<b>Webhook receiver</b><br/>[app.py, incidents.py]<br/>POST /hooks/argocd from<br/>Argo CD; one incident<br/>per app and revision"]
     pipe["<b>Pipeline</b><br/>[pipeline.py]<br/>One incident at a time"]
     level["<b>Autonomy reader</b><br/>[autonomy.py]<br/>Level from Git; fails<br/>closed to suggest"]
     client["<b>HolmesGPT client</b><br/>[prompt.py, holmes.py, rca.py]<br/>Runbook prompt,<br/>strict JSON schema"]
     guard["<b>Guardrails</b><br/>[guardrails.py]<br/>Checks the answer<br/>against Git"]
     fix["<b>Fix builder</b><br/>[patch.py]<br/>One config line,<br/>deterministic"]
     pii["<b>PII scan</b><br/>[pii.py]"]
-    forge["<b>Forge</b><br/>[forge/github.py]<br/>GitHub App; agent/* branches only"]
+    forge["<b>Forge</b><br/>[forge/github.py]<br/>GitHub App;<br/>agent/* branches only"]
     events["<b>Events</b><br/>[events.py]"]
     rec["<b>Reconciler</b><br/>[reconcile.py]<br/>Fix-PR outcomes"]
   end
 
-  acd -->|"POST /hooks/argocd"| hook --> pipe
+  hook --> pipe
   pipe --> level
   pipe --> client -->|"POST /api/chat"| holmesx
   pipe --> guard
@@ -77,7 +76,7 @@ flowchart LR
   classDef container fill:#438dd5,stroke:#2e6295,color:#fff
   classDef external fill:#999999,stroke:#6b6b6b,color:#fff
   class hook,pipe,level,client,guard,fix,pii,forge,events,rec component
-  class acd,holmesx,sim container
+  class holmesx,sim container
   class gh external
   style bridge fill:none,stroke:#438dd5,stroke-dasharray:6 4
 ```

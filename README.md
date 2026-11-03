@@ -113,7 +113,7 @@ on. The containers inside the cluster (level 2) are in
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 320}}}%%
-flowchart LR
+flowchart TB
   pe["<b>Platform engineer</b><br/>[Person]<br/>Runs the platform and<br/>the demo's make targets"]
   sre["<b>On-call SRE</b><br/>[Person]<br/>Reads the agent's analysis,<br/>reviews its fix PRs"]
   board["<b>Promotion board</b><br/>[Person]<br/>Approves changes to<br/>the agent's level"]
