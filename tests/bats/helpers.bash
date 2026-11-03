@@ -2,6 +2,9 @@
 
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 export REPO_ROOT
+# The tests are written against build/demo as the tracked branch. demo.env names whichever
+# branch the live demo tracks (main after Run C), so pin it here; the caller's value wins.
+export TRACKED_BRANCH=build/demo
 
 # make_fixture_repo DIR : a throwaway git repo with one commit on branch "main".
 make_fixture_repo() {

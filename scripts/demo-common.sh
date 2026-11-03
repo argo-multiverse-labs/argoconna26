@@ -145,6 +145,96 @@ _bar() {
   printf '\033[%sm%s\033[0m\n' "$colour" "$line"
 }
 
+# ---------------------------------------------------------------- stage flair
+# STAGE_FX=1 turns on what only makes sense in a real terminal: the pinned trust-ladder bar,
+# live wait spinners and the PASS/FAIL marks. Default: on when stdout is a terminal. Off, the
+# output is the plain text the tests and the saved evidence read.
+if [[ -z "${STAGE_FX:-}" ]]; then
+  if [[ -t 1 && "${TERM:-dumb}" != dumb ]]; then STAGE_FX=1; else STAGE_FX=0; fi
+fi
+fx_on() { [[ "${STAGE_FX:-0}" == 1 ]]; }
+
+# The trust ladder, pinned to the top line: the in-story clock and the three rungs with the
+# current one lit. _LADDER_ROWS is the terminal height while the bar is pinned (0 = not pinned).
+_LADDER_CLOCK="" _LADDER_LEVEL="" _LADDER_ROWS=0
+ladder_text() { # LEVEL CLOCK : the bar, plain or (fx) coloured; at most STAGE_COLS wide
+  local level="$1" clock="$2" out="" l plain
+  plain="${clock:+$clock }suggest ▸ propose ▸ act"
+  if ! fx_on; then printf '%s' "$plain"; return; fi
+  [[ -z "$clock" ]] || out="\033[1m$clock\033[0m "
+  for l in suggest propose act; do
+    if [[ "$l" == "$level" ]]; then out+="\033[7;${C_BOTH}m$l\033[0m"; else out+="\033[2m$l\033[0m"; fi
+    [[ "$l" == act ]] || out+="\033[2m ▸ \033[0m"
+  done
+  printf '%b' "$out"
+}
+_ladder_draw() {
+  ((_LADDER_ROWS > 0)) || return 0
+  printf '\0337\033[1;1H\033[2K%s\0338' "$(ladder_text "$_LADDER_LEVEL" "$_LADDER_CLOCK")"
+}
+_ladder_unpin() {
+  ((_LADDER_ROWS > 0)) || return 0
+  printf '\0337\033[1;%sr\0338' "$_LADDER_ROWS"
+  _LADDER_ROWS=0
+}
+# ladder_pin : reserve the top line (scroll region from line 2) and draw the bar; fx only.
+ladder_pin() {
+  fx_on || return 0
+  local rows
+  rows="$(tput lines 2>/dev/null || echo 0)"
+  ((rows >= 10)) || return 0
+  _LADDER_ROWS="$rows"
+  printf '\033[2;%sr\033[%s;1H' "$rows" "$rows"
+  trap '_ladder_unpin' EXIT
+  _ladder_draw
+}
+ladder_set() { # [LEVEL] [CLOCK] : update the bar; an empty argument keeps the current value
+  [[ -z "${1:-}" ]] || _LADDER_LEVEL="$1"
+  [[ -z "${2:-}" ]] || _LADDER_CLOCK="$2"
+  _ladder_draw
+}
+ladder_refresh() { # read the level on the tracked branch and redraw (fx only: it is an API call)
+  fx_on || return 0
+  local level
+  level="$(tracked_file "$AUTONOMY_FILE" 2>/dev/null | yq -r '.level // ""' 2>/dev/null || true)"
+  ladder_set "$level"
+}
+
+# _fx_mark LINE : PASS/FAIL/refused lines with a mark and colour (fx); others unchanged.
+_fx_mark() {
+  local line="$1" text colour mark
+  case "$line" in
+    "PASS: "*) mark='✓' colour='1;32' text="${line#PASS: }" ;;
+    "PASS "*) mark='✓' colour='1;32' text="${line#PASS }" ;;
+    "FAIL: "*) mark='✗' colour='1;31' text="${line#FAIL: }" ;;
+    "FAIL "*) mark='✗' colour='1;31' text="${line#FAIL }" ;;
+    "refused: "*) mark='✗' colour='1;31' text="$line" ;;
+    "handoff: "*) mark='↪' colour='1;33' text="${line#handoff: }" ;;
+    *) _plain_beat "$line"; return ;;
+  esac
+  text="$mark $text"
+  printf '\033[%sm%s\033[0m\n' "$colour" "${text:0:STAGE_COLS}"
+}
+
+eval "_plain_$(declare -f beat)"
+beat() { if fx_on; then _fx_mark "$*"; else _plain_beat "$@"; fi; }
+
+# title_card CLOCK TITLE : an in-character scene opens in a double box (cold open, close).
+title_card() {
+  local clock="$1" title="$2" inner=$((STAGE_COLS - 4)) l
+  for l in "$clock" "$title"; do
+    ((${#l} <= inner)) || refuse 1 "title card too long" "title card line over $inner columns: $l"
+  done
+  _stage_keep "scene: $clock $title"
+  _LAST_CUE=""
+  ladder_set "" "${clock%% *}"
+  printf '\n\033[%sm╔%s╗\n' "$C_SCENE" "$(printf '═%.0s' $(seq $((STAGE_COLS - 2))))"
+  printf '║ %-*s ║\n' "$inner" "$clock"
+  printf '║ %-*s ║\n' "$inner" "$title"
+  printf '╚%s╝\033[0m\n' "$(printf '═%.0s' $(seq $((STAGE_COLS - 2))))"
+  _pause
+}
+
 # rung_break TITLE : one plain line that starts a rung.
 rung_break() { [[ -n "$SCENE" ]] || beat "== $1 =="; }
 
@@ -153,7 +243,11 @@ OVERNIGHT_VERIFY="${OVERNIGHT_VERIFY:-$DEMO_DIR/../tests/e2e/overnight-verify.sh
 PROMOTION_PR_SH="${PROMOTION_PR_SH:-$DEMO_DIR/promotion-pr.sh}"
 
 # scene_init NAME : this script is the scene NAME; waits now stop only at the scene pauses.
-scene_init() { SCENE="$1" _PACE_GATED=1; }
+scene_init() {
+  SCENE="$1" _PACE_GATED=1
+  ladder_pin
+  ladder_refresh
+}
 
 _pause() {
   _PAUSE_OPEN=1
@@ -165,6 +259,7 @@ scene_break() { # TITLE : the title between two bars, in the scene colour
   ((${#1} <= STAGE_COLS)) || refuse 1 "scene title too long" "scene title over $STAGE_COLS columns: $1"
   _stage_keep "scene: $1"
   _LAST_CUE=""
+  [[ ! "$1" =~ ^([0-9]{1,2}:[0-9]{2}) ]] || ladder_set "" "${BASH_REMATCH[1]}"
   printf '\n'
   _bar '═' "$C_SCENE"
   printf '\033[%sm%s\033[0m\n' "$C_SCENE" "$1"
@@ -276,6 +371,7 @@ promote_to() {
   beat "promotion merged"
   "$PROMOTION_PR_SH" record-approval "$pr" # one line: recorded: board approval | admin bypass
   until_ready "$level, approved" level_with_approval "$level"
+  ladder_set "$level"
 }
 
 # typed COMMAND : demo-magic's pe, after checking that prompt plus command fit the stage pane.
@@ -288,6 +384,7 @@ typed() {
     refuse 1 "typed line too long" "typed command is too long for the stage: $1"
   fi
   pe "$1"
+  [[ "$1" != *demote* ]] || ladder_refresh
 }
 
 # until_ready DESC CMD... : one line, then wait for CMD to succeed (a real condition, never a
@@ -296,8 +393,37 @@ typed() {
 until_ready() {
   local desc="$1"
   shift
+  if fx_on; then
+    [[ -z "${READY_NOTE:-}" ]] || beat "# $READY_NOTE"
+    _fx_wait "$desc" "${READY_TIMEOUT_S:-300}" "$@"
+    return
+  fi
   if [[ -n "${READY_NOTE:-}" ]]; then beat "# $READY_NOTE"; else beat "waiting: $desc"; fi
   stage_wait "$desc" "${READY_TIMEOUT_S:-300}" "$@"
+}
+
+# _fx_wait DESC TIMEOUT CMD... : until_ready in a terminal: a spinner and the seconds so far,
+# checked every 2 s, then one dim line with the time it took. Exit 4 on a timeout, as stage_wait.
+_fx_wait() {
+  local desc="$1" timeout="$2" frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0 start=$SECONDS next=0 label
+  shift 2
+  label="${desc:0:$((STAGE_COLS - 8))}"
+  while true; do
+    if ((SECONDS >= next)); then
+      if "$@" >/dev/null 2>&1; then
+        printf '\r\033[2K\033[2m· %s %ss\033[0m\n' "$label" "$((SECONDS - start))"
+        return 0
+      fi
+      if ((SECONDS - start >= timeout)); then
+        printf '\r\033[2K'
+        printf 'timeout: %s\n' "${desc:0:21}" >&2
+        return 4
+      fi
+      next=$((SECONDS + 2))
+    fi
+    printf '\r\033[2K\033[%sm%s\033[0m %s %ss' "$C_BOTH" "${frames:i++%10:1}" "$label" "$((SECONDS - start))"
+    sleep 0.15
+  done
 }
 
 # check NAME CMD... : an assertion (NO_WAIT runs). Prints PASS, or the reason and exit 1.

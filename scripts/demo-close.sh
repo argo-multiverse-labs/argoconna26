@@ -7,7 +7,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/demo-common.sh"
 
 scene_init close
-scene_break "Back in bed by 2:30"
+title_card "2:31 a.m." "Back in bed by 2:30"
 open_tab "$(grafana_kiosk_url)"
 scene_say timeline
 speaker_beat sre "it's in Slack, the callback"

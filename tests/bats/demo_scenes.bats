@@ -570,3 +570,82 @@ speakers_ok() {
   run env PATH="$ORIG_PATH" make -n --no-print-directory -C "$REPO_ROOT" record-rung-2
   [[ "$output" == *"rung-2-"* && "$output" == *"demo-rung-2"* ]]
 }
+
+# ------------------------------------------------------------------ stage flair (STAGE_FX)
+fx() { bash -c "export STAGE_FX=1; SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; $1"; }
+
+@test "off a terminal the flair is off and the output stays plain" {
+  cd "$FIXTURE"
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh' </dev/null >/dev/null; . '$REPO_ROOT/scripts/demo-common.sh'; echo fx=\$STAGE_FX; check ok true; until_ready thing true" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fx=0"* && "$output" == *"PASS: ok"* && "$output" == *"waiting: thing"* ]]
+}
+
+@test "fx: PASS, FAIL, refused and handoff lines get a mark and a colour, and still fit" {
+  cd "$FIXTURE"
+  run fx "beat 'PASS: approver is a role'; beat 'PASS overnight-verify-rung3'; beat 'FAIL policy'; beat 'refused: low confidence'; beat 'handoff: cut to clip'; beat 'plain line'"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"✓ approver is a role"* && "$out" == *"✓ overnight-verify-rung3"* ]]
+  [[ "$out" == *"✗ policy"* && "$out" == *"✗ refused: low confidence"* && "$out" == *"↪ cut to clip"* ]]
+  [[ "$out" == *"plain line"* ]]
+  grep -q $'\e\\[1;32m✓' <<<"$output"
+  grep -q $'\e\\[1;31m✗' <<<"$output"
+  assert_fits "$output"
+}
+
+@test "fx: until_ready shows a spinner with seconds, then one line with the time it took" {
+  cd "$FIXTURE"
+  printf 0 >"$BATS_TEST_TMPDIR/n"
+  run fx "ok_on_second() { n=\$(cat '$BATS_TEST_TMPDIR/n'); echo \$((n + 1)) >'$BATS_TEST_TMPDIR/n'; [ \$n -ge 1 ]; }; until_ready 'agent outcome' ok_on_second"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"⠋ agent outcome 0s"* ]]
+  last="$(tr '\r' '\n' <<<"$out" | grep -v '^$' | tail -n1)"
+  [[ "$last" =~ ^·\ agent\ outcome\ [0-9]+s$ ]]
+  [ "${#last}" -le "$STAGE_COLS" ]
+}
+
+@test "fx: until_ready times out with exit 4 and a timeout line" {
+  cd "$FIXTURE"
+  run fx "READY_TIMEOUT_S=0 until_ready 'never' false"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"timeout: never"* ]]
+}
+
+@test "the ladder bar names the three rungs, lights the current one, and fits" {
+  cd "$FIXTURE"
+  run bash -c "export STAGE_FX=0; NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; ladder_text propose 12:59"
+  [ "$output" = "12:59 suggest ▸ propose ▸ act" ]
+  [ "${#output}" -le "$STAGE_COLS" ]
+  run fx "ladder_text propose 2:24"
+  [[ "$(strip_ansi "$output")" == "2:24 suggest ▸ propose ▸ act" ]]
+  grep -q $'\e\\[7;[0-9;]*mpropose' <<<"$output"
+  ! grep -q $'\e\\[7;[0-9;]*msuggest' <<<"$output"
+}
+
+@test "a scene break with a clock sets the bar's clock; a promotion and a demote move the rung" {
+  cd "$FIXTURE"
+  run fx "scene_break '2:19 Look, don'\''t touch' >/dev/null; echo clock=\$_LADDER_CLOCK; ladder_set act; echo level=\$_LADDER_LEVEL"
+  [[ "$output" == *"clock=2:19"* && "$output" == *"level=act"* ]]
+  # the scripts move the rung where the level changes
+  grep -q 'ladder_set "\$level"' "$REPO_ROOT/scripts/demo-common.sh"
+  grep -q 'demote\* \]\] || ladder_refresh' "$REPO_ROOT/scripts/demo-common.sh"
+}
+
+@test "an in-character scene opens with a title card: a double box exactly STAGE_COLS wide" {
+  cd "$FIXTURE"
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; title_card '2:15 a.m.' 'The page'"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"╔"*"║ 2:15 a.m."*"║ The page"*"╚"* ]]
+  while IFS= read -r line; do
+    [[ -z "$line" ]] || [ "${#line}" -eq "$STAGE_COLS" ]
+  done <<<"$out"
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; title_card '2:15 a.m.' 'A title far too long for the card'"
+  [ "$status" -ne 0 ]
+  # the cold open and the close use it
+  grep -q '^title_card "5:00 p.m."' "$REPO_ROOT/scripts/demo-cold-open.sh"
+  grep -q '^title_card "2:15 a.m."' "$REPO_ROOT/scripts/demo-cold-open.sh"
+  grep -q '^title_card ' "$REPO_ROOT/scripts/demo-close.sh"
+}

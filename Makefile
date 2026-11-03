@@ -8,8 +8,17 @@ SHELL := /bin/bash
 ROOT      := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 MAIN_ROOT := $(patsubst %/,%,$(dir $(shell git -C $(ROOT) rev-parse --path-format=absolute --git-common-dir)))
 
+# The caller's environment may pin the push target (tests do), as in scripts/common.sh load_env.
+_CALLER_TRACKED_BRANCH := $(TRACKED_BRANCH)
+_CALLER_REPO_SLUG      := $(REPO_SLUG)
 include $(ROOT)/versions.env
 include $(ROOT)/demo.env
+ifneq ($(_CALLER_TRACKED_BRANCH),)
+TRACKED_BRANCH := $(_CALLER_TRACKED_BRANCH)
+endif
+ifneq ($(_CALLER_REPO_SLUG),)
+REPO_SLUG := $(_CALLER_REPO_SLUG)
+endif
 
 # P25: the pinned tools win on PATH. TOOLS_BIN: command line > .env > demo.env.
 ENV_TOOLS_BIN := $(shell sed -n 's/^TOOLS_BIN=//p' $(MAIN_ROOT)/.env 2>/dev/null | tail -1)

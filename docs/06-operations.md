@@ -244,6 +244,11 @@ The talk's linear flow (the README's Demo Flow) wraps the rung scripts in scenes
   a `speaker_beat` is a full-width bar in that colour, and a scene starts between two `═` bars.
   `DEMO_THEME=light` (the default, for the light stage terminal) or `DEMO_THEME=dark` picks the
   colours.
+- In a real terminal (`STAGE_FX=1`, the default when stdout is a terminal) the scenes also pin a
+  trust-ladder bar to the top line (the story's clock and `suggest ▸ propose ▸ act` with the
+  current rung lit), show a spinner with the seconds so far while they wait, and mark PASS, FAIL,
+  refused and handoff lines with `✓`, `✗` and `↪`. The cold open and the close open with a
+  title card. Piped or under the tests (`STAGE_FX=0`) the output is the plain text.
 - `make reset-to-scene-N` is the matching reset (`0` is `reset-demo`). `reset-rung-1` and
   `reset-demo` close any promotion PR a scene run left open.
 

@@ -23,6 +23,11 @@ make_retarget_fixture() {
   cp -r "$REPO_ROOT/scripts" "$REPO_ROOT/gitops" "$OTHER/"
   cp "$REPO_ROOT/demo.env" "$REPO_ROOT/versions.env" "$OTHER/"
   cp "$REPO_ROOT/bridge/deploy/deployment.yaml" "$OTHER/bridge/deploy/"
+  # the fixture starts on build/demo, whatever branch the live files track (main after Run C)
+  sed -i 's|^TRACKED_BRANCH=.*|TRACKED_BRANCH=build/demo|' "$OTHER/demo.env"
+  grep -rl 'targetRevision: main$' "$OTHER/gitops" | xargs -r sed -i 's|targetRevision: main$|targetRevision: build/demo|'
+  sed -i 's|{name: TRACKED_BRANCH, value: [^}]*}|{name: TRACKED_BRANCH, value: build/demo}|' "$OTHER/bridge/deploy/deployment.yaml"
+  unset TRACKED_BRANCH
   printf '/aiops/autonomy.yaml @org/board\n/policy/ @org/board\n/.github/ @org/board\n' > "$OTHER/.github/CODEOWNERS"
   printf '.env\n.kube/\n.operator/\n' > "$OTHER/.gitignore"
   "$REAL_GIT" -C "$OTHER" add -A
