@@ -312,7 +312,7 @@ gitops-bootstrap: ## Apply the root app-of-apps (Argo CD then creates checkout, 
 # Build, rebuild, info, verification                                           #
 ################################################################################
 
-# The build order (Task 3.16; the README's layout section repeats it):
+# The build order (Task 3.16; docs/06-operations.md repeats it):
 #   vendor -> kind-cluster -> namespaces -> argocd-install (values, notifications-cdevents,
 #   notifications-bridge) -> rollouts-install -> secrets-base -> kps-install -> images
 #   -> litellm-install -> litellm-keys -> grafana-token -> secrets-late (the holmesgpt Argo
