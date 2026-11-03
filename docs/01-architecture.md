@@ -17,7 +17,6 @@ context, is in the [README](../README.md#architecture); level 3, the bridge's co
 %%{init: {"flowchart": {"wrappingWidth": 320}}}%%
 flowchart TB
   gh["<b>GitHub</b><br/>[Software System]<br/>main, PRs, rulesets"]
-  llm["<b>Model provider</b><br/>[Software System]"]
 
   subgraph demo["AIOps trust-ladder demo [kind cluster]"]
     acd["<b>Argo CD</b><br/>[Container: argocd]<br/>Syncs apps from main;<br/>Notifications send CDEvents<br/>and the Degraded webhook"]
@@ -27,7 +26,7 @@ flowchart TB
     sim["<b>cdevents-sim</b><br/>[Container: Python, aiops]<br/>The delivery timeline"]
     bridge["<b>bridge</b><br/>[Container: Python, FastAPI, aiops]<br/>Decides and acts;<br/>the only Git writer"]
     holmes["<b>HolmesGPT</b><br/>[Container: aiops]<br/>Investigates, read-only:<br/>kubectl, Argo CD,<br/>Prometheus, /timeline"]
-    litellm["<b>LiteLLM</b><br/>[Container: aiops, Postgres]<br/>Budget and call log"]
+    litellm["<b>LiteLLM</b><br/>[Container: aiops, Postgres]<br/>Budget and call log;<br/>calls the model provider"]
   end
 
   gh -->|pull| acd
@@ -38,14 +37,14 @@ flowchart TB
   acd -->|CDEvents| sim
   acd -->|Degraded webhook| bridge
   bridge -->|"POST /api/chat"| holmes
-  holmes --> litellm --> llm
+  holmes --> litellm
   bridge ==>|"comment, PR, auto-merge"| gh
   bridge -->|agent events| sim
 
   classDef container fill:#438dd5,stroke:#2e6295,color:#fff
   classDef external fill:#999999,stroke:#6b6b6b,color:#fff
   class acd,ro,checkout,prom,sim,bridge,holmes,litellm container
-  class gh,llm external
+  class gh external
   style demo fill:none,stroke:#1168bd,stroke-dasharray:6 4
 ```
 
