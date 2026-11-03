@@ -114,13 +114,36 @@ wait() {
 }
 # Inside these scripts `wait` is the pause; a background job would be awaited with `builtin wait`.
 
-# ---------------------------------------------------------------- prompts
+# ---------------------------------------------------------------- theme and prompts
+# Like argoconeu26: each character has a bold, colour-coded prompt, a speaker change is a bar in
+# that character's colour, and a scene starts between two bars. DEMO_THEME matches the stage
+# terminal: light (default, the 11-09 setup) or dark.
+DEMO_THEME="${DEMO_THEME:-light}"
+case "$DEMO_THEME" in
+  light) C_PE='1;34' C_SRE='1;35' C_BOTH='1;32' C_SCENE='1;30' C_WALL='3;90' ;;
+  dark) C_PE='1;94' C_SRE='1;95' C_BOTH='1;92' C_SCENE='1;33' C_WALL='3;37' ;;
+  *) die "DEMO_THEME must be light or dark, got '$DEMO_THEME'" ;;
+esac
 DEMO_PROMPT_PLAIN='$ '
-# shellcheck disable=SC2034 # DEMO_PROMPT is read by demo-magic
-as_platform_engineer() { DEMO_PROMPT="\033[0;34mpe\\$ \033[0m"; DEMO_PROMPT_PLAIN='pe$ '; }
-# shellcheck disable=SC2034 # DEMO_PROMPT is read by demo-magic
-as_oncall_sre() { DEMO_PROMPT="\033[0;35msre\\$ \033[0m"; DEMO_PROMPT_PLAIN='sre$ '; }
+_as() { # COLOUR LABEL
+  # shellcheck disable=SC2034 # DEMO_PROMPT is read by demo-magic
+  DEMO_PROMPT="\033[${1}m[$2]\033[0m\\$ "
+  DEMO_PROMPT_PLAIN="[$2]\$ "
+}
+as_platform_engineer() { _as "$C_PE" PE; }
+as_oncall_sre() { _as "$C_SRE" SRE; }
+as_both() { _as "$C_BOTH" ALL; }
 as_platform_engineer
+
+# _bar CHAR COLOUR [TITLE] : a STAGE_COLS-wide line of CHAR in COLOUR, with TITLE set in after two
+_bar() {
+  local ch="$1" colour="$2" title="${3:-}" line fill
+  line="${title:+$ch$ch $title }"
+  ((${#line} <= STAGE_COLS)) || line="${line:0:STAGE_COLS}"
+  fill=$((STAGE_COLS - ${#line}))
+  ((fill > 0)) && line+="$(printf "$ch%.0s" $(seq "$fill"))"
+  printf '\033[%sm%s\033[0m\n' "$colour" "$line"
+}
 
 # rung_break TITLE : one plain line that starts a rung.
 rung_break() { [[ -n "$SCENE" ]] || beat "== $1 =="; }
@@ -138,44 +161,59 @@ _pause() {
   _PAUSE_OPEN=0
 }
 
-scene_break() { # TITLE
+scene_break() { # TITLE : the title between two bars, in the scene colour
+  ((${#1} <= STAGE_COLS)) || refuse 1 "scene title too long" "scene title over $STAGE_COLS columns: $1"
+  _stage_keep "scene: $1"
   printf '\n'
-  beat "$1"
+  _bar '═' "$C_SCENE"
+  printf '\033[%sm%s\033[0m\n' "$C_SCENE" "$1"
+  _bar '═' "$C_SCENE"
   _pause
 }
 
-fourth_wall() { # TITLE
-  local framed="-- $1 --"
-  ((${#framed} <= STAGE_COLS)) || framed="$1"
-  beat "$framed"
+fourth_wall() { # TITLE : an aside, set into a light rule
+  _stage_keep "aside: $1"
+  _bar '┄' "$C_WALL" "$1"
   _pause
 }
 
 speaker_beat() { # WHO TOPIC : WHO is pe (the Platform Engineer), sre (the On-call SRE) or both
   local who="$1" topic="${2:-}" name
+  local colour
   case "$who" in
-    pe) name="Platform Engineer" ;;
-    sre) name="On-call SRE" ;;
-    both) name="Both" ;;
+    pe) name="Platform Engineer" colour="$C_PE" ;;
+    sre) name="On-call SRE" colour="$C_SRE" ;;
+    both) name="Both" colour="$C_BOTH" ;;
     *) die "speaker_beat: WHO must be pe, sre or both, got '$who'" ;;
   esac
   if [[ -n "$SCENE" ]]; then
     _stage_keep "beat: $who: $topic"
-    beat "> $name"
+    _bar '━' "$colour" "$name"
   fi
   _pause
 }
 
 # narrate SCENE KEY : see the header. Always returns 0.
+# A section header is [key] (the Platform Engineer), [key] sre (the On-call SRE) or [key] both;
+# the lines print with that character's prompt, and the prompt in use before is restored after.
 narrate() {
-  local scene="$1" key="$2" file line chunk width
+  local scene="$1" key="$2" file line chunk width who
   local -a lines=()
   file="${NARRATION_DIR:-$(main_root)/narration}/$scene.txt"
   [[ -r "$file" ]] || return 0
   mapfile -t lines < <(awk -v want="[$key]" '
     { h = $0; sub(/[[:space:]]+$/, "", h) }
-    h ~ /^\[[^]]*\]$/ { on = (h == want); next }
+    h ~ /^\[[^]]*\]( (pe|sre|both))?$/ {
+      t = h; sub(/ (pe|sre|both)$/, "", t); on = (t == want)
+      if (on) { w = "pe"; if (h ~ / sre$/) w = "sre"; if (h ~ / both$/) w = "both"; print "@who " w }
+      next
+    }
     on && NF { print }' "$file")
+  ((${#lines[@]})) || return 0
+  who="${lines[0]#@who }"
+  lines=("${lines[@]:1}")
+  local saved_prompt="${DEMO_PROMPT:-}" saved_plain="$DEMO_PROMPT_PLAIN"
+  case "$who" in sre) as_oncall_sre ;; both) as_both ;; esac
   width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
   ((width >= 8)) || width=8
   for line in "${lines[@]}"; do
@@ -186,6 +224,8 @@ narrate() {
       p "# $chunk"
     done < <(printf '%s\n' "$line" | fold -s -w "$width")
   done
+  DEMO_PROMPT="$saved_prompt"
+  DEMO_PROMPT_PLAIN="$saved_plain"
   return 0
 }
 

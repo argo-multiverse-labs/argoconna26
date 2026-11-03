@@ -50,7 +50,7 @@ happy_rung3() {
   run rung 3
   [ "$status" -eq 0 ]
   assert_fits "$output"
-  [[ "$(strip_ansi "$output")" == *"pe\$ make night"* ]]
+  [[ "$(strip_ansi "$output")" == *"[PE]\$ make night"* ]]
 }
 
 @test "a typed command that does not fit is refused" {
@@ -88,7 +88,7 @@ happy_rung3() {
   [ "$status" -eq 0 ]
   grep -qx 'make bump --no-print-directory' "$LOG"
   grep -qx 'make fix --no-print-directory' "$LOG"
-  [[ "$output" != *"pe$ make bump --no-print-directory"* ]] # the screen shows the plain command
+  [[ "$output" != *"[PE]$ make bump --no-print-directory"* ]] # the screen shows the plain command
 }
 
 @test "under NO_WAIT=true, rung 1 fails when the bot comment is a refusal" {

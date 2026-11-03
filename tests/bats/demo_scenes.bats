@@ -30,18 +30,6 @@ write_narration() {
   done
 }
 
-# placeholders_ok DIR : in DIR/*.txt every line that opens a bracket is exactly an SRE placeholder.
-placeholders_ok() {
-  local f line bad=0 re='^# \[SRE: [^]]+\]$'
-  for f in "$1"/*.txt; do
-    [[ -e "$f" ]] || continue
-    while IFS= read -r line; do
-      [[ "$line" =~ $re ]] || { printf '%s: %s\n' "$f" "$line" >&2; bad=1; }
-    done < <(grep -E '\[' "$f" | grep -v '^\[[a-z0-9-]*\]$' || true)
-  done
-  return "$bad"
-}
-
 # probe : a script that does one of each kind of scene stop and several things that must not stop
 write_probe() {
   cat >"$BATS_TEST_TMPDIR/probe.sh" <<EOF
@@ -221,7 +209,7 @@ fake_scenes_stop_at() {
     [ "$status" -eq 0 ]
   done
   run bash -c "SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; speaker_beat pe t; speaker_beat sre t"
-  [[ "$(strip_ansi "$output")" == *"> Platform Engineer"*"> On-call SRE"* ]]
+  [[ "$(strip_ansi "$output")" == *"━━ Platform Engineer"*"━━ On-call SRE"* ]]
   run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; speaker_beat luke t"
   [ "$status" -ne 0 ]
   # every cue in the scripts is one of the three
@@ -262,9 +250,9 @@ cues_ok() {
   local line cue="" bad=0
   while IFS= read -r line; do
     case "$line" in
-      *"> Platform Engineer"*) cue=pe ;;
-      *"> On-call SRE"*) cue=sre ;;
-      *"> Both"*) cue=both ;;
+      *"━━ Platform Engineer"*) cue=pe ;;
+      *"━━ On-call SRE"*) cue=sre ;;
+      *"━━ Both"*) cue=both ;;
       *"[SRE: "*) [[ "$cue" == sre || "$cue" == both ]] || { echo "SRE line under '$cue': $line"; bad=1; } ;;
       *PEline-*) [[ -z "$cue" || "$cue" == pe || "$cue" == both ]] || { echo "PE line under '$cue': $line"; bad=1; } ;;
     esac
@@ -281,7 +269,7 @@ cues_ok() {
   [ "$status" -eq 0 ]
   # from the review's hand-over to the end
   r="$(grep -n 'SRE: review\]' <<<"$output" | head -n1 | cut -d: -f1)"
-  c="$(head -n "$r" <<<"$output" | grep -n '> On-call SRE' | tail -n1 | cut -d: -f1)"
+  c="$(head -n "$r" <<<"$output" | grep -n '━━ On-call SRE' | tail -n1 | cut -d: -f1)"
   [ -n "$c" ]
   window="$(tail -n "+$c" <<<"$output")"
   [[ "$window" == *"rejected: demoting"* ]]
@@ -302,7 +290,7 @@ cues_ok() {
   [ "$status" -eq 0 ]
   cues_ok "$output"
   # the joint landing line is cued for both
-  both="$(grep -n '> Both' <<<"$output" | head -n1 | cut -d: -f1)"
+  both="$(grep -n '━━ Both' <<<"$output" | head -n1 | cut -d: -f1)"
   drop="$(grep -n 'SRE: drop' <<<"$output" | head -n1 | cut -d: -f1)"
   [ -n "$both" ] && [ -n "$drop" ] && [ "$both" -lt "$drop" ]
 }
@@ -318,19 +306,93 @@ cues_ok() {
   [ -n "$p" ] && [ -n "$n" ] && [ "$p" -lt "$n" ]
 }
 
-@test "SRE lines are placeholders only, and no speaker is named" {
-  placeholders_ok "$NARRATION_DIR"
-  placeholders_ok "$REPO_ROOT/tests/bats/fixtures/scene-text"
-  # the real narration, when it exists (local only, in the main checkout)
-  main="$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")"
-  placeholders_ok "$main/narration"
-  # and the check itself catches wording
-  mkdir -p "$BATS_TEST_TMPDIR/bad"
-  printf '[k]\n# [SRE: topic] and some words\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
-  run placeholders_ok "$BATS_TEST_TMPDIR/bad"
+@test "narrate prints an sre-tagged section with the SRE prompt, then restores the prompt" {
+  cd "$FIXTURE"
+  mkdir -p "$BATS_TEST_TMPDIR/tag"
+  printf '[a] sre\n# the SRE says this\n\n[b]\n# the engineer says this\n' >"$BATS_TEST_TMPDIR/tag/scene-1.txt"
+  run bash -c ". '$REPO_ROOT/scripts/demo-common.sh'; as_platform_engineer; NARRATION_DIR='$BATS_TEST_TMPDIR/tag'; narrate scene-1 a; narrate scene-1 b; p '# after'"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"[SRE]\$ # the SRE says this"* ]]
+  [[ "$out" == *"[PE]\$ # the engineer says this"* ]]
+  [[ "$out" == *"[PE]\$ # after"* ]]
+  [[ "$out" != *"the engineer says this"*"[SRE]\$"* ]]
+  assert_fits "$output"
+}
+
+@test "each character has a bold, colour-coded prompt, and a cue is a bar in that colour" {
+  cd "$FIXTURE"
+  run bash -c "SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; as_platform_engineer; p '# a'; as_oncall_sre; p '# b'; as_both; p '# c'; speaker_beat pe t; speaker_beat sre t; speaker_beat both t"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"[PE]\$ # a"*"[SRE]\$ # b"*"[ALL]\$ # c"* ]]
+  # the three prompts use three different bold colours
+  pe_c="$(grep -o $'\e\[1;[0-9]*m\[PE\]' <<<"$output" | head -n1)"
+  sre_c="$(grep -o $'\e\[1;[0-9]*m\[SRE\]' <<<"$output" | head -n1)"
+  all_c="$(grep -o $'\e\[1;[0-9]*m\[ALL\]' <<<"$output" | head -n1)"
+  [ -n "$pe_c" ] && [ -n "$sre_c" ] && [ -n "$all_c" ]
+  [ "${pe_c%%m*}" != "${sre_c%%m*}" ] && [ "${sre_c%%m*}" != "${all_c%%m*}" ]
+  # each cue is a full-width bar: exactly STAGE_COLS wide
+  for name in "Platform Engineer" "On-call SRE" "Both"; do
+    line="$(grep "━━ $name " <<<"$out" | head -n1)"
+    [ "${#line}" -eq "$STAGE_COLS" ]
+  done
+  assert_fits "$output"
+}
+
+@test "a scene break is a title between two full-width bars, and the theme picks the colours" {
+  cd "$FIXTURE"
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; scene_break '2:19 Look'; fourth_wall 'Aside'"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  bar="$(printf '═%.0s' $(seq "$STAGE_COLS"))"
+  [ "$(grep -c "^$bar\$" <<<"$out")" -eq 2 ]
+  [[ "$out" == *"$bar"*"2:19 Look"*"$bar"* ]]
+  [[ "$out" == *"Aside"* ]]
+  assert_fits "$output"
+  light="$output"
+  run bash -c "DEMO_THEME=dark NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; scene_break '2:19 Look'"
+  [ "$status" -eq 0 ]
+  [ "$(grep -m1 -o $'\e\[[0-9;]*m═' <<<"$light")" != "$(grep -m1 -o $'\e\[[0-9;]*m═' <<<"$output")" ]
+  run bash -c "DEMO_THEME=neon NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'"
   [ "$status" -ne 0 ]
-  printf '[k]\n# [Someone: topic]\n' >"$BATS_TEST_TMPDIR/bad/x.txt"
-  run placeholders_ok "$BATS_TEST_TMPDIR/bad"
+}
+
+# speakers_ok DIR : every SRE key (SRE_KEYS) is tagged sre, no other key is, no SRE placeholder is
+# left, and no speaker's real name appears (O35, O36).
+speakers_ok() {
+  local dir="$1" scene key bad=0
+  for scene in "${!SRE_KEYS[@]}"; do
+    [[ -r "$dir/$scene.txt" ]] || continue
+    for key in ${SRE_KEYS[$scene]}; do
+      grep -qxE "\[$key\] (sre|both)" "$dir/$scene.txt" || { echo "$scene [$key] not tagged sre"; bad=1; }
+    done
+  done
+  while IFS= read -r line; do
+    key="${line#*[}"; key="${key%%]*}"; scene="$(basename "${line%%:*}" .txt)"
+    [[ " ${SRE_KEYS[$scene]:-} " == *" $key "* ]] || { echo "$scene [$key] tagged sre but is not an SRE key"; bad=1; }
+  done < <(grep -HxE '\[[^]]+\] (sre|both)' "$dir"/*.txt 2>/dev/null)
+  ! grep -n '\[SRE: ' "$dir"/*.txt || bad=1
+  ! grep -niE 'luke|hilliary' "$dir"/*.txt || bad=1
+  # one stage line per narration line: no line folds under its speaker's prompt
+  local over
+  over="$(awk -v cols="$STAGE_COLS" '/^\[[^]]*\]( (pe|sre|both))?$/ { p = ($0 ~ / (sre|both)$/) ? 7 : 6; on = 1; next }
+    FNR == 1 { on = 0 } on && /^# / { t = substr($0, 3); if (length(t) > cols - p - 2) print FILENAME ": " t }' "$dir"/*.txt)"
+  [[ -z "$over" ]] || { echo "$over"; bad=1; }
+  return "$bad"
+}
+
+@test "the real narration tags each SRE section, has no placeholders, and names no speaker" {
+  main="$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")"
+  [[ -d "$main/narration" ]] || skip "no local narration"
+  speakers_ok "$main/narration"
+  # and the check itself catches a missing tag and a name
+  mkdir -p "$BATS_TEST_TMPDIR/bad"
+  printf '[page]\n# words\n' >"$BATS_TEST_TMPDIR/bad/cold-open.txt"
+  run speakers_ok "$BATS_TEST_TMPDIR/bad"
+  [ "$status" -ne 0 ]
+  printf '[page] sre\n# Luke said\n' >"$BATS_TEST_TMPDIR/bad/cold-open.txt"
+  run speakers_ok "$BATS_TEST_TMPDIR/bad"
   [ "$status" -ne 0 ]
 }
 

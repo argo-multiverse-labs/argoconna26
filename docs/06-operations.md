@@ -236,8 +236,14 @@ The talk's linear flow (the README's Demo Flow) wraps the rung scripts in scenes
 - `DEMO_PACE=talk` stops for Enter only at `scene_break`, `fourth_wall` and `speaker_beat`;
   `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
 - Narration: `narrate SCENE KEY` prints the `[KEY]` section of `narration/<scene>.txt` as comment
-  lines folded to `STAGE_COLS`. The directory is local and not in the repository; without it the
-  scripts print no narration and work the same. `NARRATION_DIR` points elsewhere.
+  lines folded to `STAGE_COLS`. A header `[KEY]` is the Platform Engineer's, `[KEY] sre` the
+  On-call SRE's and `[KEY] both` the two together; each prints under that character's prompt.
+  The directory is local and not in the repository; without it the scripts print no narration
+  and work the same. `NARRATION_DIR` points elsewhere.
+- Who is talking: each character has a bold, colour-coded prompt (`[PE]$`, `[SRE]$`, `[ALL]$`),
+  a `speaker_beat` is a full-width bar in that colour, and a scene starts between two `═` bars.
+  `DEMO_THEME=light` (the default, for the light stage terminal) or `DEMO_THEME=dark` picks the
+  colours.
 - `make reset-to-scene-N` is the matching reset (`0` is `reset-demo`). `reset-rung-1` and
   `reset-demo` close any promotion PR a scene run left open.
 
