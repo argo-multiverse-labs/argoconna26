@@ -106,30 +106,107 @@ Running each rung by hand, the rung scripts, resets and stage day are in
 
 ## Architecture
 
+```mermaid
+flowchart TB
+  op(["operator<br/>make rearm, fix, ..."])
+
+  subgraph gh["GitHub"]
+    repo[("main branch<br/>apps, aiops/autonomy.yaml")]
+    prs["PRs and comments<br/>rulesets, policy-check"]
+  end
+
+  subgraph kind["kind cluster"]
+    direction TB
+    subgraph ns_argocd["ns argocd"]
+      acd["Argo CD<br/>+ Notifications"]
+    end
+    subgraph ns_demo["ns demo"]
+      checkout["checkout<br/>canary Rollout"]
+      pricing["pricing"]
+      loadgen["loadgen"]
+    end
+    subgraph ns_rollouts["ns argo-rollouts"]
+      ro["Argo Rollouts"]
+    end
+    subgraph ns_monitoring["ns monitoring"]
+      prom["Prometheus"]
+      graf["Grafana<br/>trust ladder"]
+    end
+    subgraph ns_aiops["ns aiops"]
+      bridge["bridge<br/>the only writer"]
+      holmes["HolmesGPT, read-only<br/>kubectl, Argo CD,<br/>Prometheus, /timeline"]
+      llm["LiteLLM<br/>budget, call log"]
+      sim["cdevents-sim<br/>timeline"]
+    end
+  end
+
+  model(["model provider"])
+
+  op -->|push| repo
+  prs -->|merge| repo
+  repo -->|pull| acd
+  acd -->|sync| checkout
+  loadgen --> checkout --> pricing
+  ro -->|canary| checkout
+  ro -.->|success rate| prom
+  prom -->|scrape| checkout
+  prom --- graf
+  acd -->|CDEvents| sim
+  sim -->|annotations| graf
+  acd -->|Degraded webhook| bridge
+  bridge -->|POST /api/chat| holmes
+  holmes --> llm --> model
+  bridge ==>|comment, PR, auto-merge| prs
+
+  classDef writer stroke-width:3px
+  class bridge writer
 ```
-  operator (make rearm, fix, ...)                 GitHub: the repo, PRs, comments, rulesets
-     | push commits, post change events             ^  ^                       |
-     v                                              |  | PR / comment          | Argo CD pulls
- +-----------------+  GET /timeline, /incidents     |  | (only writer)         v
- |  cdevents-sim   |<-------------------+           |  |   +-----------------------------------+
- | (timeline,      |                    |           |  |   |  Argo CD  (ns argocd)             |
- |  stands in for  |<-- CDEvents -------|-----------|--|---|   syncs apps from main            |
- |  a collector)   |   deployed,        |           |  |   |   Notifications -> CDEvents + hook|
- +-----------------+   degraded,        |           |  |   +----------------+------------------+
-        ^              resolved         |           |  |                    |        |
-        | agent events                  |           |  |      Degraded      | sync   |
-        |                               |           |  |      webhook       v        v
- +------+-------------------------------+-----------+--+--+      Rollouts: checkout (canary) --> pricing
- |  bridge (ns aiops)                                     |           ^ loadgen     | metrics
- |   autonomy.yaml -> HolmesGPT -> guardrails -> PII scan |           |             v
- |   -> comment | PR | PR + auto-merge                    |      Prometheus --> Grafana (trust ladder)
- +---------------------+----------------------------------+      (ns monitoring)
-                       | POST /api/chat
-                       v
- +---------------------------------------+      +-----------------------------+
- | HolmesGPT (ns aiops, read-only RBAC)  |----->| LiteLLM (budget, call log)  |--> model provider
- |  kubectl, Argo CD, Prometheus, /timeline |   +-----------------------------+
- +---------------------------------------+
+
+### One incident, end to end
+
+The autonomy level in `aiops/autonomy.yaml` decides what the bridge does at the end (the
+`alt` block). Every other step is the same at every rung.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Op as operator or merged PR
+  participant GH as GitHub (main)
+  participant CD as Argo CD
+  participant RO as Argo Rollouts
+  participant P as Prometheus
+  participant S as cdevents-sim
+  participant B as bridge
+  participant H as HolmesGPT
+  participant L as LiteLLM
+
+  Op->>GH: push (an image bump)
+  CD->>GH: pull
+  CD->>RO: sync checkout
+  RO->>P: AnalysisRun: canary success rate
+  P-->>RO: under the SLO
+  RO-->>CD: abort, Degraded
+  CD->>S: CDEvent incident.detected
+  CD->>B: Degraded webhook
+  B->>GH: read aiops/autonomy.yaml
+  B->>H: POST /api/chat (runbook, JSON schema)
+  H->>P: query (also kubectl, Argo CD, GET /timeline)
+  H->>L: model call
+  L-->>H: answer
+  H-->>B: structured analysis
+  B->>B: guardrails, render, PII scan
+  alt suggest
+    B->>GH: comment on the commit that caused it
+  else propose
+    B->>GH: fix PR, a human reviews and merges
+  else act
+    B->>GH: fix PR, auto-merge after policy-check
+  end
+  B->>S: agent events
+  Note over Op,L: once a fix is merged (at suggest, a person's fix)
+  CD->>GH: pull the merged fix
+  CD->>RO: sync, new pods, Healthy
+  CD->>S: CDEvent incident.resolved
 ```
 
 Namespaces: `argocd`, `argo-rollouts`, `monitoring`, `demo` (checkout, pricing, loadgen),

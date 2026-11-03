@@ -4,8 +4,8 @@
 
 A kind cluster runs a small checkout service with a canary rollout, the platform that observes
 and deploys it, and an agent that reacts when a deploy fails. Argo CD tracks one Git branch
-(`TRACKED_BRANCH`, `main`; it was `build/demo` while building). Everything the agent changes goes through that
-branch as a pull request.
+(`TRACKED_BRANCH`, `main`; it was `build/demo` while building). Everything the agent changes
+goes through that branch as a pull request. The README has the same flow as two diagrams.
 
 ## Components
 
