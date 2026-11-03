@@ -1,6 +1,6 @@
 # Observability Is a Platform Problem Now: Closing the AIOps Loop with ArgoCD and GitOps
 
-The demo for the ArgoCon North America 2026 talk by Luke Philips and Hilliary Lipsig
+For the ArgoCon North America 2026 talk by Luke Philips and Hilliary Lipsig
 ([session page](https://cncf-hosted-co-located-events-north-america-2026.sessionize.com/session/1269302)).
 
 A demo of an AIOps agent that earns the right to act. An Argo CD rollout fails, the platform
