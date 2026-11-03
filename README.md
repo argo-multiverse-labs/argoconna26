@@ -107,7 +107,7 @@ Running each rung by hand, the rung scripts, resets and stage day are in
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   op(["operator"])
 
   subgraph gh["GitHub"]
@@ -115,28 +115,26 @@ flowchart LR
     prs["PRs, comments<br/>policy-check"]
   end
 
-  subgraph kind["kind cluster"]
-    subgraph ns_argocd["ns argocd"]
-      acd["Argo CD<br/>+ Notifications"]
-    end
-    subgraph ns_demo["ns demo"]
-      checkout["checkout<br/>canary Rollout"]
-      pricing["pricing"]
-      loadgen["loadgen"]
-    end
-    subgraph ns_rollouts["ns argo-rollouts"]
-      ro["Argo Rollouts"]
-    end
-    subgraph ns_monitoring["ns monitoring"]
-      prom["Prometheus"]
-      graf["Grafana<br/>trust ladder"]
-    end
-    subgraph ns_aiops["ns aiops"]
-      bridge["bridge<br/>only writer"]
-      holmes["HolmesGPT<br/>read-only"]
-      llm["LiteLLM<br/>budget, call log"]
-      sim["cdevents-sim<br/>timeline"]
-    end
+  subgraph ns_argocd["ns argocd"]
+    acd["Argo CD<br/>+ Notifications"]
+  end
+  subgraph ns_demo["ns demo"]
+    checkout["checkout<br/>canary Rollout"]
+    pricing["pricing"]
+    loadgen["loadgen"]
+  end
+  subgraph ns_rollouts["ns argo-rollouts"]
+    ro["Argo Rollouts"]
+  end
+  subgraph ns_monitoring["ns monitoring"]
+    prom["Prometheus"]
+    graf["Grafana<br/>trust ladder"]
+  end
+  subgraph ns_aiops["ns aiops"]
+    bridge["bridge<br/>only writer"]
+    holmes["HolmesGPT<br/>read-only"]
+    llm["LiteLLM<br/>budget, call log"]
+    sim["cdevents-sim<br/>timeline"]
   end
 
   model(["model provider"])
