@@ -1,0 +1,16 @@
+# Rendered by scripts/night.sh job-install. The one rung-3 job: check, then re-arm.
+# %t is the user runtime dir; job.env holds GH_TOKEN (written by make night / make timer-arm).
+[Unit]
+Description=ArgoCon NA26 demo: rung-3 scheduled job (preflight, then rearm)
+
+[Service]
+Type=oneshot
+Environment=KUBECONFIG=@KUBECONFIG@
+Environment="PATH=@PATH@"
+EnvironmentFile=-%t/argoconna26/job.env
+WorkingDirectory=@REPO@
+# The scripts run directly, not through make: make turns every failure into 2, and the unit's
+# ExecMainStatus must be the script's own code (preflight 1, rearm 7, ...). pipefail passes the
+# first failing status through tee.
+ExecStart=/usr/bin/env bash -o pipefail -c 'mkdir -p "@EVIDENCE_DIR@" && { "@REPO@/scripts/preflight.sh" 3 --armed --job-run --quiet && "@REPO@/scripts/rearm.sh"; } 2>&1 | tee -a "@EVIDENCE_DIR@/rung3-run-$$(date -u +%%Y%%m%%dT%%H%%M%%SZ).log"'
+ExecStopPost=/usr/bin/rm -f %t/argoconna26/job.env

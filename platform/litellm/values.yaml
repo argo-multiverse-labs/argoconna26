@@ -1,0 +1,41 @@
+# LiteLLM proxy 1.106.4 (chart litellm-helm). The model list and budget are in config.yaml.
+replicaCount: 1
+image:
+  tag: v1.106.4
+  pullPolicy: IfNotPresent
+
+masterkeySecretName: litellm-masterkey
+masterkeySecretKey: masterkey
+environmentSecrets: [litellm-env]
+
+db:
+  useExisting: true
+  deployStandalone: false
+  endpoint: litellm-postgres
+  database: litellm
+  secret:
+    name: litellm-db
+    usernameKey: username
+    passwordKey: password
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+
+# The chart's Service has no nodePort setting, so a second Service publishes 30400.
+extraResources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: litellm-nodeport
+    spec:
+      type: NodePort
+      selector:
+        app.kubernetes.io/name: litellm
+        app.kubernetes.io/instance: litellm
+      ports:
+        - {name: http, port: 4000, targetPort: http, nodePort: 30400}
+
+resources:
+  requests: {cpu: 200m, memory: 1Gi}
+  limits: {memory: 2Gi}

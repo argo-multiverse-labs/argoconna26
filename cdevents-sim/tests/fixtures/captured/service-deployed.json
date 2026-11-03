@@ -1,0 +1,32 @@
+{
+  "context": {
+    "specversion": "0.5.1",
+    "id": "0362c235-40e9-4a12-afbb-d61fba5cf2b8:deployed:10a1ed9d49e46403fe131d83707de72a3f4baeb3",
+    "source": "/argocd/argocd",
+    "type": "dev.cdevents.service.deployed.0.3.0",
+    "timestamp": "2026-11-01T15:25:12Z"
+  },
+  "subject": {
+    "id": "demo/checkout",
+    "source": "/argocd/argocd",
+    "content": {
+      "environment": {
+        "id": "demo"
+      },
+      "artifactId": "pkg:generic/checkout@10a1ed9d49e46403fe131d83707de72a3f4baeb3?vcs_url=git%2Bhttps%3A%2F%2Fgithub.com%2Fargo-multiverse-labs%2Fargoconna26.git"
+    }
+  },
+  "customData": {
+    "argocd": {
+      "application": "checkout",
+      "project": "default",
+      "syncStatus": "Synced",
+      "healthStatus": "Healthy",
+      "revision": "10a1ed9d49e46403fe131d83707de72a3f4baeb3",
+      "targetRevision": "build/demo",
+      "repoURL": "https://github.com/argo-multiverse-labs/argoconna26.git",
+      "cluster": "https://kubernetes.default.svc",
+      "namespace": "demo"
+    }
+  }
+}

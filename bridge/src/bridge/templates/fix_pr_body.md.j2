@@ -1,0 +1,28 @@
+## {{ s.sections.root_cause }}
+
+Cause: {{ rca.cause_commit_sha }}{% if cause_title %} ({{ cause_title | plain }}){% endif %}
+
+{{ root_cause | plain }}
+
+{% for item in evidence %}- {{ item | plain }}
+{% endfor %}- {{ s.timeline_label }}: {{ timeline | plain }}
+
+## {{ s.sections.blast_radius }}
+
+{{ blast_changes }} {{ blast_leaves }}
+
+## {{ s.sections.evidence }}
+
+{% if argo_url %}[{{ s.argo_link }}]({{ argo_url }})
+
+{% endif %}{% if revisions %}<details><summary>{{ s.revisions_summary }}</summary>
+
+| ID | Revision | Deployed (UTC) | |
+|---|---|---|---|
+{% for r in revisions %}| {{ r.id }} | `{{ r.short }}` | {{ r.deployed }} | {{ r.note }} |
+{% endfor %}
+</details>
+
+{% endif %}---
+
+{{ s.footer[level] }}

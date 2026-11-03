@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-config
+  labels:
+    app: checkout
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+data:
+  UPSTREAM_TIMEOUT_MS: "200"
+  PRICING_URL: http://pricing.demo.svc:8080

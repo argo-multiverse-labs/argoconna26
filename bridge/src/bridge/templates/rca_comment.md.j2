@@ -1,0 +1,12 @@
+## Root cause
+
+{{ root_cause | plain }}
+
+{% for item in evidence %}- {{ item | plain }}
+{% endfor %}- Timeline: {{ timeline | plain }}
+
+Cause: {{ rca.cause_commit_sha }}{% if cause_title %} ({{ cause_title | plain }}){% endif %}
+
+**What a human should do:** {{ patch.file | plain }} {{ patch.key | plain }} {{ patch.from_value | plain }} → {{ patch.to_value | plain }}, and bump config-version
+
+[Argo CD history]({{ argo_url }}) · autonomy: {{ level }}

@@ -1,0 +1,229 @@
+#!/usr/bin/env bats
+# Tests for scripts/secrets.sh (kubectl is a recording stub; nothing touches a cluster)
+
+load helpers
+
+setup() {
+  FIXTURE="$BATS_TEST_TMPDIR/repo"
+  make_fixture_repo "$FIXTURE"
+  mkdir -p "$FIXTURE/.kube"
+  STUBS="$BATS_TEST_TMPDIR/stubs"
+  CALLS="$BATS_TEST_TMPDIR/kubectl.calls"
+  : > "$CALLS"
+  # kubectl stub: records args (and the staging dir mode for 'create secret'),
+  # prints a fake manifest for 'create ... -o yaml', and accepts 'apply'.
+  make_stub "$STUBS" kubectl 'echo "ARGS: $*" >> "'"$CALLS"'"
+    case "$*" in
+      "config current-context") echo kind-argoconna26 ;;
+      *"create secret generic"*)
+        case "$*" in *--from-env-file=*) echo "error: from-env-file cannot be combined with from-file" >&2; exit 1;; esac
+        d="$(grep -o -- "--from-file=/[^ ]*" <<<"$*" | cut -d= -f2-)"
+        echo "DIR-MODE: $(stat -c %a "$d")" >> "'"$CALLS"'"
+        echo "DIR-FILES: $(ls "$d" | tr "\n" " ")" >> "'"$CALLS"'"
+        [ ! -f "$d/ARGOCD_AUTH_TOKEN" ] || cp "$d/ARGOCD_AUTH_TOKEN" "'"$BATS_TEST_TMPDIR"'/holmes-argocd"
+        case "$*" in *"generic argocd-initial-admin-secret "*) cp "$d/password" "'"$BATS_TEST_TMPDIR"'/initial-pw" ;; esac
+        echo "apiVersion: v1"; echo "kind: Secret" ;;
+      *"create namespace"*) echo "apiVersion: v1"; echo "kind: Namespace" ;;
+      *"apply"*"-f -"*) cat > /dev/null; echo "applied" ;;
+      *"get secret argocd-initial-admin-secret"*"jsonpath"*) if [ -f "'"$BATS_TEST_TMPDIR"'/initial-pw" ]; then base64 -w0 < "'"$BATS_TEST_TMPDIR"'/initial-pw"; else printf %s argo-admin-s3cret | base64 -w0; fi ;;
+      *"patch secret argocd-secret"*)
+        f="$(grep -o -- "--patch-file=[^ ]*" <<<"$*" | cut -d= -f2-)"
+        cp "$f" "'"$BATS_TEST_TMPDIR"'/argocd-secret-patch" ;;
+      *"get secret holmes-argocd"*"jsonpath"*) [ -f "'"$BATS_TEST_TMPDIR"'/holmes-argocd" ] && base64 -w0 < "'"$BATS_TEST_TMPDIR"'/holmes-argocd" || true ;;
+      *"get secret"*"jsonpath"*) ;;
+      *"get secret"*)
+        if [ -f "'"$BATS_TEST_TMPDIR"'/last-applied" ]; then
+          echo "{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/last-applied-configuration\":\"x\"}}}"
+        else echo "{\"metadata\":{}}"; fi ;;
+      *"annotate secret"*) ;;
+    esac'
+  # curl: a tiny Argo CD API for the holmesgpt token. Credentials arrive through -K files or stdin.
+  make_stub "$STUBS" curl 'echo "CURL: $*" >> "'"$BATS_TEST_TMPDIR"'/curl.calls"
+    method=GET; cfg=""; url=""; data=""
+    while [ $# -gt 0 ]; do
+      case "$1" in -X) method="$2"; shift 2 ;; -K) cfg="$2"; shift 2 ;; --data-binary) data="$(cat)"; shift 2 ;; -H|--max-time|-o|-w) shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+    done
+    path="${url#*://*/}"; path="/${path#/}"
+    tok=""; [ -z "$cfg" ] || tok="$(sed -n "s/^header = \"Authorization: Bearer \(.*\)\"$/\1/p" "$cfg")"
+    case "$method $path" in
+      "POST /api/v1/session") grep -q argo-admin-s3cret <<<"$data" && echo "{\"token\":\"sess-token\"}" || exit 22 ;;
+      "POST /api/v1/account/holmesgpt/token")
+        [ "$tok" = sess-token ] || exit 22
+        n=$(( $(cat "'"$BATS_TEST_TMPDIR"'/n" 2>/dev/null || echo 0) + 1 )); echo $n > "'"$BATS_TEST_TMPDIR"'/n"
+        echo "$n" >> "'"$BATS_TEST_TMPDIR"'/argo-valid"; echo "{\"token\":\"holmes-argo-$n\"}" ;;
+      "GET /api/v1/applications") [ "${tok#holmes-argo-}" != "$tok" ] && grep -qx "${tok#holmes-argo-}" "'"$BATS_TEST_TMPDIR"'/argo-valid" 2>/dev/null && echo "{}" || exit 22 ;;
+      *) echo "unexpected: $method $path" >&2; exit 22 ;;
+    esac'
+  # argocd: only `account bcrypt` is used (for ARGOCD_ADMIN_PASSWORD)
+  make_stub "$STUBS" argocd 'echo "ARGOCD: $*" >> "'"$BATS_TEST_TMPDIR"'/argocd.calls"
+    [ "$1 $2" = "account bcrypt" ] || exit 1
+    printf "%s\n" "\$2a\$10\$fakehashfakehashfakehashfakehashfakehashfakehash12"'
+  export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
+  # fake values, held in neutrally named variables so secret scanners see no credential-shaped lines
+  v1=grafana-s3cret-pw v2=master-s3cret v3=salt-s3cret v4=db-s3cret v5=sk-ant-s3cret v6=bridge-s3cret v7=holmes-s3cret
+  {
+    echo "GRAFANA_ADMIN_PASSWORD=$v1"
+    echo "LITELLM_MASTER_KEY=$v2"
+    echo "LITELLM_SALT_KEY=$v3"
+    echo "LITELLM_DB_PASSWORD=$v4"
+    echo "ANTHROPIC_API_KEY=$v5"
+    echo "BRIDGE_WEBHOOK_TOKEN=$v6"
+    echo "HOLMES_API_KEY=$v7"
+  } > "$FIXTURE/.env"
+  chmod 600 "$FIXTURE/.env"
+}
+
+run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
+
+@test "secrets is idempotent" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  first="$(grep -c 'apply.*-f -' "$CALLS")"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  second="$(grep -c 'apply.*-f -' "$CALLS")"
+  [ "$first" -gt 0 ]
+  [ "$second" -eq $((first * 2)) ]
+  # every secret goes through create --dry-run | apply, never a bare create
+  ! grep -E 'ARGS:.* create secret' "$CALLS" | grep -v -- '--dry-run=client'
+}
+
+@test "missing key skips with warning, exit 0" {
+  : > "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped: grafana-admin"* ]]
+  ! grep -q 'create secret' "$CALLS"
+}
+
+@test "litellm without a provider key warns" {
+  grep -v ANTHROPIC_API_KEY "$FIXTURE/.env" > "$FIXTURE/.env.new" && mv "$FIXTURE/.env.new" "$FIXTURE/.env"
+  chmod 600 "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no provider key"* ]]
+}
+
+@test "no secret value appears in output" {
+  run run_secrets all
+  [ "$status" -eq 0 ]
+  for v in grafana-s3cret-pw master-s3cret salt-s3cret db-s3cret sk-ant-s3cret bridge-s3cret holmes-s3cret; do
+    [[ "$output" != *"$v"* ]]
+  done
+}
+
+@test "no secret value appears in kubectl arguments, and secret staging dirs are mode 700" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  for v in grafana-s3cret-pw master-s3cret salt-s3cret db-s3cret sk-ant-s3cret bridge-s3cret holmes-s3cret; do
+    ! grep -q "$v" "$CALLS"
+  done
+  grep -q 'DIR-MODE: 700' "$CALLS"
+  ! grep 'DIR-MODE' "$CALLS" | grep -vq 'DIR-MODE: 700'
+}
+
+@test "key file path outside repo required" {
+  echo "-----BEGIN KEY-----" > "$FIXTURE/agent.pem"
+  echo "GITHUB_APP_KEY_PATH=$FIXTURE/agent.pem" >> "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must live outside the repo"* ]]
+}
+
+@test "a key file outside the repo is accepted" {
+  echo "-----BEGIN KEY-----" > "$BATS_TEST_TMPDIR/agent.pem"
+  echo "GITHUB_APP_KEY_PATH=$BATS_TEST_TMPDIR/agent.pem" >> "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  grep -q -- '--from-file=github-app-key=' "$CALLS"
+}
+
+@test "refuses a foreign context before any secret is written" {
+  make_stub "$STUBS" kubectl 'echo dv-cd-lc-prd-us-east-1'
+  run run_secrets base
+  [ "$status" -eq 3 ]
+}
+
+@test "late secrets: cdevents-grafana is made by make grafana-token" {
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped: cdevents-grafana"* ]]
+}
+
+@test "secrets use server-side apply, so no last-applied copy of the values is kept" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  grep 'ARGS:' "$CALLS" | grep -q -- 'apply --server-side --field-manager=secrets-sh --force-conflicts -f -'
+  # every apply that follows a 'create secret' is server-side
+  grep -qE 'ARGS:.* apply ' "$CALLS"
+  ! grep -E 'ARGS:.* apply ' "$CALLS" | grep -v -- '--server-side' | grep -q .
+  ! grep -q 'annotate secret' "$CALLS"
+}
+
+@test "secrets strip a last-applied annotation left by an older client-side apply" {
+  echo '{"x":1}' > "$BATS_TEST_TMPDIR/last-applied"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  grep -q 'annotate secret grafana-admin -n monitoring kubectl.kubernetes.io/last-applied-configuration-' "$CALLS"
+}
+
+@test "holmes: stores the API key and a read-only Argo token" {
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/holmes-argocd")" = "holmes-argo-1" ]
+  grep -q 'DIR-FILES: HOLMES_API_KEY' "$CALLS"
+  grep -q 'POST .*api/v1/account/holmesgpt/token' "$BATS_TEST_TMPDIR/curl.calls"
+}
+
+@test "holmes: a token Argo CD still accepts is kept" {
+  run_secrets late
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip"*"holmes-argocd"* ]]
+  [ "$(cat "$BATS_TEST_TMPDIR/holmes-argocd")" = "holmes-argo-1" ]
+  [ "$(grep -c 'account/holmesgpt/token' "$BATS_TEST_TMPDIR/curl.calls")" -eq 1 ]
+}
+
+@test "holmes: neither the admin password nor a token reaches curl or kubectl arguments" {
+  run run_secrets late
+  [ "$status" -eq 0 ]
+  ! grep -q 'argo-admin-s3cret' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+  ! grep -q 'holmes-argo-' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+  ! grep -q 'sess-token' "$BATS_TEST_TMPDIR/curl.calls" "$CALLS"
+}
+
+@test "holmes: without HOLMES_API_KEY the API-key Secret is skipped with a warning" {
+  grep -v HOLMES_API_KEY "$FIXTURE/.env" > "$FIXTURE/.env.new" && mv "$FIXTURE/.env.new" "$FIXTURE/.env"
+  chmod 600 "$FIXTURE/.env"
+  run run_secrets late
+  [[ "$output" == *"skipped: holmes-api"* ]]
+}
+
+@test "without ARGOCD_ADMIN_PASSWORD, Argo CD keeps its generated admin password" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  ! grep -q 'patch secret argocd-secret' "$CALLS"
+  [ ! -f "$BATS_TEST_TMPDIR/initial-pw" ]
+}
+
+@test "ARGOCD_ADMIN_PASSWORD sets the admin login, keeps the initial secret in step, and is idempotent" {
+  v8=argo-demo-pw
+  echo "ARGOCD_ADMIN_PASSWORD=$v8" >> "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  # argocd-secret gets a bcrypt hash and a new mtime, never the plain value
+  patch="$(cat "$BATS_TEST_TMPDIR/argocd-secret-patch")"
+  [[ "$patch" == *'"admin.password"'* && "$patch" == *'"admin.passwordMtime"'* ]]
+  ! grep -q "$v8" "$BATS_TEST_TMPDIR/argocd-secret-patch"
+  [ "$(jq -r '.data["admin.password"]' "$BATS_TEST_TMPDIR/argocd-secret-patch" | base64 -d)" = '$2a$10$fakehashfakehashfakehashfakehashfakehashfakehash12' ]
+  # the initial secret now holds the same password, for make argocd-password and secrets-late
+  [ "$(cat "$BATS_TEST_TMPDIR/initial-pw")" = "$v8" ]
+  # the value reaches no kubectl argument and no output
+  ! grep -q "$v8" "$CALLS"
+  [[ "$output" != *"$v8"* ]]
+  # a second run sees the initial secret already matches and changes nothing
+  rm "$BATS_TEST_TMPDIR/argocd-secret-patch"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/argocd-secret-patch" ]
+}

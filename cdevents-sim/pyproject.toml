@@ -1,0 +1,30 @@
+[project]
+name = "cdevents-sim"
+version = "0.1.0"
+description = "Simulated CDEvents collector with a small query API (stands in for cdviz-collector + Postgres)"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.34",
+  "jsonschema>=4.23",
+  "prometheus-client==0.26.0",
+  "httpx>=0.28",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "respx>=0.22"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cdevents_sim"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "cdevents_sim/schemas"
+"fixtures" = "cdevents_sim/fixtures"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,50 @@
+################################################################################
+## Argo CD Notifications to the bridge: a Degraded application becomes one webhook.
+##
+## Applied as a third Helm values file by `make argocd-install`, next to
+## notifications-cdevents.yaml (Helm merges the notifiers, templates and triggers maps).
+## The bearer token is read from argocd-notifications-secret key `bridge-token`, which
+## scripts/secrets.sh (secret_argocd_notifications) writes from BRIDGE_WEBHOOK_TOKEN.
+##
+## Argo retries a failing webhook a few times and then logs the error. With no bridge pod
+## behind the Service the controller keeps running: it only logs "connection refused".
+
+notifications:
+  notifiers:
+    service.webhook.bridge: |
+      url: http://bridge.aiops.svc:8080/hooks/argocd
+      headers:
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer $bridge-token
+      retryMax: 3
+      # time.Duration fields take nanoseconds as numbers; a string such as 1s fails to unmarshal
+      # and breaks every notifier, the cdevents one included.
+      retryWaitMin: 1000000000
+      retryWaitMax: 5000000000
+
+  templates:
+    template.bridge-app-degraded: |
+      webhook:
+        bridge:
+          method: POST
+          body: |
+            {
+              "app": {{ .app.metadata.name | toJson }},
+              "namespace": {{ .app.spec.destination.namespace | toJson }},
+              "revision": {{ .app.status.operationState.syncResult.revision | toJson }},
+              "sync_revision": {{ .app.status.sync.revision | toJson }},
+              "health": {{ .app.status.health.status | toJson }},
+              "history": {{ .app.status.history | default list | toJson }},
+              "repo_url": {{ .app.spec.source.repoURL | toJson }},
+              "target_revision": {{ .app.spec.source.targetRevision | toJson }}
+            }
+
+  triggers:
+    # Once per Degraded transition, not per revision: a fix that syncs while the aborted
+    # rollout still reports Degraded is a new revision but not a new incident.
+    trigger.on-health-degraded-bridge: |
+      - when: app.status.health.status == 'Degraded'
+        oncePer: app.status.health.lastTransitionTime
+        send: [bridge-app-degraded]

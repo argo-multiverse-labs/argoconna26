@@ -1,0 +1,208 @@
+## Argo CD Notifications to cdevents-sim, as CDEvents v0.5.1 (Argo CD 3.5.6 docs).
+##
+## The template library comes from the CDviz design (the cdviz project's Argo CD
+## notifications for CDEvents). The changes for this demo:
+##   - the webhook points at cdevents-sim; the headers are on the service, and
+##     method: POST plus the body are in each template
+##   - the incident subject id ends with the revision, so two incidents on one app differ
+##   - service.removed is not subscribed (no template, no trigger)
+##   - there is no global subscription: checkout subscribes through annotations on its
+##     Application (gitops/apps/checkout.yaml)
+##
+## Applied as a second Helm values file by `make argocd-install`.
+
+notifications:
+  enabled: true
+
+  notifiers:
+    service.webhook.cdevents: |
+      url: http://cdevents-sim.aiops.svc:8080/events
+      headers:
+      - name: Content-Type
+        value: application/json
+
+  # CDEvents-compliant notification templates
+  templates:
+    template.cdevents-service-deployed: |
+      webhook:
+        cdevents:
+          method: POST
+          body: |
+            {
+              "context": {
+                "specversion": "0.5.1",
+                "id": "{{.app.metadata.uid}}:deployed:{{.app.status.operationState.syncResult.revision}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "type": "dev.cdevents.service.deployed.0.3.0",
+                "timestamp": "{{.app.status.operationState.finishedAt}}"
+              },
+              "subject": {
+                "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "content": {
+                  "environment": {
+                    "id": "{{.app.spec.destination.namespace}}"
+                  },
+                  "artifactId": "pkg:generic/{{.app.metadata.name}}@{{.app.status.operationState.syncResult.revision}}{{- if .app.spec.source }}{{- if .app.spec.source.chart }}?repository_url={{ .app.spec.source.repoURL | urlquery }}{{- else }}?vcs_url={{ printf "git+%s" .app.spec.source.repoURL | urlquery }}{{- end }}{{- end }}"
+                }
+              },
+              "customData": {
+                "argocd": {
+                  "application": "{{.app.metadata.name}}",
+                  "project": {{ .app.spec.project | toJson }},
+                  "syncStatus": "{{.app.status.sync.status}}",
+                  "healthStatus": "{{.app.status.health.status}}",
+                  "revision": "{{.app.status.operationState.syncResult.revision}}",
+                  {{- if .app.spec.source }}
+                  "targetRevision": {{ .app.spec.source.targetRevision | toJson }},
+                  "repoURL": {{ .app.spec.source.repoURL | toJson }},
+                  {{- end }}
+                  "cluster": {{ .app.spec.destination.server | toJson }},
+                  "namespace": "{{.app.spec.destination.namespace}}"
+                }
+              }
+            }
+
+    template.cdevents-incident-detected: |
+      webhook:
+        cdevents:
+          method: POST
+          body: |
+            {
+              "context": {
+                "specversion": "0.5.1",
+                "id": "{{.app.metadata.uid}}:degraded:{{ .app.status.health.lastTransitionTime | default "unknown" }}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "type": "dev.cdevents.incident.detected.0.3.0",
+                "timestamp": "{{- if .app.status.health.lastTransitionTime }}{{ .app.status.health.lastTransitionTime }}{{- else }}{{ now | date "2006-01-02T15:04:05.000000Z07:00" }}{{- end }}"
+              },
+              "subject": {
+                "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}/incident-{{.app.status.sync.revision}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "content": {
+                  "description": {{ $msg := .app.status.health.message | default "" }}{{- if $msg }}{{ printf "ArgoCD application %s health is %s: %s" .app.metadata.name .app.status.health.status $msg | toJson }}{{- else }}{{ printf "ArgoCD application %s health is %s" .app.metadata.name .app.status.health.status | toJson }}{{- end }},
+                  "environment": {
+                    "id": "{{.app.spec.destination.namespace}}"
+                  },
+                  "service": {
+                    "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}"
+                  }{{- if .app.status.sync.revision }},
+                  "artifactId": "pkg:generic/{{.app.metadata.name}}@{{.app.status.sync.revision}}"
+                  {{- end }}
+                }
+              },
+              "customData": {
+                "argocd": {
+                  "application": "{{.app.metadata.name}}",
+                  "healthStatus": "{{.app.status.health.status}}",
+                  "healthMessage": {{ .app.status.health.message | default "" | toJson }},
+                  "syncStatus": "{{.app.status.sync.status}}",
+                  "cluster": {{ .app.spec.destination.server | toJson }},
+                  "namespace": "{{.app.spec.destination.namespace}}"
+                }
+              }
+            }
+
+    template.cdevents-sync-failed: |
+      webhook:
+        cdevents:
+          method: POST
+          body: |
+            {
+              "context": {
+                "specversion": "0.5.1",
+                "id": "{{.app.metadata.uid}}:syncfail:{{.app.status.operationState.startedAt}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "type": "dev.cdevents.incident.detected.0.3.0",
+                "timestamp": "{{- if .app.status.operationState.finishedAt }}{{ .app.status.operationState.finishedAt }}{{- else }}{{ .app.status.operationState.startedAt }}{{- end }}"
+              },
+              "subject": {
+                "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}/incident-{{.app.status.operationState.syncResult.revision}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "content": {
+                  "description": {{ printf "ArgoCD sync %s for application %s: %s" .app.status.operationState.phase .app.metadata.name (.app.status.operationState.message | default "no message") | toJson }},
+                  "environment": {
+                    "id": "{{.app.spec.destination.namespace}}"
+                  },
+                  "service": {
+                    "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}"
+                  }{{- if .app.status.operationState.syncResult }}{{- if .app.status.operationState.syncResult.revision }},
+                  "artifactId": "pkg:generic/{{.app.metadata.name}}@{{.app.status.operationState.syncResult.revision}}"
+                  {{- end }}{{- end }}
+                }
+              },
+              "customData": {
+                "argocd": {
+                  "application": "{{.app.metadata.name}}",
+                  "phase": "{{.app.status.operationState.phase}}",
+                  "message": {{ .app.status.operationState.message | default "" | toJson }},
+                  "syncStatus": "{{.app.status.sync.status}}",
+                  "cluster": {{ .app.spec.destination.server | toJson }},
+                  "namespace": "{{.app.spec.destination.namespace}}"
+                }
+              }
+            }
+
+    template.cdevents-incident-resolved: |
+      webhook:
+        cdevents:
+          method: POST
+          body: |
+            {
+              "context": {
+                "specversion": "0.5.1",
+                "id": "{{.app.metadata.uid}}:resolved:{{.app.status.health.lastTransitionTime}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "type": "dev.cdevents.incident.resolved.0.3.0",
+                "timestamp": "{{.app.status.health.lastTransitionTime}}"
+              },
+              "subject": {
+                "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}/incident-{{.app.status.sync.revision}}",
+                "source": "/argocd/{{.app.metadata.namespace}}",
+                "content": {
+                  "description": {{ printf "ArgoCD application %s health recovered to Healthy" .app.metadata.name | toJson }},
+                  "environment": {
+                    "id": "{{.app.spec.destination.namespace}}"
+                  },
+                  "service": {
+                    "id": "{{.app.spec.destination.namespace}}/{{.app.metadata.name}}"
+                  }{{- if .app.status.sync.revision }},
+                  "artifactId": "pkg:generic/{{.app.metadata.name}}@{{.app.status.sync.revision}}"
+                  {{- end }}
+                }
+              },
+              "customData": {
+                "argocd": {
+                  "application": "{{.app.metadata.name}}",
+                  "healthStatus": "{{.app.status.health.status}}",
+                  "syncStatus": "{{.app.status.sync.status}}",
+                  "cluster": {{ .app.spec.destination.server | toJson }},
+                  "namespace": "{{.app.spec.destination.namespace}}"
+                }
+              }
+            }
+
+  triggers:
+    trigger.on-deployed-cdevents: |
+      - description: Application synced and healthy (CDEvents service.deployed), once per deployed revision
+        oncePer: app.status.operationState?.syncResult?.revision
+        send: [cdevents-service-deployed]
+        when: app.status.operationState != nil and app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+
+    trigger.on-health-degraded-cdevents: |
+      - description: Application health degraded (CDEvents incident.detected)
+        oncePer: app.status.health.lastTransitionTime
+        send: [cdevents-incident-detected]
+        when: app.status.health.status == 'Degraded'
+
+    trigger.on-sync-failed-cdevents: |
+      - description: Application sync failed (CDEvents incident.detected)
+        oncePer: app.status.operationState?.startedAt
+        send: [cdevents-sync-failed]
+        when: app.status.operationState != nil and app.status.operationState.phase in ['Error', 'Failed']
+
+    trigger.on-health-recovered-cdevents: |
+      - description: Application health recovered (CDEvents incident.resolved). It also fires for a first Healthy with no incident; cdevents-sim drops those.
+        oncePer: app.status.health.lastTransitionTime
+        send: [cdevents-incident-resolved]
+        when: app.status.health.status == 'Healthy' and app.status.health.lastTransitionTime != nil

@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge
+  labels:
+    app: bridge
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+spec:
+  # One replica: the bridge keeps its incident set in memory, and one worker handles one
+  # incident at a time. (It ran at 0 until the GitHub rulesets existed, L5a.)
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bridge
+  template:
+    metadata:
+      labels:
+        app: bridge
+        example.dev/owner: payments-team
+        example.dev/tier: "1"
+        slo.example.dev/success-rate: "99"
+    spec:
+      serviceAccountName: bridge
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        # Secret volume files belong to root. fsGroup gives them group 10001, so the
+        # bridge user can read the GitHub App key (mode 0440 below).
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bridge
+          image: bridge
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          env:
+            # Values from demo.env (the consistency check compares them).
+            - {name: REPO_SLUG, value: argo-multiverse-labs/argoconna26}
+            - {name: TRACKED_BRANCH, value: build/demo}
+            - {name: HOLMES_URL, value: "http://holmes-holmes.aiops.svc"}
+            - {name: HOLMES_TIMEOUT_S, value: "115"}
+            - {name: STAGE_COLS, value: "30"}
+            - {name: CDEVENTS_URL, value: "http://cdevents-sim.aiops.svc:8080/events"}
+            - {name: BRIDGE_EVENT_SOURCE, value: /argoconna26/bridge}
+            - {name: ARGO_UI_URL, value: "http://127.0.0.1:30080"}
+            - {name: GITHUB_APP_KEY_PATH, value: /etc/bridge/github/github-app-key}
+            - {name: DRYRUN_SUMMARY_PATH, value: /etc/bridge/dryrun/summary.json}
+            - {name: ROLLOUT_FILE, value: apps/checkout/deploy/rollout.yaml}
+            - {name: KUSTOMIZATION_FILE, value: apps/checkout/kustomization.yaml}
+            - {name: CHECKOUT_CVE_TAG, value: v1.4.2}
+            - {name: BOT_LOGIN, value: "argoconna26-agent[bot]"}
+            - {name: POLICY_CHECK_CONTEXT, value: policy-check}
+            - {name: POLICY_CHECK_INTEGRATION_ID, value: "15368"}
+            # Pinned at the bridge's defaults only so the optional Secret bridge-env (envFrom,
+            # below) can never set them: an `env` entry beats envFrom. A test checks that every
+            # setting is pinned here except the TEST_* hooks.
+            - {name: GITHUB_API_URL, value: "https://api.github.com"}
+            - {name: CONFIG_ALLOWLIST, value: '["apps/*/config/*.yaml"]'}
+            - {name: CONFIG_VERSION_ANNOTATION, value: example.dev/config-version}
+            - {name: CONFIDENCE_THRESHOLD, value: "0.7"}
+            - {name: DRY_FORGE, value: "false"}
+            - {name: HOLMES_MODEL, value: rca}
+            - {name: STATUS_REFRESH_S, value: "60"}
+            - {name: RECONCILE_APP, value: checkout}
+            - {name: RECONCILE_INTERVAL_S, value: "30"}
+            - {name: ACT_CHECK_POLL_S, value: "5"}
+            - {name: ACT_CHECK_TIMEOUT_S, value: "600"}
+            - {name: ACT_AUTOMERGE_GRACE_S, value: "30"}
+            # Secret bridge-secrets is written by scripts/secrets.sh (secret_bridge).
+            - name: BRIDGE_WEBHOOK_TOKEN
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: webhook-token}}
+            - name: HOLMES_API_KEY
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: holmes-api-key, optional: true}}
+            - name: GITHUB_APP_ID
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: github-app-id, optional: true}}
+            - name: GITHUB_INSTALLATION_ID
+              valueFrom: {secretKeyRef: {name: bridge-secrets, key: github-installation-id, optional: true}}
+          # Test hooks only (Task 4.6 failure paths): TEST_CONFIDENCE_THRESHOLD and
+          # TEST_HOLMES_TIMEOUT_S. Every other name is pinned in env above, so it can't win.
+          # Absent in normal runs; Argo CD does not manage it. preflight fails while it exists,
+          # and /status shows test_hooks_active.
+          envFrom:
+            - secretRef: {name: bridge-env, optional: true}
+          volumeMounts:
+            - {name: github-key, mountPath: /etc/bridge/github, readOnly: true}
+            - {name: dryrun-summary, mountPath: /etc/bridge/dryrun, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 384Mi}
+      volumes:
+        - name: github-key
+          secret:
+            secretName: bridge-secrets
+            defaultMode: 0440
+            items:
+              - {key: github-app-key, path: github-app-key}
+        - name: dryrun-summary
+          configMap:
+            name: dryrun-summary
+            optional: true

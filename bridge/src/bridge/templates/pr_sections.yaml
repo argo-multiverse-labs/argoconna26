@@ -1,0 +1,34 @@
+# The fix-PR body's headings and fixed sentences (Task 4.3), and the refusal comment's
+# sentence for each level.
+#
+# Every heading and sentence here is a proposal for the promotion board to rewrite in
+# their own words; fix_pr_body.md.j2 and the tests read them from this file. The one
+# line that is not here is `Cause: <40-hex sha> (<commit title>)`: the policy check
+# parses it, so its form is fixed.
+#
+# Placeholders in {braces} are filled by the bridge with values it has already checked.
+sections:
+  root_cause: Root cause
+  blast_radius: Blast radius
+  evidence: Evidence for the reviewer
+timeline_label: Timeline
+argo_link: Argo CD history
+revisions_summary: Synced revisions (last 5)
+blast_radius:
+  changes: "Changes {key} in {file} and {annotation} {cv_from}→{cv_to}."
+  leaves_image: "Leaves the image ({image} from {kustomization}{security_note}), RBAC and every other key unchanged."
+  security_note: ", including the {cve_tag} security fix"
+  leaves: "Leaves the image, RBAC and every other key unchanged."
+footer:
+  propose: "Opened by the agent at autonomy level propose. A human reviews and merges."
+  act: "Opened by the agent at autonomy level act. Auto-merge is allowed only if policy-check passes; a human reviews it after the fact."
+# Act (Task 5.4): the PR comments when policy-check fails (posted once by the reconciler) or
+# reports nothing in time (posted by the act flow). The PR stays open for a human either way.
+policy:
+  failed: "Policy check failed; leaving this for a human."
+  no_result: "policy-check did not pass within {minutes} min; leaving this for a human."
+# The refusal comment's sentence (refusal_comment.md.j2), by autonomy level.
+refusal:
+  suggest: "The investigation finished, but its answer did not pass the guardrails, so the agent is not suggesting a fix."
+  propose: "The investigation finished, but its answer did not pass the guardrails, so the agent is not opening a fix PR."
+  act: "The investigation finished, but its answer did not pass the guardrails, so the agent is not opening a fix PR."

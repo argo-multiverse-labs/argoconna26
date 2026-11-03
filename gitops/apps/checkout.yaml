@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: checkout
+  namespace: argocd
+  annotations:
+    # CDEvents to cdevents-sim (platform/argocd/notifications-cdevents.yaml)
+    notifications.argoproj.io/subscribe.on-deployed-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-health-degraded-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-sync-failed-cdevents.cdevents: ""
+    notifications.argoproj.io/subscribe.on-health-recovered-cdevents.cdevents: ""
+    # Degraded -> the bridge (platform/argocd/notifications-bridge.yaml)
+    notifications.argoproj.io/subscribe.on-health-degraded-bridge.bridge: ""
+spec:
+  project: default
+  revisionHistoryLimit: 25
+  source:
+    repoURL: https://github.com/argo-multiverse-labs/argoconna26.git
+    targetRevision: build/demo
+    path: apps/checkout
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

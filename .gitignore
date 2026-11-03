@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local cluster, dry-run and recording artifacts
+.kube/
+.dryruns/
+recordings/
+*.pem
+.operator/
+.evidence/

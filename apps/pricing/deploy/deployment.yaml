@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pricing
+  labels:
+    app: pricing
+    example.dev/owner: payments-team
+    example.dev/tier: "1"
+    slo.example.dev/success-rate: "99"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pricing
+  template:
+    metadata:
+      labels:
+        app: pricing
+        example.dev/owner: payments-team
+        example.dev/tier: "1"
+        slo.example.dev/success-rate: "99"
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: pricing
+          image: pricing
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 192Mi}

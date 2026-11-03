@@ -1,0 +1,7 @@
+## Agent refused
+
+{{ sentence }}
+
+{% for refusal in refusals %}- {{ refusal.reason }}: {{ refusal.detail | plain }}
+{% endfor %}
+A human should take this one. [Argo CD history]({{ argo_url }}) · autonomy: {{ level }}

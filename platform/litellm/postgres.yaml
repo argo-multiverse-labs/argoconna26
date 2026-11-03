@@ -1,0 +1,65 @@
+# Postgres for LiteLLM (keys, budget, spend log). A plain StatefulSet with a 1Gi PVC.
+# The chart's db.deployStandalone is not usable at 1.106.4: it renders its own credentials
+# Secret and its migration Job carries a default password, so the Job cannot reach our database.
+# Credentials come from the litellm-db Secret (scripts/secrets.sh). Applied by `make litellm-install`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-postgres
+  namespace: aiops
+  labels: {app: litellm-postgres}
+spec:
+  clusterIP: None
+  selector: {app: litellm-postgres}
+  ports:
+    - {name: pg, port: 5432, targetPort: pg}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: litellm-postgres
+  namespace: aiops
+  labels: {app: litellm-postgres}
+spec:
+  serviceName: litellm-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: litellm-postgres}
+  template:
+    metadata:
+      labels: {app: litellm-postgres}
+    spec:
+      securityContext:
+        fsGroup: 70
+      containers:
+        - name: postgres
+          # POSTGRES_IMAGE in versions.env is the source of truth; kept in step by check-consistency.
+          image: postgres:16.11-alpine@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2
+          ports:
+            - {name: pg, containerPort: 5432}
+          env:
+            - name: POSTGRES_DB
+              value: litellm
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: litellm-db, key: username}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: litellm-db, key: password}}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d litellm"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 1Gi}

@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bridge
+  labels:
+    app: bridge
+spec:
+  selector:
+    matchLabels:
+      app: bridge
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 5s

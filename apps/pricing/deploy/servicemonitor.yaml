@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pricing
+  labels:
+    app: pricing
+spec:
+  selector:
+    matchLabels:
+      app: pricing
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 5s

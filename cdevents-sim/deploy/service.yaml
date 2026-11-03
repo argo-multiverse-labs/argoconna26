@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cdevents-sim
+  labels:
+    app: cdevents-sim
+spec:
+  type: NodePort
+  selector:
+    app: cdevents-sim
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30082       # equals PORT_SIM; kind maps it to 127.0.0.1

@@ -1,0 +1,95 @@
+# HolmesGPT 0.45.0 (chart robusta/holmes). Read-only: the chart's ClusterRole holds only
+# get/list/watch and no Secrets (proved by `make holmes-rbac-check`), and the pod has no GitHub
+# credential. It reaches the model only through LiteLLM (alias rca).
+registry: robustadev
+image: holmes:0.45.0
+
+# O7: keep the chart's own ServiceAccount and ClusterRole. Of its optional CRD grants only
+# Argo's is used here (Applications, Rollouts, AnalysisRuns); the others cover operators this
+# cluster does not run, so they are switched off to keep the role on the "what's real" slide short.
+crdPermissions:
+  argo: true
+  flux: false
+  kafka: false
+  keda: false
+  crossplane: false
+  istio: false
+  gatewayApi: false
+  velero: false
+  externalSecrets: false
+
+# O10: Holmes sends temperature=1e-08 when none is set and LiteLLM rejects that for Claude,
+# so the applied temperature is 1 (no drop_params). The n/20 wording states it.
+modelList:
+  rca:
+    model: openai/rca
+    api_base: '{{ env.OPENAI_API_BASE }}'
+    api_key: '{{ env.OPENAI_API_KEY }}'
+    temperature: 1
+
+additionalEnvVars:
+  - {name: OPENAI_API_BASE, value: "http://litellm.aiops.svc:4000/v1"}
+  - {name: MODEL, value: rca}
+  - {name: ARGOCD_SERVER, value: argocd-server.argocd.svc}
+  - {name: ARGOCD_OPTS, value: "--plaintext --grpc-web"}
+  # the root filesystem is read-only; the argocd CLI writes its config under this directory
+  - {name: ARGOCD_CONFIG_DIR, value: /tmp/argocd}
+  - {name: TOOL_MEMORY_LIMIT_MB, value: "1536"}
+
+# OPENAI_API_KEY (the LiteLLM virtual key "holmes"), ARGOCD_AUTH_TOKEN (read-only account
+# holmesgpt) and HOLMES_API_KEY (what the bridge sends as X-API-Key).
+extraEnvVarsSecrets: [holmes-llm, holmes-argocd, holmes-api]
+
+toolsets:
+  bash: {enabled: false}
+  internet: {enabled: false}
+  robusta: {enabled: false}
+  skills: {enabled: false}
+  connectivity_check: {enabled: false}
+  argocd/core: {enabled: true}
+  kubernetes/core: {enabled: true}
+  prometheus/metrics:
+    enabled: true
+    config:
+      prometheus_url: http://kps-prometheus.monitoring.svc:9090
+  # P16: HolmesGPT never reads the agent's own outputs. Only GET /timeline and GET /incidents
+  # on cdevents-sim are allowed, as exact paths (O3): a glob such as /timeline* is bypassable
+  # with "..". /events holds the agent's own RCAs and actions and is deliberately absent. The
+  # sim's /timeline filter is the second line of defence.
+  cdevents-timeline:
+    type: http
+    enabled: true
+    description: "Delivery timeline: deploys, config changes and incidents recorded by the CD pipeline"
+    config:
+      endpoints:
+        - hosts: ['http://cdevents-sim.aiops.svc:8080', 'http://cdevents-sim.aiops.svc.cluster.local:8080']
+          paths: ['/timeline', '/incidents']
+          methods: ['GET']
+      timeout_seconds: 30
+      block_internal_ips: false
+    llm_instructions: |
+      The delivery timeline records what changed and when. Call it with GET, using the base URL
+      http://cdevents-sim.aiops.svc:8080 exactly as written. Only two paths exist for you.
+
+      GET http://cdevents-sim.aiops.svc:8080/timeline?app=<app>&since=<time>&limit=<n>
+        since is an RFC3339 UTC time (2026-11-01T10:00:00Z) or a relative value such as -72h.
+        limit is optional (1 to 1000, default 100). It returns a JSON list, newest first. Each
+        row has: id, type, timestamp, subject_id, app, revision (the commit SHA), summary and
+        customData. customData can hold change_ref (the pull request or change number) and
+        the files a change touched. Types are short CDEvents names: change.merged,
+        service.deployed, incident.detected, incident.resolved.
+
+      GET http://cdevents-sim.aiops.svc:8080/incidents?app=<app>
+        A JSON list of incidents, newest first. Each row has: subject_id, app, revision,
+        detected_at, resolved_at (null while open) and level.
+
+      Use these to find the change that introduced the state the cluster is in. Do not call
+      any other path on this host.
+
+      Only the workload namespace demo is in scope. The aiops namespace runs the tooling
+      around this investigation, including its own earlier outputs: do not read pods, logs,
+      events or ConfigMaps in aiops.
+
+resources:
+  requests: {cpu: 500m, memory: 1Gi}
+  limits: {cpu: "1", memory: 2Gi}
