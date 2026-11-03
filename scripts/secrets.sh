@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Load .env into cluster Secrets, idempotently. Secret values never reach stdout, stderr or kubectl args.
 #   scripts/secrets.sh base|late|all
-# base: needs no running service (grafana-admin, litellm, bridge, argocd-notifications)
+# base: needs no running service (grafana-admin, litellm, bridge, argocd-notifications,
+#       and the optional Argo CD admin password)
 # late: needs running services (holmes, cdevents-grafana); stubbed until slice 3.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
@@ -167,11 +168,40 @@ secret_argocd_notifications() {
   _apply_secret "$NS_ARGOCD" argocd-notifications-secret
 }
 
+# Argo CD admin login, for a local demo only: when ARGOCD_ADMIN_PASSWORD is set in .env,
+# argocd-secret gets its bcrypt hash (which skips Argo CD's own password-length rule) and
+# argocd-initial-admin-secret is set to the same value, so `make argocd-password` and
+# secrets-late keep reading the live password. Unset: Argo CD's generated password stays.
+# `argocd account bcrypt` takes the value only as a flag, so it is briefly in that process's
+# arguments on this machine; it never reaches kubectl's arguments or any output.
+secret_argocd_admin() {
+  if ! _have ARGOCD_ADMIN_PASSWORD; then
+    log_info "skip: argocd admin password (ARGOCD_ADMIN_PASSWORD unset; the generated one stays)"; return 0
+  fi
+  local cur hash patch
+  cur="$(k get secret argocd-initial-admin-secret -n "$NS_ARGOCD" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [[ -n "$cur" && "$cur" == "$ARGOCD_ADMIN_PASSWORD" ]]; then
+    log_info "skip: argocd admin password already set from .env"; return 0
+  fi
+  hash="$(argocd account bcrypt --password "$ARGOCD_ADMIN_PASSWORD")" || die "argocd account bcrypt failed"
+  [[ "$hash" == \$2* ]] || die "argocd account bcrypt did not return a bcrypt hash"
+  _new_secret_dir
+  patch="$SECRET_DIR/patch.json"
+  jq -n --arg h "$(printf '%s' "$hash" | base64 -w0)" --arg t "$(date -u +%FT%TZ | base64 -w0)" \
+    '{data: {"admin.password": $h, "admin.passwordMtime": $t}}' >"$patch"
+  k patch secret argocd-secret -n "$NS_ARGOCD" --type merge --patch-file="$patch" >/dev/null
+  _cleanup_secret_dir
+  log_info "secret: $NS_ARGOCD/argocd-secret (admin password from .env)"
+  _new_secret_dir; _put password "$ARGOCD_ADMIN_PASSWORD"
+  _apply_secret "$NS_ARGOCD" argocd-initial-admin-secret
+}
+
 secrets_base() {
   secret_grafana_admin
   secret_litellm
   secret_bridge
   secret_argocd_notifications
+  secret_argocd_admin
 }
 
 secrets_late() {

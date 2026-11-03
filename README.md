@@ -165,6 +165,7 @@ keys, all blank in the example:
 | `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_DB_PASSWORD` | LiteLLM proxy and its Postgres |
 | `LLM_BUDGET_USD` | Per-cluster LLM budget in LiteLLM. Also set a spend limit at the provider |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana admin login |
+| `ARGOCD_ADMIN_PASSWORD` | Optional Argo CD admin login for a local demo; unset keeps Argo CD's generated one |
 | `BRIDGE_WEBHOOK_TOKEN` | Bearer token Argo CD Notifications send to the bridge |
 | `HOLMES_API_KEY` | `X-API-Key` HolmesGPT requires from the bridge |
 | `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_KEY_PATH` | The bridge's GitHub App (key file must live outside the repo) |
@@ -240,7 +241,7 @@ All ports bind to 127.0.0.1.
 
 | Service | URL | Login |
 |---------|-----|-------|
-| Argo CD | http://127.0.0.1:30080 | `admin`; password from `make -s argocd-password` |
+| Argo CD | http://127.0.0.1:30080 | `admin`; password is `ARGOCD_ADMIN_PASSWORD` in your `.env`, or from `make -s argocd-password` |
 | Grafana | http://127.0.0.1:30030 | `admin`; password is `GRAFANA_ADMIN_PASSWORD` in your `.env` |
 | Prometheus | http://127.0.0.1:30090 | none |
 | Bridge | http://127.0.0.1:30081 | `/status`, `/metrics`, `/healthz` |

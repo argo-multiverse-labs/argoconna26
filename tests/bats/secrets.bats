@@ -21,10 +21,14 @@ setup() {
         echo "DIR-MODE: $(stat -c %a "$d")" >> "'"$CALLS"'"
         echo "DIR-FILES: $(ls "$d" | tr "\n" " ")" >> "'"$CALLS"'"
         [ ! -f "$d/ARGOCD_AUTH_TOKEN" ] || cp "$d/ARGOCD_AUTH_TOKEN" "'"$BATS_TEST_TMPDIR"'/holmes-argocd"
+        case "$*" in *"generic argocd-initial-admin-secret "*) cp "$d/password" "'"$BATS_TEST_TMPDIR"'/initial-pw" ;; esac
         echo "apiVersion: v1"; echo "kind: Secret" ;;
       *"create namespace"*) echo "apiVersion: v1"; echo "kind: Namespace" ;;
       *"apply"*"-f -"*) cat > /dev/null; echo "applied" ;;
-      *"get secret argocd-initial-admin-secret"*"jsonpath"*) printf %s argo-admin-s3cret | base64 -w0 ;;
+      *"get secret argocd-initial-admin-secret"*"jsonpath"*) if [ -f "'"$BATS_TEST_TMPDIR"'/initial-pw" ]; then base64 -w0 < "'"$BATS_TEST_TMPDIR"'/initial-pw"; else printf %s argo-admin-s3cret | base64 -w0; fi ;;
+      *"patch secret argocd-secret"*)
+        f="$(grep -o -- "--patch-file=[^ ]*" <<<"$*" | cut -d= -f2-)"
+        cp "$f" "'"$BATS_TEST_TMPDIR"'/argocd-secret-patch" ;;
       *"get secret holmes-argocd"*"jsonpath"*) [ -f "'"$BATS_TEST_TMPDIR"'/holmes-argocd" ] && base64 -w0 < "'"$BATS_TEST_TMPDIR"'/holmes-argocd" || true ;;
       *"get secret"*"jsonpath"*) ;;
       *"get secret"*)
@@ -50,6 +54,10 @@ setup() {
       "GET /api/v1/applications") [ "${tok#holmes-argo-}" != "$tok" ] && grep -qx "${tok#holmes-argo-}" "'"$BATS_TEST_TMPDIR"'/argo-valid" 2>/dev/null && echo "{}" || exit 22 ;;
       *) echo "unexpected: $method $path" >&2; exit 22 ;;
     esac'
+  # argocd: only `account bcrypt` is used (for ARGOCD_ADMIN_PASSWORD)
+  make_stub "$STUBS" argocd 'echo "ARGOCD: $*" >> "'"$BATS_TEST_TMPDIR"'/argocd.calls"
+    [ "$1 $2" = "account bcrypt" ] || exit 1
+    printf "%s\n" "\$2a\$10\$fakehashfakehashfakehashfakehashfakehashfakehash12"'
   export PATH="$STUBS:$PATH" TOOLS_BIN="$STUBS"
   # fake values, held in neutrally named variables so secret scanners see no credential-shaped lines
   v1=grafana-s3cret-pw v2=master-s3cret v3=salt-s3cret v4=db-s3cret v5=sk-ant-s3cret v6=bridge-s3cret v7=holmes-s3cret
@@ -189,4 +197,33 @@ run_secrets() { ( cd "$FIXTURE" && "$REPO_ROOT/scripts/secrets.sh" "$@" ); }
   chmod 600 "$FIXTURE/.env"
   run run_secrets late
   [[ "$output" == *"skipped: holmes-api"* ]]
+}
+
+@test "without ARGOCD_ADMIN_PASSWORD, Argo CD keeps its generated admin password" {
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  ! grep -q 'patch secret argocd-secret' "$CALLS"
+  [ ! -f "$BATS_TEST_TMPDIR/initial-pw" ]
+}
+
+@test "ARGOCD_ADMIN_PASSWORD sets the admin login, keeps the initial secret in step, and is idempotent" {
+  v8=argo-demo-pw
+  echo "ARGOCD_ADMIN_PASSWORD=$v8" >> "$FIXTURE/.env"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  # argocd-secret gets a bcrypt hash and a new mtime, never the plain value
+  patch="$(cat "$BATS_TEST_TMPDIR/argocd-secret-patch")"
+  [[ "$patch" == *'"admin.password"'* && "$patch" == *'"admin.passwordMtime"'* ]]
+  ! grep -q "$v8" "$BATS_TEST_TMPDIR/argocd-secret-patch"
+  [ "$(jq -r '.data["admin.password"]' "$BATS_TEST_TMPDIR/argocd-secret-patch" | base64 -d)" = '$2a$10$fakehashfakehashfakehashfakehashfakehashfakehash12' ]
+  # the initial secret now holds the same password, for make argocd-password and secrets-late
+  [ "$(cat "$BATS_TEST_TMPDIR/initial-pw")" = "$v8" ]
+  # the value reaches no kubectl argument and no output
+  ! grep -q "$v8" "$CALLS"
+  [[ "$output" != *"$v8"* ]]
+  # a second run sees the initial secret already matches and changes nothing
+  rm "$BATS_TEST_TMPDIR/argocd-secret-patch"
+  run run_secrets base
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/argocd-secret-patch" ]
 }
