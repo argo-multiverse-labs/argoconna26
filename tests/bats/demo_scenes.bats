@@ -236,7 +236,7 @@ write_role_narration() {
     : >"$dir/$scene.txt"
     for key in ${SCENE_KEYS[$scene]}; do
       if [[ " ${SRE_KEYS[$scene]:-} " == *" $key "* ]]; then
-        printf '[%s]\n# [SRE: %s]\n\n' "$key" "$key" >>"$dir/$scene.txt"
+        printf '[%s] sre\n# [SRE: %s]\n\n' "$key" "$key" >>"$dir/$scene.txt"
       else
         printf '[%s]\n# PEline-%s\n\n' "$key" "$key" >>"$dir/$scene.txt"
       fi
@@ -338,6 +338,13 @@ cues_ok() {
     [ "${#line}" -eq "$STAGE_COLS" ]
   done
   assert_fits "$output"
+}
+
+@test "a second cue for the same speaker draws no second bar; a new scene shows it again" {
+  cd "$FIXTURE"
+  run bash -c "SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; speaker_beat sre a; speaker_beat sre b; speaker_beat pe c; speaker_beat sre d; scene_break T; speaker_beat sre e"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '━━ On-call SRE' <<<"$(strip_ansi "$output")")" -eq 3 ]
 }
 
 @test "a scene break is a title between two full-width bars, and the theme picks the colours" {

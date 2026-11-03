@@ -164,6 +164,7 @@ _pause() {
 scene_break() { # TITLE : the title between two bars, in the scene colour
   ((${#1} <= STAGE_COLS)) || refuse 1 "scene title too long" "scene title over $STAGE_COLS columns: $1"
   _stage_keep "scene: $1"
+  _LAST_CUE=""
   printf '\n'
   _bar '═' "$C_SCENE"
   printf '\033[%sm%s\033[0m\n' "$C_SCENE" "$1"
@@ -177,18 +178,22 @@ fourth_wall() { # TITLE : an aside, set into a light rule
   _pause
 }
 
+_speaker_bar() { # WHO : that character's bar, and remember who has the floor
+  case "$1" in
+    pe) _bar '━' "$C_PE" "Platform Engineer" ;;
+    sre) _bar '━' "$C_SRE" "On-call SRE" ;;
+    both) _bar '━' "$C_BOTH" "Both" ;;
+  esac
+  _LAST_CUE="$1"
+}
+
 speaker_beat() { # WHO TOPIC : WHO is pe (the Platform Engineer), sre (the On-call SRE) or both
   local who="$1" topic="${2:-}" name
-  local colour
-  case "$who" in
-    pe) name="Platform Engineer" colour="$C_PE" ;;
-    sre) name="On-call SRE" colour="$C_SRE" ;;
-    both) name="Both" colour="$C_BOTH" ;;
-    *) die "speaker_beat: WHO must be pe, sre or both, got '$who'" ;;
-  esac
+  case "$who" in pe | sre | both) ;; *) die "speaker_beat: WHO must be pe, sre or both, got '$who'" ;; esac
   if [[ -n "$SCENE" ]]; then
     _stage_keep "beat: $who: $topic"
-    _bar '━' "$colour" "$name"
+    # the same speaker carrying on gets the pause but not a second bar
+    [[ "$who" == "${_LAST_CUE:-}" ]] || _speaker_bar "$who"
   fi
   _pause
 }
@@ -214,6 +219,8 @@ narrate() {
   lines=("${lines[@]:1}")
   local saved_prompt="${DEMO_PROMPT:-}" saved_plain="$DEMO_PROMPT_PLAIN"
   case "$who" in sre) as_oncall_sre ;; both) as_both ;; esac
+  # in a scene, a change of speaker always shows that speaker's bar first
+  [[ -z "$SCENE" || "$who" == "${_LAST_CUE:-}" ]] || _speaker_bar "$who"
   width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
   ((width >= 8)) || width=8
   for line in "${lines[@]}"; do
