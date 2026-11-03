@@ -207,7 +207,9 @@ sequenceDiagram
 ```
 
 Namespaces: `argocd`, `argo-rollouts`, `monitoring`, `demo` (checkout, pricing, loadgen),
-`aiops` (bridge, cdevents-sim, HolmesGPT, LiteLLM and its Postgres). See
+`aiops` (bridge, cdevents-sim, HolmesGPT, LiteLLM and its Postgres). HolmesGPT reads the
+cluster (kubectl), Argo CD, Prometheus and the timeline (`GET /timeline`), and writes nothing;
+the bridge is the only component with a Git-write credential. See
 [docs/01-architecture.md](docs/01-architecture.md).
 
 ## Prerequisites
