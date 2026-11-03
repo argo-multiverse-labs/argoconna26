@@ -181,7 +181,7 @@ preflight 3 --armed" ]
 }
 
 @test "arm-rung-3 from suggest stops at the propose human step with no input and merges nothing" {
-  BELOW_PROPOSE=1 run sd arm-rung-3
+  BELOW_PROPOSE=1 run sd arm-rung-3 </dev/null
   [ "$status" -eq 3 ]
   ! grep -q '^promotion' "$LOG"
   [[ "$output" == *"propose promotion PR 76"* ]]
