@@ -633,6 +633,17 @@ fx() { bash -c "export STAGE_FX=1; SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/de
   grep -q 'demote\* \]\] || ladder_refresh' "$REPO_ROOT/scripts/demo-common.sh"
 }
 
+@test "a new scene keeps the last bar until its scene break: no flash with no clock and no rung" {
+  cd "$FIXTURE"
+  # pinned (as ladder_pin leaves it), level known, clock not yet: nothing is drawn
+  run fx "_LADDER_ROWS=40; ladder_set propose; echo end"
+  [ "$output" = "end" ]
+  # a scene break with no clock (the epilogue) still draws the bar, and later changes draw too
+  run fx "_LADDER_ROWS=40; ladder_set propose; scene_break 'What'\''s real' >/dev/null; echo; ladder_set suggest"
+  grep -q $'\e\\[1;1H' <<<"$output"
+  grep -q $'\e\\[7;[0-9;]*msuggest' <<<"$output"
+}
+
 @test "an in-character scene opens with a title card: a double box exactly STAGE_COLS wide" {
   cd "$FIXTURE"
   run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; title_card '2:15 a.m.' 'The page'"
