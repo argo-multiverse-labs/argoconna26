@@ -107,16 +107,15 @@ Running each rung by hand, the rung scripts, resets and stage day are in
 ## Architecture
 
 ```mermaid
-flowchart TB
-  op(["operator<br/>make rearm, fix, ..."])
+flowchart LR
+  op(["operator"])
 
   subgraph gh["GitHub"]
-    repo[("main branch<br/>apps, aiops/autonomy.yaml")]
-    prs["PRs and comments<br/>rulesets, policy-check"]
+    repo[("main<br/>autonomy.yaml")]
+    prs["PRs, comments<br/>policy-check"]
   end
 
   subgraph kind["kind cluster"]
-    direction TB
     subgraph ns_argocd["ns argocd"]
       acd["Argo CD<br/>+ Notifications"]
     end
@@ -133,8 +132,8 @@ flowchart TB
       graf["Grafana<br/>trust ladder"]
     end
     subgraph ns_aiops["ns aiops"]
-      bridge["bridge<br/>the only writer"]
-      holmes["HolmesGPT, read-only<br/>kubectl, Argo CD,<br/>Prometheus, /timeline"]
+      bridge["bridge<br/>only writer"]
+      holmes["HolmesGPT<br/>read-only"]
       llm["LiteLLM<br/>budget, call log"]
       sim["cdevents-sim<br/>timeline"]
     end
