@@ -14,6 +14,7 @@ context, is in the [README](../README.md#architecture); level 3, the bridge's co
 [04](./04-bridge-and-holmes.md#components).
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
 flowchart LR
   gh["<b>GitHub</b><br/>[Software System]<br/>main, PRs, rulesets"]
   llm["<b>Model provider</b><br/>[Software System]"]

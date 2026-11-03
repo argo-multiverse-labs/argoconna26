@@ -40,6 +40,7 @@ outside `agent/<name>` before it makes a call.
 is in [01](./01-architecture.md#containers).
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
 flowchart LR
   acd["<b>Argo CD Notifications</b><br/>[Container]"]
   holmesx["<b>HolmesGPT</b><br/>[Container]"]

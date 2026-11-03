@@ -112,6 +112,7 @@ on. The containers inside the cluster (level 2) are in
 (level 3) in [docs/04-bridge-and-holmes.md](docs/04-bridge-and-holmes.md#components).
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
 flowchart LR
   pe["<b>Platform engineer</b><br/>[Person]<br/>Runs the platform and<br/>the demo's make targets"]
   sre["<b>On-call SRE</b><br/>[Person]<br/>Reads the agent's analysis,<br/>reviews its fix PRs"]
