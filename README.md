@@ -106,57 +106,34 @@ Running each rung by hand, the rung scripts, resets and stage day are in
 
 ## Architecture
 
+The system context ([C4](https://c4model.com/) level 1): who uses the demo and what it depends
+on. The containers inside the cluster (level 2) are in
+[docs/01-architecture.md](docs/01-architecture.md#containers), and the bridge's components
+(level 3) in [docs/04-bridge-and-holmes.md](docs/04-bridge-and-holmes.md#components).
+
 ```mermaid
-flowchart TB
-  op(["operator"])
+flowchart LR
+  pe["<b>Platform engineer</b><br/>[Person]<br/>Runs the platform and<br/>the demo's make targets"]
+  sre["<b>On-call SRE</b><br/>[Person]<br/>Reads the agent's analysis,<br/>reviews its fix PRs"]
+  board["<b>Promotion board</b><br/>[Person]<br/>Approves changes to<br/>the agent's level"]
 
-  subgraph gh["GitHub"]
-    repo[("main<br/>autonomy.yaml")]
-    prs["PRs, comments<br/>policy-check"]
-  end
+  demo["<b>AIOps trust-ladder demo</b><br/>[Software System: kind cluster]<br/>Argo CD delivers, an agent investigates<br/>read-only and acts only through Git"]
 
-  subgraph ns_argocd["ns argocd"]
-    acd["Argo CD<br/>+ Notifications"]
-  end
-  subgraph ns_demo["ns demo"]
-    checkout["checkout<br/>canary Rollout"]
-    pricing["pricing"]
-    loadgen["loadgen"]
-  end
-  subgraph ns_rollouts["ns argo-rollouts"]
-    ro["Argo Rollouts"]
-  end
-  subgraph ns_monitoring["ns monitoring"]
-    prom["Prometheus"]
-    graf["Grafana<br/>trust ladder"]
-  end
-  subgraph ns_aiops["ns aiops"]
-    bridge["bridge<br/>only writer"]
-    holmes["HolmesGPT<br/>read-only"]
-    llm["LiteLLM<br/>budget, call log"]
-    sim["cdevents-sim<br/>timeline"]
-  end
+  gh["<b>GitHub</b><br/>[Software System]<br/>The repo, PRs, comments,<br/>rulesets, policy-check"]
+  llm["<b>Model provider</b><br/>[Software System]<br/>The LLM behind<br/>the investigation"]
 
-  model(["model provider"])
+  pe -->|"pushes changes,<br/>watches Argo CD, Grafana"| demo
+  sre -->|"reads comments,<br/>reviews fix PRs"| gh
+  board -->|"approves<br/>promotion PRs"| gh
+  demo -->|"pulls desired state;<br/>comments, opens PRs"| gh
+  demo -->|"budgeted calls"| llm
 
-  op -->|push| repo
-  prs -->|merge| repo
-  repo -->|pull| acd
-  acd -->|sync| checkout
-  loadgen --> checkout --> pricing
-  ro -->|canary| checkout
-  ro -.->|success rate| prom
-  prom -->|scrape| checkout
-  prom --- graf
-  acd -->|CDEvents| sim
-  sim -->|annotations| graf
-  acd -->|Degraded webhook| bridge
-  bridge -->|POST /api/chat| holmes
-  holmes --> llm --> model
-  bridge ==>|comment, PR, auto-merge| prs
-
-  classDef writer stroke-width:3px
-  class bridge writer
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef system fill:#1168bd,stroke:#0b4884,color:#fff
+  classDef external fill:#999999,stroke:#6b6b6b,color:#fff
+  class pe,sre,board person
+  class demo system
+  class gh,llm external
 ```
 
 ### One incident, end to end
