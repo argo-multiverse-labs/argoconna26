@@ -327,14 +327,14 @@ branch that the live rulesets do not already protect, one with a higher autonomy
 changes code-owned paths. Then: one commit rewriting every `targetRevision`, `TRACKED_BRANCH` in
 `demo.env` and the bridge Deployment, and `RULESET_BRANCHES`; re-apply the root Application and wait
 for every Application to follow; wait for the bridge rollout; re-apply the rulesets and read them
-back; open a fresh promotion PR against the new base. **Built and tested against stubs; the live
-rehearsal has not been run.** It needs a ruleset apply, so it waits for a go-ahead.
+back; open a fresh promotion PR against the new base. Rehearsed live on 11-03, `build/demo` to
+`main`; it needs a ruleset apply, so it waits for a go-ahead.
 
 ## Forks
 
 `make configure-fork REPO_SLUG=you/repo BOT_LOGIN=app[bot] PROMOTION_TEAM=@you/team` rewrites the
 names (`scripts/configure-fork.sh`; offline, idempotent). `make consistency` then checks that
-nothing still names the old values. See the README.
+nothing still names the old values. See [07](./07-setup.md#run-it-from-your-own-fork).
 
 ## Checks
 

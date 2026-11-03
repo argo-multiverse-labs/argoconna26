@@ -158,5 +158,5 @@ Next steps:
   4. make operator-clone              # uses your own gh login (or GH_TOKEN with a fine-grained PAT)
   5. make build-all && make reset-demo
 Rungs 2 and 3 also need your GitHub App, a promotion-board team and the rulesets;
-see the README ("Run it from your own fork") and docs/github-setup.md.
+see docs/07-setup.md ("Run it from your own fork") and docs/github-setup.md.
 EOM

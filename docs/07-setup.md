@@ -1,0 +1,86 @@
+# 07. Setup
+
+What you need before `make build-all`: the tools, the secrets, the GitHub side, and the changes
+for running the demo from your own fork. The [README](../README.md#quick-start) has the short
+version.
+
+## Tools and secrets
+
+Tools. Versions marked pinned are checked by `make vendor` against [versions.env](../versions.env).
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| Docker | Recent | Builds the demo images |
+| [kind](https://kind.sigs.k8s.io/) | v0.33.0 | Pinned |
+| kubectl | v1.37.2 | Pinned |
+| kubectl-argo-rollouts plugin | v1.10.0 | Pinned |
+| argocd CLI | v3.5.6 | Pinned |
+| conftest | v0.71.1 | Pinned |
+| gitleaks | v8.30.1 | Pinned |
+| bats | 1.14.0 | Pinned |
+| shellcheck | Recent | `make lint` |
+| Helm | 3.x | Not pinned |
+| gh | Recent | Operator login; scopes in [docs/github-setup.md](./github-setup.md) |
+| jq, yq, envsubst, flock, curl, git, uv, pv | Recent | |
+| asciinema, agg | v3.2.1, v1.9.0 | Pinned; recording only |
+| systemd (user units) | Any | Only for the rung-3 scheduled job (`make night`) |
+
+**Secrets.** Copy [.env.example](../.env.example) to `.env`, mode 0600. It is never committed. The
+keys, all blank in the example:
+
+| Key | Used for |
+|-----|----------|
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | LiteLLM's upstream provider keys (the second is optional) |
+| `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_DB_PASSWORD` | LiteLLM proxy and its Postgres |
+| `LLM_BUDGET_USD` | Per-cluster LLM budget in LiteLLM. Also set a spend limit at the provider |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin login |
+| `ARGOCD_ADMIN_PASSWORD` | Optional Argo CD admin login for a local demo; unset keeps Argo CD's generated one |
+| `BRIDGE_WEBHOOK_TOKEN` | Bearer token Argo CD Notifications send to the bridge |
+| `HOLMES_API_KEY` | `X-API-Key` HolmesGPT requires from the bridge |
+| `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_KEY_PATH` | The bridge's GitHub App (key file must live outside the repo) |
+| `STAGE_APPROVER_LOGIN` | Login that approves promotion PRs on stage |
+| `EVIDENCE_DIR`, `PRECOMMIT_HOOK_SRC`, `TOOLS_BIN` | Optional local paths |
+
+**GitHub.** The bridge writes to Git only as a GitHub App, and rulesets box that App in. Create
+the App, install it on one repository (your fork), and apply the rulesets as described in
+[docs/github-setup.md](./github-setup.md).
+
+## Run it from your own fork
+
+As published, the Applications read `argo-multiverse-labs/argoconna26`, and the operator
+scripts push to it. Without push rights there, point the demo at a fork of yours:
+
+1. Fork the repository on GitHub and clone your fork.
+2. Set the three names and rewrite everything that uses them, then commit to your fork:
+
+   ```bash
+   make configure-fork REPO_SLUG=you/argoconna26 BOT_LOGIN=your-app[bot] PROMOTION_TEAM=@you/promotion-board
+   make consistency          # prints "consistency: OK" when every name agrees
+   git add -A && git commit -m "feat: configure the demo for my fork" && git push
+   ```
+
+   This changes `demo.env`, each Application's `repoURL` under `gitops/`, `.github/CODEOWNERS`,
+   `policy/data/agent.yaml` and the two env values in `bridge/deploy/deployment.yaml`. Any name
+   you leave out keeps its value, and running it twice changes nothing the second time.
+   `BOT_LOGIN` is your GitHub App's login (`<app-name>[bot]`).
+3. Copy [.env.example](../.env.example) to `.env` (mode 0600) and add an LLM key.
+4. `make operator-clone`. It pushes with your own `gh` login, or with a fine-grained token for
+   your fork in `GH_TOKEN`.
+5. `make build-all` (it creates the kind cluster), then `scripts/stage-day.sh morning` (the start
+   state and the checks), then `make demo-full`. With rung 1 only, `make reset-demo` then
+   `make demo-rung-1`.
+
+What each rung needs on top of the platform:
+
+| Rung | Needs |
+|------|-------|
+| The platform, the incident and `make naive-revert` | Push rights to your fork |
+| 1 (suggest) | Also your own GitHub App with the permissions in [docs/github-setup.md](./github-setup.md), installed on the fork |
+| 2 and 3 (propose, act) | Also a promotion-board team that owns the code-owner paths, the rulesets (`scripts/github-ruleset.sh apply`), `allow_auto_merge` on the repository, and Actions enabled (the `policy-check` workflow). Until those exist, run preflight with `PREFLIGHT_L5B=auto` |
+
+`make retarget BRANCH=<branch>` moves the branch Argo CD, the bridge and the rulesets follow (for
+example from `build/demo` to `main`, which is how the demo came to track `main`). It refuses a
+destination the live rulesets do not already protect. See [docs/06-operations.md](./06-operations.md).
+
+The fork path was checked on the upstream repository and by the tests in
+`tests/bats/configure_fork.bats` and `tests/bats/consistency.bats`, not from a real fork.

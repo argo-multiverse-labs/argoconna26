@@ -4,8 +4,49 @@
 
 A kind cluster runs a small checkout service with a canary rollout, the platform that observes
 and deploys it, and an agent that reacts when a deploy fails. Argo CD tracks one Git branch
-(`TRACKED_BRANCH`, `main`; it was `build/demo` while building). Everything the agent changes goes through that
-branch as a pull request.
+(`TRACKED_BRANCH`, `main`; it was `build/demo` while building). Everything the agent changes
+goes through that branch as a pull request. The README has the same flow as two diagrams.
+
+## Containers
+
+[C4](https://c4model.com/) level 2: what runs inside the kind cluster. Level 1, the system
+context, is in the [README](../README.md#architecture); level 3, the bridge's components, is in
+[04](./04-bridge-and-holmes.md#components).
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
+flowchart TB
+  gh["<b>GitHub</b><br/>[Software System]<br/>main, PRs, rulesets"]
+
+  subgraph demo["AIOps trust-ladder demo [kind cluster]"]
+    acd["<b>Argo CD</b><br/>[Container: argocd]<br/>Syncs apps from main;<br/>Notifications send CDEvents<br/>and the Degraded webhook"]
+    ro["<b>Argo Rollouts</b><br/>[Container: argo-rollouts]<br/>Canary and AnalysisRun"]
+    checkout["<b>checkout</b><br/>[Container: Python, demo]<br/>The service under test,<br/>with pricing and loadgen"]
+    prom["<b>Prometheus, Grafana</b><br/>[Container: monitoring]<br/>Metrics, the success-rate<br/>gate, the trust-ladder board"]
+    sim["<b>cdevents-sim</b><br/>[Container: Python, aiops]<br/>The delivery timeline"]
+    bridge["<b>bridge</b><br/>[Container: Python, FastAPI, aiops]<br/>Decides and acts;<br/>the only Git writer"]
+    holmes["<b>HolmesGPT</b><br/>[Container: aiops]<br/>Investigates, read-only:<br/>kubectl, Argo CD,<br/>Prometheus, /timeline"]
+    litellm["<b>LiteLLM</b><br/>[Container: aiops, Postgres]<br/>Budget and call log;<br/>calls the model provider"]
+  end
+
+  gh -->|pull| acd
+  acd -->|sync| checkout
+  ro -->|canary| checkout
+  ro -->|success rate| prom
+  prom -->|scrape| checkout
+  acd -->|CDEvents| sim
+  acd -->|Degraded webhook| bridge
+  bridge -->|"POST /api/chat"| holmes
+  holmes --> litellm
+  bridge ==>|"comment, PR, auto-merge"| gh
+  bridge -->|agent events| sim
+
+  classDef container fill:#438dd5,stroke:#2e6295,color:#fff
+  classDef external fill:#999999,stroke:#6b6b6b,color:#fff
+  class acd,ro,checkout,prom,sim,bridge,holmes,litellm container
+  class gh external
+  style demo fill:none,stroke:#1168bd,stroke-dasharray:6 4
+```
 
 ## Components
 

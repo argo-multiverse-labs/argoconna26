@@ -18,17 +18,19 @@ Start with the [README](../README.md) for what the demo shows and how to run it.
 | [04](./04-bridge-and-holmes.md) | Bridge and HolmesGPT | Webhook, investigation, guardrails, PII scan, templates, read-only RBAC, LLM budget |
 | [05](./05-policy.md) | Policy | Golden-path labels, Git facts, the auto-fix rules, the `policy-check` workflow and its trust boundary |
 | [06](./06-operations.md) | Operations | Make targets, operator clone, resets, rung scripts, recording, dry-run harness, stage day, retarget, isolated kubeconfig, tests |
+| [07](./07-setup.md) | Setup | Tools, secrets, the GitHub side, running it from your own fork |
+| [08](./08-whats-real.md) | What's Real | Real versus simulated or stood in; what GitHub enforces versus the bridge |
 | [github-setup](./github-setup.md) | GitHub Setup | The GitHub App, rulesets and repository settings to reproduce on a fork |
 
 ## Reading Paths
 
 | If you want to | Read |
 |----------------|------|
-| Run the demo | README (Demo Flow), then 06 |
+| Run the demo | README (Quick Start, Demo Flow), then 06 |
 | Pinned versions | 01 |
-| Understand the safety model | 02, then 04 and 05, then github-setup |
+| Understand the safety model | 08, 02, then 04 and 05, then github-setup |
 | Understand the incident | 03, then 01 |
-| Fork it | README (Quick Start), github-setup, 06 |
+| Fork it | 07, github-setup, 06 |
 
 ## Key Design Decisions
 
@@ -42,3 +44,27 @@ Start with the [README](../README.md) for what the demo shows and how to run it.
 | Auto-merge | Allowed by a policy over Git facts, enforced by a required check | A deny-by-default rule set that a PR cannot loosen | 05 |
 | Timeline | A simulator in place of a collector | Keeps the demo to one laptop; the data shape is real CDEvents | 01 |
 | Cluster access | An isolated kubeconfig and a cluster lock | No script touches another context | 06 |
+
+## Repo Structure
+
+| Path | What it is |
+|------|-----------|
+| `Makefile`, `versions.env`, `demo.env`, `.env.example` | Entry points, pinned versions, names and ports, secret keys |
+| `cluster/` | kind configuration |
+| `platform/` | Helm values and manifests: Argo CD (with Notifications), Rollouts, kube-prometheus-stack, HolmesGPT, LiteLLM, the Grafana dashboard |
+| `gitops/` | The app-of-apps root and one Application per component |
+| `apps/` | `checkout` (Rollout, config, analysis), `pricing`, `loadgen` |
+| `bridge/` | The bridge service (FastAPI): webhook, pipeline, guardrails, PII scan, templates, GitHub forge |
+| `cdevents-sim/` | The timeline service and the vendored CDEvents schemas |
+| `aiops/autonomy.yaml` | The agent's current autonomy level |
+| `policy/` | Rego: golden-path labels, auto-fix rules, and the Git facts extractor |
+| `.github/` | `CODEOWNERS` and the `policy-check` workflow |
+| `scripts/` | Operator scripts, resets, the rung scripts, GitHub rulesets, preflight, dry-run harness, stage-day and retarget, secrets, the rung-3 job |
+| `tests/` | `bats/` for scripts, `e2e/` for runs against a real cluster and GitHub, `holmes/` for the HolmesGPT allow-list |
+| `docs/` | These pages |
+
+Tests: `make test-bats` (scripts), `make policy-verify` (Rego), `cd bridge && uv run pytest -q`
+(bridge; no network calls), and the same in `apps/*` and `cdevents-sim`. `make lint` runs
+shellcheck over `scripts/` and `tests/e2e/`. `make consistency` fails when a tracked file
+hardcodes a version or name that `versions.env` or `demo.env` owns.
+The pinned versions are listed in [docs/01-architecture.md](./01-architecture.md#version-pins).

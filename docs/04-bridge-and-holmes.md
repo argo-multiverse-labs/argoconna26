@@ -34,6 +34,53 @@ pointer comment on that PR and no second PR. The fix branch is named
 `agent/<app>-<cause7>-<revision7>`, so a second PR for the same revision cannot be created. The forge layer refuses any branch
 outside `agent/<name>` before it makes a call.
 
+### Components
+
+[C4](https://c4model.com/) level 3: the bridge's parts and the modules that hold them. Level 2
+is in [01](./01-architecture.md#containers).
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 200}}}%%
+flowchart LR
+  holmesx["<b>HolmesGPT</b><br/>[Container]"]
+  gh["<b>GitHub</b><br/>[Software System]"]
+  sim["<b>cdevents-sim</b><br/>[Container]"]
+
+  subgraph bridge["bridge [Container: Python, FastAPI]"]
+    hook["<b>Webhook receiver</b><br/>[app.py, incidents.py]<br/>POST /hooks/argocd from<br/>Argo CD; one incident<br/>per app and revision"]
+    pipe["<b>Pipeline</b><br/>[pipeline.py]<br/>One incident at a time"]
+    level["<b>Autonomy reader</b><br/>[autonomy.py]<br/>Level from Git; fails<br/>closed to suggest"]
+    client["<b>HolmesGPT client</b><br/>[prompt.py, holmes.py, rca.py]<br/>Runbook prompt,<br/>strict JSON schema"]
+    guard["<b>Guardrails</b><br/>[guardrails.py]<br/>Checks the answer<br/>against Git"]
+    fix["<b>Fix builder</b><br/>[patch.py]<br/>One config line,<br/>deterministic"]
+    pii["<b>PII scan</b><br/>[pii.py]"]
+    forge["<b>Forge</b><br/>[forge/github.py]<br/>GitHub App;<br/>agent/* branches only"]
+    events["<b>Events</b><br/>[events.py]"]
+    rec["<b>Reconciler</b><br/>[reconcile.py]<br/>Fix-PR outcomes"]
+  end
+
+  hook --> pipe
+  pipe --> level
+  pipe --> client -->|"POST /api/chat"| holmesx
+  pipe --> guard
+  pipe --> fix
+  pipe --> pii
+  pipe --> forge
+  pipe --> events -->|CDEvents| sim
+  rec --> forge
+  level --> forge
+  guard --> forge
+  forge ==>|"read, comment, PR, merge"| gh
+
+  classDef component fill:#85bbf0,stroke:#5d82a8,color:#000
+  classDef container fill:#438dd5,stroke:#2e6295,color:#fff
+  classDef external fill:#999999,stroke:#6b6b6b,color:#fff
+  class hook,pipe,level,client,guard,fix,pii,forge,events,rec component
+  class holmesx,sim container
+  class gh external
+  style bridge fill:none,stroke:#438dd5,stroke-dasharray:6 4
+```
+
 ### The pipeline
 
 ```
