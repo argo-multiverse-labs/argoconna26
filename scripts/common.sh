@@ -43,12 +43,18 @@ load_env() {
   local caller_tools_bin="${TOOLS_BIN:-}" root envfile demo_tools_bin guard_vars guard_var
   local -A guard=()
   guard_vars=(CLUSTER_NAME CLUSTER_CONTEXT KUBECONFIG_REL TRACKED_BRANCH REPO_SLUG OPERATOR_REMOTE)
+  # the push target from the caller's environment wins over demo.env (tests pin it this way)
+  local -A caller=()
+  for guard_var in TRACKED_BRANCH REPO_SLUG OPERATOR_REMOTE; do caller["$guard_var"]="${!guard_var:-}"; done
   set -a
   # shellcheck disable=SC1091
   . "$COMMON_ROOT/versions.env"
   # shellcheck disable=SC1091
   . "$COMMON_ROOT/demo.env"
   set +a
+  for guard_var in "${!caller[@]}"; do
+    [[ -z "${caller[$guard_var]}" ]] || printf -v "$guard_var" '%s' "${caller[$guard_var]}"
+  done
   demo_tools_bin="${TOOLS_BIN:-}"
   for guard_var in "${guard_vars[@]}"; do guard["$guard_var"]="${!guard_var:-}"; done
   root="$(main_root 2>/dev/null || true)"
