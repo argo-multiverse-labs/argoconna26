@@ -156,7 +156,7 @@ fx_on() { [[ "${STAGE_FX:-0}" == 1 ]]; }
 
 # The trust ladder, pinned to the top line: the in-story clock and the three rungs with the
 # current one lit. _LADDER_ROWS is the terminal height while the bar is pinned (0 = not pinned).
-_LADDER_CLOCK="" _LADDER_LEVEL="" _LADDER_ROWS=0
+_LADDER_CLOCK="" _LADDER_LEVEL="" _LADDER_ROWS=0 _LADDER_LIVE=0
 ladder_text() { # LEVEL CLOCK : the bar, plain or (fx) coloured; at most STAGE_COLS wide
   local level="$1" clock="$2" out="" l plain
   plain="${clock:+$clock }suggest ▸ propose ▸ act"
@@ -168,8 +168,11 @@ ladder_text() { # LEVEL CLOCK : the bar, plain or (fx) coloured; at most STAGE_C
   done
   printf '%b' "$out"
 }
+# Each scene is its own process: until this one has a clock or a scene break, leave the bar the
+# last scene drew (drawing now would flash it with no clock and no rung lit).
 _ladder_draw() {
   ((_LADDER_ROWS > 0)) || return 0
+  [[ -n "$_LADDER_CLOCK" ]] || ((_LADDER_LIVE)) || return 0
   printf '\0337\033[1;1H\033[2K%s\0338' "$(ladder_text "$_LADDER_LEVEL" "$_LADDER_CLOCK")"
 }
 _ladder_unpin() {
@@ -259,7 +262,9 @@ scene_break() { # TITLE : the title between two bars, in the scene colour
   ((${#1} <= STAGE_COLS)) || refuse 1 "scene title too long" "scene title over $STAGE_COLS columns: $1"
   _stage_keep "scene: $1"
   _LAST_CUE=""
-  [[ ! "$1" =~ ^([0-9]{1,2}:[0-9]{2}) ]] || ladder_set "" "${BASH_REMATCH[1]}"
+  _LADDER_LIVE=1
+  [[ ! "$1" =~ ^([0-9]{1,2}:[0-9]{2}) ]] || _LADDER_CLOCK="${BASH_REMATCH[1]}"
+  _ladder_draw
   printf '\n'
   _bar '═' "$C_SCENE"
   printf '\033[%sm%s\033[0m\n' "$C_SCENE" "$1"
