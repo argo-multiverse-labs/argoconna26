@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/argo-multiverse-labs/argoconna26.git
-    targetRevision: build/demo
+    targetRevision: main
     path: apps/pricing
   destination:
     server: https://kubernetes.default.svc

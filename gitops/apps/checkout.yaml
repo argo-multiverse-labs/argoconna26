@@ -16,7 +16,7 @@ spec:
   revisionHistoryLimit: 25
   source:
     repoURL: https://github.com/argo-multiverse-labs/argoconna26.git
-    targetRevision: build/demo
+    targetRevision: main
     path: apps/checkout
   destination:
     server: https://kubernetes.default.svc

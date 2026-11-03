@@ -47,7 +47,7 @@ spec:
           env:
             # Values from demo.env (the consistency check compares them).
             - {name: REPO_SLUG, value: argo-multiverse-labs/argoconna26}
-            - {name: TRACKED_BRANCH, value: build/demo}
+            - {name: TRACKED_BRANCH, value: main}
             - {name: HOLMES_URL, value: "http://holmes-holmes.aiops.svc"}
             - {name: HOLMES_TIMEOUT_S, value: "115"}
             - {name: STAGE_COLS, value: "30"}
