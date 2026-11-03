@@ -2,8 +2,8 @@
 # Rung 3 (act) end to end on the real kind cluster and real GitHub, through the scheduled job.
 #
 #   redeploy bridge and sim -> pre-promotion state (autonomy propose, no open agent PR,
-#   disarm --image v1.4.1, preflight 3 --pre-promotion) -> promotion PR propose -> act,
-#   merge --admin (D5), record-approval -> preflight 3 --armed -> release the lock
+#   disarm --image v1.4.1) -> promotion PR propose -> act -> preflight 3 --pre-promotion,
+#   then merge that PR --admin (D5), record-approval -> preflight 3 --armed -> release the lock
 #   -> T0 = make night (the job unit re-arms) -> the bot's fix PR -> policy-check -> merged with no
 #   human action -> synced (Argo's own reconciliation; RUNG3_REFRESH=1 nudges it) -> Healthy -> overnight-verify.sh for the run window
 #
@@ -62,7 +62,7 @@ close_open_agent_prs() {
   done
 }
 
-promote_to() { # LEVEL : ensure, merge --admin, record-approval
+open_promotion() { # LEVEL : ensure; sets PROMO_PR and PROMO_BRANCH (on_exit closes it if still open)
   local out pr branch
   out="$(run_promo ensure "$1")"
   pr="$(machine pr "$out")"
@@ -71,12 +71,25 @@ promote_to() { # LEVEL : ensure, merge --admin, record-approval
   PROMO_PR="$pr" PROMO_BRANCH="$branch"
   [[ "$(gh pr diff "$pr" --repo "$REPO_SLUG" --name-only)" == "$AUTONOMY_FILE" ]] \
     || fail "promotion PR $pr does not change exactly $AUTONOMY_FILE"
-  run_promo merge "$pr" --admin >/dev/null
-  pr_state_is "$pr" MERGED || fail "promotion PR $pr is not MERGED"
-  delete_remote_branch "$branch"
+}
+
+merge_promotion() { # LEVEL : merge PROMO_PR --admin, record-approval, wait for the level
+  run_promo merge "$PROMO_PR" --admin >/dev/null
+  pr_state_is "$PROMO_PR" MERGED || fail "promotion PR $PROMO_PR is not MERGED"
+  delete_remote_branch "$PROMO_BRANCH"
   PROMO_BRANCH=""
-  run_promo record-approval "$pr" >/dev/null
+  run_promo record-approval "$PROMO_PR" >/dev/null
   wait_for "$AUTONOMY_FILE@$TRACKED_BRANCH is $1" 60 tracked_level_is "$1"
+}
+
+promote_to() { open_promotion "$1"; merge_promotion "$1"; } # LEVEL : ensure, merge --admin, record-approval
+
+# The stage order (stage-day.sh arm-rung-3): the act promotion PR is open when preflight 3
+# --pre-promotion runs (it checks for exactly one), and that same PR is the one merged.
+promote_to_act_after_preflight() {
+  open_promotion act
+  "$ROOT/scripts/preflight.sh" 3 --pre-promotion >>"$RUN_LOG" 2>&1 || fail "preflight 3 --pre-promotion failed (see $RUN_LOG)"
+  merge_promotion act
 }
 
 # The pre-promotion state: autonomy propose, no open agent PR, disarmed at the stable tag.
@@ -164,12 +177,11 @@ main() {
   t_reset0="$(now)"
   pre_promotion_state
   t_reset1="$(now)"
-  "$ROOT/scripts/preflight.sh" 3 --pre-promotion >>"$RUN_LOG" 2>&1 || fail "preflight 3 --pre-promotion failed (see $RUN_LOG)"
 
-  step "promotion PR propose -> act, merge --admin (D5), record-approval"
+  step "promotion PR propose -> act, preflight 3 --pre-promotion, merge --admin (D5), record-approval"
   local t_promo0 t_promo1
   t_promo0="$(now)"
-  promote_to act
+  promote_to_act_after_preflight
   t_promo1="$(now)"
   local approved
   approved="$(tracked_file "$AUTONOMY_FILE" | yq -r .promotion.approved_by)"
@@ -302,4 +314,5 @@ main() {
   log_info "rung3: PASS"
 }
 
-main "$@"
+# Sourced (tests/bats/e2e_rung3.bats): define the functions only.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
