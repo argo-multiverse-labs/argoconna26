@@ -233,6 +233,15 @@ _fleet_gauge_complete() {
   done <<<"$pods"
 }
 
+_fleet_success_rate() {
+  _prom_query "100 * sum(rate(checkout_requests_total{namespace=\"$NS_DEMO\",code!~\"5..\"}[1m])) / sum(rate(checkout_requests_total{namespace=\"$NS_DEMO\"}[1m]))" \
+    | jq -r '.data.result[0].value[1] // empty' 2>/dev/null || true
+}
+
+_rate_meets_slo() { awk -v r="$1" -v s="$2" 'BEGIN {exit !(r + 0 >= s + 0)}'; }
+
+_fleet_rate_recovered() { _rate_meets_slo "$(_fleet_success_rate)" "$SLO_NOW"; }
+
 check_fleet_disarmed() {
   local pods gauge p v rate slo
   pods="$(_ready_checkout_pods)" || { log_error "FAIL: cannot list checkout pods"; return 1; }
@@ -254,19 +263,24 @@ check_fleet_disarmed() {
     fi
   done <<<"$pods"
 
-  rate="$(_prom_query "100 * sum(rate(checkout_requests_total{namespace=\"$NS_DEMO\",code!~\"5..\"}[1m])) / sum(rate(checkout_requests_total{namespace=\"$NS_DEMO\"}[1m]))" \
-          | jq -r '.data.result[0].value[1] // empty' 2>/dev/null || true)"
-  if [[ -z "$rate" || "$rate" == "NaN" ]]; then
-    log_error "FAIL: the 1m checkout success-rate query is empty or NaN"
-    return 1
-  fi
   slo="$(_prom_query "max(checkout_slo_target_percent{namespace=\"$NS_DEMO\"})" \
           | jq -r '.data.result[0].value[1] // empty' 2>/dev/null || true)"
   if [[ -z "$slo" || "$slo" == "NaN" ]]; then
     log_error "FAIL: checkout_slo_target_percent has no series"
     return 1
   fi
-  if ! awk -v r="$rate" -v s="$slo" 'BEGIN {exit !(r + 0 >= s + 0)}'; then
+  rate="$(_fleet_success_rate)"
+  if [[ -z "$rate" || "$rate" == "NaN" ]]; then
+    log_error "FAIL: the 1m checkout success-rate query is empty or NaN"
+    return 1
+  fi
+  # The rate is a 1m window: right after a fix lands it still holds the failing minute. Wait
+  # (FLEET_RATE_WAIT_S, default 0 = strict) for it to clear instead of failing a recovering fleet.
+  if ! _rate_meets_slo "$rate" "$slo" && (( ${FLEET_RATE_WAIT_S:-0} > 0 )); then
+    SLO_NOW="$slo" wait_for "the 1m success rate to reach ${slo}%" "$FLEET_RATE_WAIT_S" _fleet_rate_recovered || true
+    rate="$(_fleet_success_rate)"
+  fi
+  if ! _rate_meets_slo "$rate" "$slo"; then
     log_error "FAIL: 1m success rate ${rate}% is below the ${slo}% target"
     return 1
   fi

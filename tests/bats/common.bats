@@ -281,6 +281,30 @@ fleet_setup() {
   [[ "$output" == *"FAIL:"* ]]
 }
 
+@test "check_fleet_disarmed waits for the 1m success rate to recover when FLEET_RATE_WAIT_S allows" {
+  fleet_setup
+  echo '{"data":{"result":[{"metric":{},"value":[1,"93"]}]}}' > "$BATS_TEST_TMPDIR/rate-low.json"
+  make_stub "$STUBS" curl 'for a in "$@"; do q="$q $a"; done
+    case "$q" in
+      *checkout_config_upstream_timeout_ms*) cat "'"$BATS_TEST_TMPDIR"'/gauge.json" ;;
+      *checkout_slo_target_percent*) cat "'"$BATS_TEST_TMPDIR"'/slo.json" ;;
+      *checkout_requests_total*)
+        n="'"$BATS_TEST_TMPDIR"'/rate.calls"; c=$(cat "$n" 2>/dev/null || echo 0); echo $((c+1)) > "$n"
+        if [ "$c" -lt 2 ]; then cat "'"$BATS_TEST_TMPDIR"'/rate-low.json"; else cat "'"$BATS_TEST_TMPDIR"'/rate.json"; fi ;;
+    esac'
+  run in_fixture 'load_env; FLEET_RATE_WAIT_S=20 check_fleet_disarmed'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"success rate 99.9%"* ]]
+}
+
+@test "check_fleet_disarmed still fails on a low success rate when the rate never recovers in the wait" {
+  fleet_setup
+  echo '{"data":{"result":[{"metric":{},"value":[1,"93"]}]}}' > "$BATS_TEST_TMPDIR/rate.json"
+  run in_fixture 'load_env; FLEET_RATE_WAIT_S=3 check_fleet_disarmed'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"below the 99% target"* ]]
+}
+
 @test "check_fleet_disarmed fails when any checkout pod reports 200" {
   fleet_setup
   echo '{"data":{"result":[{"metric":{"pod":"checkout-abc-1"},"value":[1,"200"]}]}}' > "$BATS_TEST_TMPDIR/gauge.json"

@@ -314,7 +314,7 @@ section_fleet() {
   if ! _api_up; then
     check_fail "fleet: API server unreachable; checkout fleet not checked"; return 0
   fi
-  if out="$(FLEET_WAIT_S="${PREFLIGHT_FLEET_WAIT_S:-20}" check_fleet_disarmed 2>&1)"; then
+  if out="$(FLEET_WAIT_S="${PREFLIGHT_FLEET_WAIT_S:-20}" FLEET_RATE_WAIT_S="${PREFLIGHT_FLEET_RATE_WAIT_S:-75}" check_fleet_disarmed 2>&1)"; then
     check_pass "fleet: ${out##*$'\n'}"
   else
     line="$(grep -F 'FAIL:' <<<"$out" | tail -n1 || true)"
