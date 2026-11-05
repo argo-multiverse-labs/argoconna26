@@ -15,7 +15,7 @@ open_act_promotion() {
     beat "no act promotion yet"
     return 0
   fi
-  if "$PROMOTION_PR_SH" ensure act; then
+  if shown "scripts/promotion-pr.sh ensure act" "$PROMOTION_PR_SH" ensure act; then
     scene_say act-offstage
   else
     [[ "$NO_WAIT" == true ]] && { log_error "FAIL: act promotion PR not opened"; exit 1; }

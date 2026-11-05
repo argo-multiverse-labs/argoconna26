@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Close: the Grafana timeline where the signal now lives, the "It's in Slack" callback, the
+# Close: the Grafana timeline (its tab is open all talk) where the signal now lives, the "It's in Slack" callback, the
 # character drop, and the repo link. Narration keys: timeline, slack, drop, repo.
 set -euo pipefail
 (($# == 0)) || { echo "usage: demo-close.sh   (env: DEMO_PACE, TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
@@ -8,8 +8,7 @@ set -euo pipefail
 
 scene_init close
 title_card "2:31 a.m." "Back in bed by 2:30"
-open_tab "$(grafana_kiosk_url)"
-scene_say timeline
+scene_say timeline # on the Grafana tab, open all talk
 speaker_beat sre "it's in Slack, the callback"
 scene_say slack
 speaker_beat both "character drop; the landing line"

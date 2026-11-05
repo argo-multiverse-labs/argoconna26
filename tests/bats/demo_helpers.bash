@@ -41,6 +41,10 @@ demo_setup() { # LEVEL : the tracked autonomy level the scenario starts at
   export ST STUBS LOG FIXTURE CAUSE BUMP MERGE HEAD_SHA REF BOT SLUG
   # shellcheck disable=SC1091
   . "$REPO_ROOT/demo.env"
+  # The demo scripts size to the demo terminal (DEMO_COLS), not demo.env's 30; the assertions
+  # (assert_fits, the full-width bars) check against the same width.
+  export DEMO_COLS=72
+  STAGE_COLS="$DEMO_COLS"
 
   write_stub kubectl <<'STUB'
 case "$*" in

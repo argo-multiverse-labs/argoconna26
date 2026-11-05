@@ -564,7 +564,8 @@ verify-idempotent: ## rm-kind, build-all, build-all, compare, preflight
 # Recordings (backup clips; recordings/ is git-ignored)                        #
 ################################################################################
 
-# The cast is sized to the stage pane (STAGE_COLS from demo.env). asciinema 3 takes
+# The cast is sized to the stage terminal (DEMO_COLS, default 78: the most the demo scripts
+# use when they size to the terminal; .env is not read here). asciinema 3 takes
 # --window-size COLSxROWS where asciinema 2 had --cols/--rows. RECORD_CMD replaces the
 # recorded command (used by the smoke test, which needs no cluster).
 STAGE_ROWS    ?= 40
@@ -576,7 +577,7 @@ define record_cast
 command -v asciinema >/dev/null || { echo "asciinema is not installed" >&2; exit 1; }
 mkdir -p "$(RECORDINGS_DIR)"
 cast="$(RECORDINGS_DIR)/$(1)-$$(date -u +%Y%m%dT%H%M%SZ).cast"
-asciinema rec --return --window-size "$(STAGE_COLS)x$(STAGE_ROWS)" \
+asciinema rec --return --window-size "$(or $(DEMO_COLS),78)x$(STAGE_ROWS)" \
   --command "$${RECORD_CMD:-NO_WAIT=false $(MAKE) --no-print-directory -C $(ROOT) $(2)}" \
   "$$cast"
 echo "recorded: $$cast"

@@ -5,7 +5,8 @@
 #
 # It loads the environment, refuses a foreign kube context, exports STAGE=1 (P19: the operator
 # scripts then print one short line per beat) and sources the vendored demo-magic.
-# Every line these scripts print, and every prompt plus typed command, fits STAGE_COLS.
+# Every line these scripts print, and every prompt plus typed command, fits STAGE_COLS, which
+# here is the width of the demo terminal (DEMO_COLS, below), not demo.env's 30.
 # No raw SHA and no "cause:" line reaches the terminal; machine values are read from
 # <main checkout>/.operator/ (written by the operator scripts under STAGE=1) or from the
 # rung-3 unit's journal.
@@ -19,7 +20,13 @@
 #                nothing reads stdin and the e2e assertions run. The demo-rung-N scripts keep
 #                their own pauses (every demo-magic wait) unless a scene script runs them.
 #   NARRATION_DIR  where narrate looks (default <main checkout>/narration)
-#   DEMO_OPEN   command that opens a URL in the browser (default xdg-open)
+#   DEMO_COLS   width of the demo terminal: narration wraps to it, bars and title cards fill it.
+#               Unset: the terminal's own width, at most 78 (DEMO_COLS_MAX); 78 when stdout is
+#               not a terminal. Set (.env or the caller): used as is, at least 30.
+#   DEMO_OPEN   command that opens a URL in the browser, split into words (default xdg-open, or
+#               open on macOS). `google-chrome` opens a new tab in the Chrome that is already
+#               running; `true` opens nothing. The tests point it at a logger.
+#   The caller's DEMO_COLS and DEMO_OPEN win over .env (a test's logger stays a logger).
 #   READY_TIMEOUT_S, READY_NOTE   per call of until_ready (see there)
 #   DEMO_AUTOMERGE_FOR_TEST=1, DEMO_REJECT_FOR_TEST=1   honoured only with NO_WAIT=true, and
 #                only by demo-rung-2.sh. Rung 3 never starts the helper: at act the merge must
@@ -34,23 +41,35 @@
 #   scene_break TITLE        blank line, the title as one line, then Enter (talk pace)
 #   fourth_wall TITLE        "-- TITLE --" (stepping out of the story), then Enter
 #   speaker_beat WHO TOPIC   hand over to a character (the talk draft's cast): pe, the Platform
-#                            Engineer; sre, the On-call SRE; or both. Prints "> Platform Engineer"
-#                            or "> On-call SRE" or "> Both", keeps TOPIC
-#                            in .operator/stage.log, then Enter. Outside a scene it is only the
-#                            Enter. (The plan calls this `beat WHO TOPIC`; `beat TEXT` is already
-#                            the one-line printer in common.sh, so this one has another name.)
+#                            Engineer; sre, the On-call SRE; or both. Prints that character's bar
+#                            ("━━ On-call SRE ━━━"), keeps TOPIC in .operator/stage.log, then
+#                            Enter. Outside a scene there is no bar. (The plan calls this `beat
+#                            WHO TOPIC`; `beat TEXT` is already the one-line printer in common.sh.)
+#   cue WHO                  WHO takes the floor without a pause: the bar (in a scene, when the
+#                            speaker changes) and WHO's prompt. The prompt always follows the last
+#                            bar: speaker_beat and narrate go through cue, so a bar for the
+#                            On-call SRE is followed by [SRE]$, never [PE]$.
 #   scene_say KEY            narrate "$SCENE" KEY; nothing outside a scene
 #   narrate SCENE KEY        print one section of narration/SCENE.txt
+#   typed CMD                type CMD at the prompt and run it (demo-magic's pe)
+#   shown DISPLAY CMD...     type DISPLAY at the prompt, then run CMD: for what a script does
+#                            for the speakers (a push, a merge, a promotion), so the audience sees
+#                            the real command. DISPLAY is that command as the audience reads it.
+#   note TEXT                one plain line, "› TEXT", for plumbing with no command worth showing
 #
 # Narration interface. narration/ is local only (excluded through .git/info/exclude; never in
 # .gitignore, never committed). narration/<SCENE>.txt is split in sections: a section starts
-# with a line `[KEY]`, and the non-blank lines after it, up to the next `[...]` line, belong to
-# KEY. narrate prints those lines with demo-magic's `p` (the prompt, then the comment). A line
-# starts with `# `; one that does not gets it. A line too long for the stage is folded at spaces
-# to fit STAGE_COLS. A missing file or a missing KEY prints nothing and returns 0.
+# with a line `[KEY]`, and the lines after it, up to the next `[...]` line, belong to KEY.
+# narrate prints them with demo-magic's `p` (the prompt, then the comment). The leading `# ` of a
+# line is dropped and the lines are joined: the file's line breaks do not matter. A blank line
+# inside a section starts a new paragraph. Each paragraph is re-flowed to the stage width
+# (STAGE_COLS less the prompt): whole sentences share a line while they fit, and a sentence
+# longer than a line is folded at spaces. A missing file or a missing KEY prints nothing and
+# returns 0.
 #
 #   [push]
-#   # An innocent release goes out.
+#   # An innocent release goes out. Nothing in it
+#   # looks wrong.
 #   [wait-teach]
 #   # [SRE: read-only by default; dry runs]
 #
@@ -71,10 +90,31 @@ DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/e2e/assert.sh
 . "$DEMO_DIR/../tests/e2e/assert.sh"
 
+_caller_demo_open="${DEMO_OPEN:-}" _caller_demo_cols="${DEMO_COLS:-}"
 load_env
 require_context
+[[ -z "$_caller_demo_open" ]] || DEMO_OPEN="$_caller_demo_open"
+[[ -z "$_caller_demo_cols" ]] || DEMO_COLS="$_caller_demo_cols"
 export STAGE=1
-STAGE_COLS="${STAGE_COLS:-30}"
+
+# The stage width. demo.env's STAGE_COLS (30) is what every operator line and the bridge's stage
+# log fit; the demo terminal is wider, and this script sizes to it (see DEMO_COLS in the header).
+DEMO_COLS_MAX=78 DEMO_COLS_MIN=30
+_set_stage_cols() {
+  local n="${DEMO_COLS:-}" size
+  if [[ -z "$n" ]]; then
+    n="$DEMO_COLS_MAX"
+    if [[ -t 1 ]]; then
+      size="$(command stty size </dev/tty 2>/dev/null || true)"
+      size="${size##* }"
+      if [[ "$size" =~ ^[0-9]+$ ]] && ((size < n)); then n="$size"; fi
+    fi
+  fi
+  [[ "$n" =~ ^[0-9]+$ ]] || die "DEMO_COLS must be a number of columns, got '$n'"
+  ((n >= DEMO_COLS_MIN)) || n="$DEMO_COLS_MIN"
+  STAGE_COLS="$n"
+}
+_set_stage_cols
 export STAGE_COLS
 cd "$(main_root)"
 OPERATOR_STATE="$(main_root)/.operator"
@@ -134,6 +174,14 @@ as_platform_engineer() { _as "$C_PE" PE; }
 as_oncall_sre() { _as "$C_SRE" SRE; }
 as_both() { _as "$C_BOTH" ALL; }
 as_platform_engineer
+_role_prompt() { # WHO : pe, sre or both
+  case "$1" in
+    pe) as_platform_engineer ;;
+    sre) as_oncall_sre ;;
+    both) as_both ;;
+    *) die "WHO must be pe, sre or both, got '$1'" ;;
+  esac
+}
 
 # _bar CHAR COLOUR [TITLE] : a STAGE_COLS-wide line of CHAR in COLOUR, with TITLE set in after two
 _bar() {
@@ -287,52 +335,85 @@ _speaker_bar() { # WHO : that character's bar, and remember who has the floor
   _LAST_CUE="$1"
 }
 
+# cue WHO : WHO has the floor. In a scene a change of speaker draws WHO's bar; in and out of a
+# scene the prompt becomes WHO's, so the next typed command is under the right name.
+cue() {
+  _role_prompt "$1"
+  # the same speaker carrying on gets no second bar
+  if [[ -n "$SCENE" && "$1" != "${_LAST_CUE:-}" ]]; then _speaker_bar "$1"; fi
+}
+
 speaker_beat() { # WHO TOPIC : WHO is pe (the Platform Engineer), sre (the On-call SRE) or both
-  local who="$1" topic="${2:-}" name
+  local who="$1" topic="${2:-}"
   case "$who" in pe | sre | both) ;; *) die "speaker_beat: WHO must be pe, sre or both, got '$who'" ;; esac
-  if [[ -n "$SCENE" ]]; then
-    _stage_keep "beat: $who: $topic"
-    # the same speaker carrying on gets the pause but not a second bar
-    [[ "$who" == "${_LAST_CUE:-}" ]] || _speaker_bar "$who"
-  fi
+  [[ -z "$SCENE" ]] || _stage_keep "beat: $who: $topic"
+  cue "$who"
   _pause
+}
+
+# reflow WIDTH : stdin is paragraphs, one per line; prints them as lines of at most WIDTH
+# characters. Whole sentences share a line while they fit; a longer sentence is folded at spaces.
+reflow() {
+  local width="$1" para s line cand
+  local -a parts
+  while IFS= read -r para; do
+    line=""
+    while IFS= read -r s; do
+      [[ -n "$s" ]] || continue
+      cand="${line:+$line }$s"
+      if ((${#cand} <= width)); then
+        line="$cand"
+        continue
+      fi
+      [[ -z "$line" ]] || printf '%s\n' "$line"
+      line="$s"
+      if ((${#line} > width)); then
+        mapfile -t parts < <(fold -s -w "$width" <<<"$line" | sed 's/[[:space:]]*$//')
+        ((${#parts[@]} < 2)) || printf '%s\n' "${parts[@]:0:${#parts[@]}-1}"
+        line="${parts[${#parts[@]}-1]}"
+      fi
+    done < <(sed -E 's/([.?!]["”)]?) +/\1\n/g' <<<"$para")
+    [[ -z "$line" ]] || printf '%s\n' "$line"
+  done
 }
 
 # narrate SCENE KEY : see the header. Always returns 0.
 # A section header is [key] (the Platform Engineer), [key] sre (the On-call SRE) or [key] both;
-# the lines print with that character's prompt, and the prompt in use before is restored after.
+# the lines print with that character's prompt. In a scene that character keeps the floor after
+# (cue); outside one the prompt in use before is restored.
 narrate() {
-  local scene="$1" key="$2" file line chunk width who
-  local -a lines=()
+  local scene="$1" key="$2" file chunk width who
+  local -a paras=()
   file="${NARRATION_DIR:-$(main_root)/narration}/$scene.txt"
   [[ -r "$file" ]] || return 0
-  mapfile -t lines < <(awk -v want="[$key]" '
+  # one output line per paragraph: the section's lines joined, a blank line between paragraphs
+  mapfile -t paras < <(awk -v want="[$key]" '
+    function flush() { if (para != "") print para; para = "" }
     { h = $0; sub(/[[:space:]]+$/, "", h) }
     h ~ /^\[[^]]*\]( (pe|sre|both))?$/ {
+      if (on) flush()
       t = h; sub(/ (pe|sre|both)$/, "", t); on = (t == want)
       if (on) { w = "pe"; if (h ~ / sre$/) w = "sre"; if (h ~ / both$/) w = "both"; print "@who " w }
       next
     }
-    on && NF { print }' "$file")
-  ((${#lines[@]})) || return 0
-  who="${lines[0]#@who }"
-  lines=("${lines[@]:1}")
+    !on { next }
+    !NF { flush(); next }
+    { l = h; sub(/^[[:space:]]*#[[:space:]]?/, "", l); sub(/^[[:space:]]+/, "", l); para = (para == "" ? l : para " " l) }
+    END { if (on) flush() }' "$file")
+  ((${#paras[@]} > 1)) || return 0
+  who="${paras[0]#@who }"
+  paras=("${paras[@]:1}")
   local saved_prompt="${DEMO_PROMPT:-}" saved_plain="$DEMO_PROMPT_PLAIN"
-  case "$who" in sre) as_oncall_sre ;; both) as_both ;; esac
-  # in a scene, a change of speaker always shows that speaker's bar first
-  [[ -z "$SCENE" || "$who" == "${_LAST_CUE:-}" ]] || _speaker_bar "$who"
+  if [[ -n "$SCENE" ]]; then cue "$who"; else _role_prompt "$who"; fi
   width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
   ((width >= 8)) || width=8
-  for line in "${lines[@]}"; do
-    line="${line#"# "}"
-    line="${line#"#"}"
-    while IFS= read -r chunk; do
-      chunk="${chunk%"${chunk##*[![:space:]]}"}"
-      p "# $chunk"
-    done < <(printf '%s\n' "$line" | fold -s -w "$width")
-  done
-  DEMO_PROMPT="$saved_prompt"
-  DEMO_PROMPT_PLAIN="$saved_plain"
+  while IFS= read -r chunk; do
+    p "# $chunk"
+  done < <(printf '%s\n' "${paras[@]}" | reflow "$width")
+  if [[ -z "$SCENE" ]]; then
+    DEMO_PROMPT="$saved_prompt"
+    DEMO_PROMPT_PLAIN="$saved_plain"
+  fi
   return 0
 }
 
@@ -345,8 +426,14 @@ leave_early() { if [[ -n "$SCENE" ]]; then exit 10; fi; exit 0; }
 # show_verify RUN_TS : run the after-the-fact verifier, show one short PASS/FAIL line per check
 # and keep them in .operator/last-verify for the epilogue. Returns 1 when the verifier fails.
 show_verify() {
-  local out rc=0 line
-  out="$("$OVERNIGHT_VERIFY" "SINCE=$1" "UNTIL=$(date +%s)" 2>&1)" || rc=$?
+  local out rc=0 line until
+  until="$(date +%s)"
+  if _fits_prompt "tests/e2e/overnight-verify.sh SINCE=$1 UNTIL=$until"; then
+    p "tests/e2e/overnight-verify.sh SINCE=$1 UNTIL=$until"
+  else
+    note "overnight-verify.sh: the run, checked after the fact"
+  fi
+  out="$("$OVERNIGHT_VERIFY" "SINCE=$1" "UNTIL=$until" 2>&1)" || rc=$?
   mkdir -p "$OPERATOR_STATE"
   : >"$OPERATOR_STATE/last-verify"
   while IFS= read -r line; do
@@ -365,16 +452,20 @@ show_verify() {
 # --admin (logged as admin-bypass), which stands in for the board in a run nobody watches.
 promote_to() {
   local level="$1" pr="$2" state
-  "$PROMOTION_PR_SH" verify "$pr" # one line (P23); exit 8 and a refusal line when the PR changed
+  # one line (P23); exit 8 and a refusal line when the PR changed
+  shown "scripts/promotion-pr.sh verify $pr" "$PROMOTION_PR_SH" verify "$pr"
   open_tab "$(gh pr view "$pr" --repo "$REPO_SLUG" --json url --jq .url)"
   speaker_beat sre "approves the promotion"
   scene_say board
   state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state 2>/dev/null || true)"
-  if [[ "$state" == OPEN ]] && automerge_for_test; then "$PROMOTION_PR_SH" merge "$pr" --admin >/dev/null; fi
+  if [[ "$state" == OPEN ]] && automerge_for_test; then
+    shown "scripts/promotion-pr.sh merge $pr --admin" quiet "$PROMOTION_PR_SH" merge "$pr" --admin
+  fi
   READY_TIMEOUT_S="${PROMO_WAIT_S:-1800}" until_ready "promotion merged" pr_not_open "$pr"
   pr_state_is "$pr" MERGED || refuse 1 "promotion PR closed" "promotion PR $pr was closed, not merged"
   beat "promotion merged"
-  "$PROMOTION_PR_SH" record-approval "$pr" # one line: recorded: board approval | admin bypass
+  # a direct push to the tracked branch; one line: recorded: board approval | admin bypass
+  shown "scripts/promotion-pr.sh record-approval $pr" "$PROMOTION_PR_SH" record-approval "$pr"
   until_ready "$level, approved" level_with_approval "$level"
   ladder_set "$level"
 }
@@ -384,12 +475,29 @@ promote_to() {
 # nested make would print "make[1]: Entering directory ..." lines, wider than STAGE_COLS.
 make() { command make "$@" --no-print-directory; }
 
+_fits_prompt() { ((${#DEMO_PROMPT_PLAIN} + ${#1} <= STAGE_COLS)); } # TEXT
+
 typed() {
-  if ((${#DEMO_PROMPT_PLAIN} + ${#1} > STAGE_COLS)); then
-    refuse 1 "typed line too long" "typed command is too long for the stage: $1"
-  fi
+  _fits_prompt "$1" || refuse 1 "typed line too long" "typed command is too long for the stage: $1"
   pe "$1"
   [[ "$1" != *demote* ]] || ladder_refresh
+}
+
+# shown DISPLAY CMD... : what the script does for the speakers, on screen. DISPLAY is typed at the
+# prompt (the real command as the audience reads it), then CMD runs. A DISPLAY too wide for the
+# stage prints as a note instead, so a narrow terminal never stops the talk.
+shown() {
+  local display="$1"
+  shift
+  if _fits_prompt "$display"; then p "$display"; else note "$display"; fi
+  "$@"
+}
+
+# note TEXT : one plain line, "› TEXT", saying what happens out of view.
+note() {
+  local text="› $*"
+  text="${text:0:STAGE_COLS}"
+  if fx_on; then printf '\033[%sm%s\033[0m\n' "$C_WALL" "$text"; else printf '%s\n' "$text"; fi
 }
 
 # until_ready DESC CMD... : one line, then wait for CMD to succeed (a real condition, never a
@@ -444,21 +552,19 @@ check() {
 }
 
 # ---------------------------------------------------------------- browser
-# open_tab URL : hand the URL to the browser. Tabs open in call order.
+# open_tab URL : hand the URL to the browser (DEMO_OPEN, see the header). Tabs open in call order.
+# Only pages that are new on stage are opened (a commit, a comment, a PR, its checks, a file).
+# The Argo CD and Grafana tabs stay open in the browser all talk, so no scene opens them.
+default_opener() { if [[ "$(uname -s)" == Darwin ]]; then echo open; else echo xdg-open; fi; }
 open_tab() {
-  local opener="${DEMO_OPEN:-xdg-open}"
-  if ! command -v "$opener" >/dev/null 2>&1; then
+  local -a opener
+  read -r -a opener <<<"${DEMO_OPEN:-$(default_opener)}"
+  if ((${#opener[@]} == 0)) || ! command -v "${opener[0]}" >/dev/null 2>&1; then
     beat "no browser opener"
     return 0
   fi
-  "$opener" "$1" >/dev/null 2>&1 || true
+  "${opener[@]}" "$1" >/dev/null 2>&1 || true
 }
-
-argo_app_url() { printf '%s/applications/%s/checkout' "$ARGOCD_HOST_URL" "$NS_ARGOCD"; }
-# The History and rollback panel. The rollback query parameter is how the Argo CD UI deep-links
-# it (to be confirmed in the C6 visual pass); ARGO_HISTORY_URL overrides it.
-argo_history_url() { printf '%s' "${ARGO_HISTORY_URL:-$(argo_app_url)?view=tree&rollback=0}"; }
-grafana_kiosk_url() { "$DEMO_DIR/grafana-run-url.sh" --kiosk; }
 
 # ---------------------------------------------------------------- state files
 # machine_value FILE KEY : a "KEY: value" line the operator scripts wrote under STAGE=1.
@@ -571,10 +677,10 @@ require_fix_pr() {
   leave_early
 }
 
-# human_fix : the On-call SRE's beat, then the human fix (make fix, one pushed: line) until Healthy.
+# human_fix : the On-call SRE's beat, then the On-call SRE makes the human fix (make fix, one
+# pushed: line) until Healthy. The prompt is the SRE's: it follows the bar (cue).
 human_fix() {
   speaker_beat sre "before the human fix"
-  as_platform_engineer
   typed "make fix"
   until_ready "Healthy" app_health_is checkout Healthy
   beat "healthy"
@@ -627,6 +733,7 @@ reject_for_test() { [[ "$NO_WAIT" == true && "${DEMO_REJECT_FOR_TEST:-0}" == 1 ]
 start_pr_helper() {
   local t0="$1"
   if ! automerge_for_test && ! reject_for_test; then return 0; fi
+  if reject_for_test; then note "test hook: closes the fix PR"; else note "test hook: merges the fix PR"; fi
   (
     local pr
     wait_for "the bot's fix PR" 600 have_agent_pr_since "$t0" checkout

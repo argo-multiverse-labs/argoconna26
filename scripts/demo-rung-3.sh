@@ -6,7 +6,7 @@
 #   make night (the stage line is "running the nightly job now") -> the unit re-arms -> Degraded
 #   at the bump -> the bot's fix PR -> policy-check -> merged by the bot (GitHub's auto-merge, or
 #   the bridge's catch-up after ACT_AUTOMERGE_GRACE_S) with no human -> synced -> Healthy -> the
-#   tabs open: the PR, its Checks tab, the Argo history view and the Grafana kiosk.
+#   tabs open: the PR and its Checks tab (Argo CD and Grafana have their own tabs all talk).
 #
 # Nothing here holds the cluster lock (make night refuses under it), merges a PR, or nudges Argo
 # (O13/O29). DEMO_AUTOMERGE_FOR_TEST and DEMO_REJECT_FOR_TEST are ignored on this rung.
@@ -31,8 +31,6 @@ bot_merged() { # PR : mergedBy is the bot (GitHub's auto-merge credits the app t
 open_tabs() { # PR_URL : the fixed order
   open_tab "$1"
   open_tab "$1/checks"
-  open_tab "$(argo_history_url)"
-  open_tab "$(grafana_kiosk_url)"
 }
 
 rung3_main() {
@@ -40,7 +38,7 @@ rung3_main() {
   tracked_level_is act || refuse 6 "autonomy not act" "autonomy on $TRACKED_BRANCH is not act; promote first"
 
   rung_break "Rung 3: act"
-  as_platform_engineer
+  cue pe
   typed "make night" # prints "running the nightly job now"; refuses under a held lock
   run_ts="$(sed -n 's/^RUN_TS=//p' "$OPERATOR_STATE/last-run" 2>/dev/null | tail -n1)"
   [[ "$run_ts" =~ ^[0-9]+$ ]] || die "make night did not record RUN_TS"

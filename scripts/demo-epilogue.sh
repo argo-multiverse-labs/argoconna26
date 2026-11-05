@@ -33,8 +33,7 @@ demote_to_suggest() {
 
 scene_init epilogue
 scene_break "What's real"
-scene_say panel
-open_tab "$(grafana_kiosk_url)"
+scene_say panel # on the Grafana tab, open all talk
 scene_say verifier
 replay_verify
 fourth_wall "Real, and stood in"
@@ -46,6 +45,5 @@ scene_say simulated
 speaker_beat sre "the safety valve"
 scene_say valve
 speaker_beat pe "make demote"
-as_platform_engineer
 demote_to_suggest
 scene_say safe
