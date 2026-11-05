@@ -4,6 +4,10 @@ controller:
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {memory: 192Mi}
+  # Metrics Service argo-rollouts-metrics only. Its ServiceMonitor is in platform/grafana: this
+  # chart installs before kube-prometheus-stack, which brings the ServiceMonitor CRD.
+  metrics:
+    enabled: true
 dashboard:
   enabled: false
 installCRDs: true

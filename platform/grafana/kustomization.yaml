@@ -1,12 +1,28 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: monitoring
+resources:
+  - servicemonitors-argo.yaml
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
   - name: dashboard-trust-ladder
     files:
       - dashboard-trust-ladder.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+  # Upstream dashboards: argoproj/argo-cd examples/dashboard.json at ARGOCD_VERSION and
+  # argoproj/argo-rollouts examples/dashboard.json at ROLLOUTS_VERSION.
+  - name: dashboard-argocd
+    files:
+      - dashboard-argocd.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+  - name: dashboard-argo-rollouts
+    files:
+      - dashboard-argo-rollouts.json
     options:
       labels:
         grafana_dashboard: "1"

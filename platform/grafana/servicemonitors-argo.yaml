@@ -1,0 +1,40 @@
+# Scrape Argo CD and Argo Rollouts for their Grafana dashboards. The charts create the metrics
+# Services (platform/argocd, platform/rollouts values). The ServiceMonitors live here rather than
+# in the charts because both charts install before kube-prometheus-stack brings the CRD.
+# Prometheus names each job after its Service (argocd-server-metrics, argo-rollouts-metrics, ...),
+# which is what the upstream dashboards' queries expect.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd
+spec:
+  namespaceSelector:
+    matchNames:
+      - argocd
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - argocd-metrics               # application controller
+          - argocd-server-metrics
+          - argocd-repo-server-metrics
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argo-rollouts
+spec:
+  namespaceSelector:
+    matchNames:
+      - argo-rollouts
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argo-rollouts
+      app.kubernetes.io/component: rollouts-controller
+  endpoints:
+    - port: metrics
+      interval: 30s
