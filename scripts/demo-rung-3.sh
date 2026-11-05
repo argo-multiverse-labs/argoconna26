@@ -5,8 +5,9 @@
 #
 #   make night (the stage line is "running the nightly job now") -> the unit re-arms -> Degraded
 #   at the bump -> the bot's fix PR -> policy-check -> merged by the bot (GitHub's auto-merge, or
-#   the bridge's catch-up after ACT_AUTOMERGE_GRACE_S) with no human -> synced -> Healthy -> the
-#   tabs open: the PR and its Checks tab (Argo CD and Grafana have their own tabs all talk).
+#   the bridge's catch-up after ACT_AUTOMERGE_GRACE_S) with no human -> synced -> Healthy. The PR
+#   opens in the browser when it appears and its Checks tab when policy-check passes (Argo CD and
+#   Grafana have their own tabs all talk).
 #
 # Nothing here holds the cluster lock (make night refuses under it), merges a PR, or nudges Argo
 # (O13/O29). DEMO_AUTOMERGE_FOR_TEST and DEMO_REJECT_FOR_TEST are ignored on this rung.
@@ -28,17 +29,13 @@ bot_merged() { # PR : mergedBy is the bot (GitHub's auto-merge credits the app t
   [[ "$by" == "$BOT_LOGIN" || "$by" == "$slug" || "$by" == "app/$slug" ]]
 }
 
-open_tabs() { # PR_URL : the fixed order
-  open_tab "$1"
-  open_tab "$1/checks"
-}
-
 rung3_main() {
   local run_ts journal cause bump ref conclusion merge_sha
   tracked_level_is act || refuse 6 "autonomy not act" "autonomy on $TRACKED_BRANCH is not act; promote first"
 
   rung_break "Rung 3: act"
   cue pe
+  scene_say night
   typed "make night" # prints "running the nightly job now"; refuses under a held lock
   run_ts="$(sed -n 's/^RUN_TS=//p' "$OPERATOR_STATE/last-run" 2>/dev/null | tail -n1)"
   [[ "$run_ts" =~ ^[0-9]+$ ]] || die "make night did not record RUN_TS"
@@ -55,7 +52,8 @@ rung3_main() {
   unhappy_outcome || true
   require_fix_pr
 
-  beat "bot PR #$OUT_PR"
+  beat "agent opened PR #$OUT_PR"
+  look "Browser, GitHub: the agent's fix PR" "$OUT_URL"
   scene_say pr
   READY_TIMEOUT_S="${POLICY_WAIT_S:-600}" until_ready "policy-check" pr_policy_check_done "$OUT_PR"
   conclusion="$(pr_policy_check_conclusion "$OUT_PR")"
@@ -67,6 +65,7 @@ rung3_main() {
     leave_early
   fi
   beat "policy-check: pass"
+  look "Browser, GitHub: the PR's checks" "$OUT_URL/checks"
   scene_say policy-pass
 
   READY_TIMEOUT_S="${MERGED_WAIT_S:-900}" until_ready "auto-merge" pr_not_open "$OUT_PR"
@@ -75,16 +74,18 @@ rung3_main() {
   bot_merged "$OUT_PR" || refuse 1 "merged by a person" "fix PR $OUT_PR was not merged by $BOT_LOGIN"
   beat "auto-merged"
   scene_say merged
+  look "Browser, Argo CD: checkout"
   merge_sha="$(pr_merged_sha "$OUT_PR")"
   READY_TIMEOUT_S="${SYNC_WAIT_S:-120}" until_ready "synced" app_synced_at checkout "$merge_sha"
   beat "synced"
   READY_NOTE="canary, about 60s" READY_TIMEOUT_S="${HEALTHY_WAIT_S:-240}" until_ready "Healthy" app_health_is checkout Healthy
   beat "healthy"
   scene_say healthy
-  open_tabs "$OUT_URL"
   if [[ -n "$SCENE" ]]; then
     scene_say verify
     show_verify "$run_ts" || { [[ "$NO_WAIT" == true ]] && exit 1; leave_early; }
+    scene_say verify-read
+    scene_say recap
   fi
 
   if [[ "$NO_WAIT" == true ]]; then

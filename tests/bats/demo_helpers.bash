@@ -65,7 +65,7 @@ case "$1" in
   bump) printf 'bump: %s\n' "$BUMP" >"$OP/last-bump"; touch "$ST/bumped"; echo "$BUMP" >"$ST/rev"; echo "pushed: image bump" ;;
   rearm) printf 'cause: %s\nbump: %s\nchange_ref: %s\n' "$CAUSE" "$BUMP" "$REF" >"$OP/last-rearm"
          touch "$ST/bumped"; echo "$BUMP" >"$ST/rev"; echo "pushed: rearm" ;;
-  fix) touch "$ST/fixed"; echo "pushed: config 2000, cv 8" ;;
+  fix) touch "$ST/fixed"; echo "pushed: timeout 2000, restart" ;;
   demote) echo suggest >"$ST/level"; echo "demoted: propose -> suggest" ;;
   night)
     if ( flock -n 9 ) 9>>"$FIXTURE/.kube/cluster.lock"; then echo "night: lock free, held=${CLUSTER_LOCK_HELD:-none}" >>"$LOG"

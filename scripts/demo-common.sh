@@ -15,10 +15,13 @@
 #   TYPE_SPEED   typing speed for demo-magic (default 40; an empty value types instantly)
 #   NO_WAIT      true: no pauses, and the script runs its assertions at the end (default false)
 #   DEMO_PACE    talk (default) or auto. Used by the scene scripts (demo-scene-N, demo-full):
-#                talk stops for Enter only at scene_break, fourth_wall and speaker_beat, so the
+#                talk stops for Enter at scene_break, fourth_wall and speaker_beat, and before
+#                each line of narration (DEMO_STEP), never at a typed command or a wait, so the
 #                speakers talk while the script waits on a condition. auto sets NO_WAIT=true:
 #                nothing reads stdin and the e2e assertions run. The demo-rung-N scripts keep
 #                their own pauses (every demo-magic wait) unless a scene script runs them.
+#   DEMO_STEP    line (default): in talk pace, each narration line waits for Enter, so the
+#                speaker says it as it appears. section: a narration section types out whole.
 #   NARRATION_DIR  where narrate looks (default <main checkout>/narration)
 #   DEMO_COLS   width of the demo terminal: narration wraps to it, bars and title cards fill it.
 #               Unset: the terminal's own width, at most 78 (DEMO_COLS_MAX); 78 when stdout is
@@ -26,7 +29,7 @@
 #   DEMO_OPEN   command that opens a URL in the browser, split into words (default xdg-open, or
 #               open on macOS). `google-chrome` opens a new tab in the Chrome that is already
 #               running; `true` opens nothing. The tests point it at a logger.
-#   The caller's DEMO_COLS and DEMO_OPEN win over .env (a test's logger stays a logger).
+#   The caller's DEMO_COLS, DEMO_OPEN and DEMO_STEP win over .env (a test's logger stays a logger).
 #   READY_TIMEOUT_S, READY_NOTE   per call of until_ready (see there)
 #   DEMO_AUTOMERGE_FOR_TEST=1, DEMO_REJECT_FOR_TEST=1   honoured only with NO_WAIT=true, and
 #                only by demo-rung-2.sh. Rung 3 never starts the helper: at act the merge must
@@ -56,6 +59,8 @@
 #                            for the speakers (a push, a merge, a promotion), so the audience sees
 #                            the real command. DISPLAY is that command as the audience reads it.
 #   note TEXT                one plain line, "› TEXT", for plumbing with no command worth showing
+#   look WHERE [URL]         where the audience should look now: "▶ WHERE", then opens URL (if
+#                            given) in the browser. Every page a scene points at gets one.
 #
 # Narration interface. narration/ is local only (excluded through .git/info/exclude; never in
 # .gitignore, never committed). narration/<SCENE>.txt is split in sections: a section starts
@@ -73,8 +78,9 @@
 #   [wait-teach]
 #   # [SRE: read-only by default; dry runs]
 #
-# The On-call SRE's lines are placeholders only, in exactly this form, until that speaker writes
-# them (tests/bats/demo_scenes.bats checks every line that opens a bracket): `# [SRE: <beat topic>]`.
+# The On-call SRE's lines are drafts for that speaker to rewrite in her own words. A line that
+# opens a bracket is a placeholder, in exactly this form (tests/bats/demo_scenes.bats checks
+# them): `# [SRE: <beat topic>]`.
 # No speaker's real name appears in the scripts or the narration: the cues use the characters.
 # The keys each scene uses: grep -ho 'scene_say [a-z0-9-]*' scripts/demo-*.sh
 #
@@ -90,11 +96,12 @@ DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/e2e/assert.sh
 . "$DEMO_DIR/../tests/e2e/assert.sh"
 
-_caller_demo_open="${DEMO_OPEN:-}" _caller_demo_cols="${DEMO_COLS:-}"
+_caller_demo_open="${DEMO_OPEN:-}" _caller_demo_cols="${DEMO_COLS:-}" _caller_demo_step="${DEMO_STEP:-}"
 load_env
 require_context
 [[ -z "$_caller_demo_open" ]] || DEMO_OPEN="$_caller_demo_open"
 [[ -z "$_caller_demo_cols" ]] || DEMO_COLS="$_caller_demo_cols"
+[[ -z "$_caller_demo_step" ]] || DEMO_STEP="$_caller_demo_step"
 export STAGE=1
 
 # The stage width. demo.env's STAGE_COLS (30) is what every operator line and the bridge's stage
@@ -126,6 +133,8 @@ _want_type_speed="${TYPE_SPEED-40}"
 _want_no_wait="${NO_WAIT:-false}"
 [[ "$_want_no_wait" == true || "$_want_no_wait" == false ]] || die "NO_WAIT must be true or false"
 DEMO_PACE="${DEMO_PACE:-talk}"
+DEMO_STEP="${DEMO_STEP:-line}"
+[[ "$DEMO_STEP" == line || "$DEMO_STEP" == section ]] || die "DEMO_STEP must be line or section"
 case "$DEMO_PACE" in
   talk) ;;
   auto) _want_no_wait=true ;;
@@ -160,8 +169,8 @@ wait() {
 # terminal: light (default, the 11-09 setup) or dark.
 DEMO_THEME="${DEMO_THEME:-light}"
 case "$DEMO_THEME" in
-  light) C_PE='1;34' C_SRE='1;35' C_BOTH='1;32' C_SCENE='1;30' C_WALL='3;90' ;;
-  dark) C_PE='1;94' C_SRE='1;95' C_BOTH='1;92' C_SCENE='1;33' C_WALL='3;37' ;;
+  light) C_PE='1;34' C_SRE='1;35' C_BOTH='1;32' C_SCENE='1;30' C_WALL='3;90' C_LOOK='1;36' ;;
+  dark) C_PE='1;94' C_SRE='1;95' C_BOTH='1;92' C_SCENE='1;33' C_WALL='3;37' C_LOOK='1;96' ;;
   *) die "DEMO_THEME must be light or dark, got '$DEMO_THEME'" ;;
 esac
 DEMO_PROMPT_PLAIN='$ '
@@ -407,9 +416,14 @@ narrate() {
   if [[ -n "$SCENE" ]]; then cue "$who"; else _role_prompt "$who"; fi
   width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
   ((width >= 8)) || width=8
-  while IFS= read -r chunk; do
-    p "# $chunk"
-  done < <(printf '%s\n' "${paras[@]}" | reflow "$width")
+  local -a lines=()
+  mapfile -t lines < <(printf '%s\n' "${paras[@]}" | reflow "$width")
+  # read the lines first: in talk pace each one waits for Enter, and that read is from stdin.
+  # One Enter per line, after it has typed out (demo-magic's p would wait before and after).
+  for chunk in "${lines[@]}"; do
+    NO_WAIT=true p "# $chunk"
+    if [[ "$DEMO_STEP" == line && -n "$SCENE" ]]; then _pause; fi
+  done
   if [[ -z "$SCENE" ]]; then
     DEMO_PROMPT="$saved_prompt"
     DEMO_PROMPT_PLAIN="$saved_plain"
@@ -454,7 +468,8 @@ promote_to() {
   local level="$1" pr="$2" state
   # one line (P23); exit 8 and a refusal line when the PR changed
   shown "scripts/promotion-pr.sh verify $pr" "$PROMOTION_PR_SH" verify "$pr"
-  open_tab "$(gh pr view "$pr" --repo "$REPO_SLUG" --json url --jq .url)"
+  look "Browser, GitHub: the promotion PR, one line" "$(gh pr view "$pr" --repo "$REPO_SLUG" --json url --jq .url)/files"
+  scene_say promotion-read # what the diff and the description say
   speaker_beat sre "approves the promotion"
   scene_say board
   state="$(gh pr view "$pr" --repo "$REPO_SLUG" --json state --jq .state 2>/dev/null || true)"
@@ -498,6 +513,17 @@ note() {
   local text="› $*"
   text="${text:0:STAGE_COLS}"
   if fx_on; then printf '\033[%sm%s\033[0m\n' "$C_WALL" "$text"; else printf '%s\n' "$text"; fi
+}
+
+# look WHERE [URL] : point the audience at the screen that matters now ("▶ Browser, Argo CD:
+# checkout"), then open URL, if given. The Argo CD and Grafana tabs are open all talk: a look at
+# them names the place and opens nothing.
+look() {
+  local text="▶ $1"
+  text="${text:0:STAGE_COLS}"
+  _stage_keep "look: $1"
+  if fx_on; then printf '\033[%sm%s\033[0m\n' "$C_LOOK" "$text"; else printf '%s\n' "$text"; fi
+  [[ -z "${2:-}" ]] || open_tab "$2"
 }
 
 # until_ready DESC CMD... : one line, then wait for CMD to succeed (a real condition, never a
@@ -678,10 +704,12 @@ require_fix_pr() {
 }
 
 # human_fix : the On-call SRE's beat, then the On-call SRE makes the human fix (make fix, one
-# pushed: line) until Healthy. The prompt is the SRE's: it follows the bar (cue).
+# pushed: line), says what it did (narration key after-fix) and waits until Healthy. The prompt
+# is the SRE's: it follows the bar (cue).
 human_fix() {
   speaker_beat sre "before the human fix"
   typed "make fix"
+  scene_say after-fix
   until_ready "Healthy" app_health_is checkout Healthy
   beat "healthy"
 }

@@ -74,7 +74,7 @@ happy_rung3() {
   happy_rung1
   run rung 1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"RCA: comment posted"* ]]
+  [[ "$output" == *"agent: comment posted"* ]]
   [[ "$output" == *"incident resolved"* ]]
   [[ "$output" == *"PASS: RCA names the cause"* ]]
   grep -q '^make bump' "$LOG"
@@ -154,7 +154,7 @@ happy_rung3() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"promotion PR: clean"* ]]
   [[ "$output" == *"recorded: admin bypass"* ]]
-  [[ "$output" == *"bot PR #7"* ]]
+  [[ "$output" == *"agent opened PR #7"* ]]
   [[ "$output" == *"PASS: fix PR cites the cause"* ]]
   grep -q '^promo record-approval 12' "$LOG"
   grep -q '^make rearm' "$LOG"

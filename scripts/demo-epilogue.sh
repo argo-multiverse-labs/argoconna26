@@ -33,7 +33,8 @@ demote_to_suggest() {
 
 scene_init epilogue
 scene_break "What's real"
-scene_say panel # on the Grafana tab, open all talk
+look "Browser, Grafana: human steps per incident"
+scene_say panel
 scene_say verifier
 replay_verify
 fourth_wall "Real, and stood in"

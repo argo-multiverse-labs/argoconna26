@@ -24,7 +24,7 @@ main() {
   change_ref="$(new_change_ref)"
   config_value_set "$CONFIG_ARMED"
   cause_sha="$(op_commit_push "$subject"$'\n\n'"Demo-Rearm: $n" "$CONFIG_FILE")"
-  beat "pushed: config $CONFIG_ARMED"
+  beat "pushed: timeout $CONFIG_ARMED"
   emit_change_event "$cause_sha" config "$subject" "$change_ref"
   argo_refresh_and_wait checkout "$cause_sha"
   beat "synced"

@@ -222,8 +222,13 @@ Both settings go in `.env` (see `.env.example`); a value set on the command line
   pages that are new on stage: the RCA comment, the promotion and fix PRs, the PR's checks,
   `policy/autofix.rego`. Argo CD and Grafana are never opened: keep them on their own tabs all
   talk. The tests point `DEMO_OPEN` at a logger.
+- Where to look is on screen. Before the audience should switch to the browser, a `▶` line names
+  the tab and what to look at ("▶ Browser, Grafana: the top panel"); for a new page it also opens
+  it. `look WHERE [URL]` in `scripts/demo-common.sh` prints it.
 - What runs out of view is on screen. A command the speakers type is typed at the prompt
-  (`make bump`, `make fix`, `make demote`). A step a script takes for them is typed too, then run:
+  (`make bump`, `make fix`, `make demote`), and the prologue reads PR-242's timeout from the live
+  ConfigMap (`kubectl get configmap checkout-config ... | grep TIMEOUT`). A step a script takes
+  for them is typed too, then run:
   `scripts/promotion-pr.sh verify|record-approval|ensure ...` and
   `tests/e2e/overnight-verify.sh SINCE=... UNTIL=...`. Plumbing with no command worth reading is
   one plain line starting `›` ("› asking Argo CD to refresh checkout now"; the test hooks say
@@ -259,8 +264,11 @@ state, including the open `propose` promotion PR.
   and the agent works. The verifier's PASS lines print on stage and are saved to
   `.operator/last-verify`; the epilogue replays them, then demotes back to `suggest` (two steps
   from `act`).
-- `DEMO_PACE=talk` stops for Enter only at `scene_break`, `fourth_wall` and `speaker_beat`;
-  `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
+- `DEMO_PACE=talk` stops for Enter at `scene_break`, `fourth_wall` and `speaker_beat`, and after
+  each line of narration, so the speaker says a line as it appears and the audience never reads
+  ahead. Typed commands and waits never stop: the agent, the canary and the nightly job carry on
+  while the speakers talk. `DEMO_STEP=section` types a whole narration section without stopping
+  (the old pace). `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
 - Narration: `narrate SCENE KEY` prints the `[KEY]` section of `narration/<scene>.txt` as comment
   lines. The section's lines are joined and re-flowed to the terminal width: whole sentences share
   a line while they fit, so the file's own line breaks do not matter; a blank line inside a

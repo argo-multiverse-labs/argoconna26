@@ -8,11 +8,11 @@ load demo_helpers
 
 # The keys each scene script (and the rung body it runs) asks for, for the narration fixture.
 declare -gA SCENE_KEYS=(
-  [cold-open]="mandate bolted-on page what-changed slack"
-  [prologue]="intro timeline golden-path data cdevents"
-  [scene-1]="intro push gate wait-teach rca fix resolved"
-  [scene-2]="intro promotion board incident-again identity fix-pr review merged rejected demote act-offstage"
-  [scene-3]="intro board policy teach pr policy-pass merged healthy verify"
+  [cold-open]="mandate bolted-on page slack what-changed"
+  [prologue]="intro argo timeline pr242 pr242-read data data-after ladder"
+  [scene-1]="intro push canary gate handover wait-teach rca naive fix after-fix resolved recap"
+  [scene-2]="intro promotion promotion-read board incident-again degraded identity fix-pr review merged healthy recap rejected demote after-fix act-offstage"
+  [scene-3]="intro promotion-read board policy night teach pr policy-pass merged healthy verify verify-read recap"
   [epilogue]="panel verifier real real-list simulated valve safe"
   [close]="timeline slack drop repo"
 )
@@ -160,6 +160,34 @@ fake_scenes_stop_at() {
   grep -qx UNREAD "$BATS_TEST_TMPDIR/remaining.txt"
 }
 
+@test "talk pace: each narration line waits for Enter; DEMO_STEP=section types the section whole" {
+  local dir="$BATS_TEST_TMPDIR/n"
+  mkdir -p "$dir"
+  printf '[k]\n# One.\n\n# Two.\n\n# Three.\n' >"$dir/probe.txt"
+  printf '%s\n' ". '$REPO_ROOT/scripts/demo-common.sh'" 'scene_init probe' 'scene_say k' >"$BATS_TEST_TMPDIR/narr.sh"
+  for _ in $(seq 10); do echo; done >"$BATS_TEST_TMPDIR/in.txt"
+  cd "$FIXTURE"
+  export NO_WAIT=false DEMO_PACE=talk NARRATION_DIR="$dir"
+  left="$({ bash "$BATS_TEST_TMPDIR/narr.sh" >/dev/null 2>&1; wc -l; } <"$BATS_TEST_TMPDIR/in.txt")"
+  [ "$left" -eq 7 ] # three lines, three Enters
+  left="$({ DEMO_STEP=section bash "$BATS_TEST_TMPDIR/narr.sh" >/dev/null 2>&1; wc -l; } <"$BATS_TEST_TMPDIR/in.txt")"
+  [ "$left" -eq 10 ]
+  DEMO_STEP=word run bash -c ". '$REPO_ROOT/scripts/demo-common.sh'"
+  [ "$status" -ne 0 ]
+}
+
+@test "look names where to look, and opens a page only when given one" {
+  cd "$FIXTURE"
+  local log="$BATS_TEST_TMPDIR/opened.log"
+  printf '#!/bin/sh\necho "$1" >>"%s"\n' "$log" >"$BATS_TEST_TMPDIR/opener"
+  chmod +x "$BATS_TEST_TMPDIR/opener"
+  run env NO_WAIT=true DEMO_OPEN="$BATS_TEST_TMPDIR/opener" bash -c ". '$REPO_ROOT/scripts/demo-common.sh'; look 'Browser, Grafana: the top panel'; look 'Browser, GitHub: the PR' https://example.test/pr/1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"▶ Browser, Grafana: the top panel"* ]]
+  [[ "$output" == *"▶ Browser, GitHub: the PR"* ]]
+  [ "$(cat "$log")" = "https://example.test/pr/1" ]
+}
+
 @test "auto pace never reads stdin" {
   write_probe
   export NO_WAIT=false DEMO_PACE=auto
@@ -188,7 +216,7 @@ fake_scenes_stop_at() {
   happy_rung1
   NARRATION_DIR="$BATS_TEST_TMPDIR/none" run scene scene-1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"RCA: comment posted"* ]]
+  [[ "$output" == *"agent: comment posted"* ]]
 }
 
 @test "narrate prints one section, in the p style, folded to the stage" {
@@ -220,9 +248,9 @@ fake_scenes_stop_at() {
 # Engineer's. Mirrors the local narration.
 declare -gA SRE_KEYS=(
   [cold-open]="page what-changed"
-  [prologue]="data"
-  [scene-1]="wait-teach"
-  [scene-2]="board review rejected"
+  [prologue]="data data-after"
+  [scene-1]="wait-teach fix after-fix"
+  [scene-2]="board review rejected after-fix"
   [scene-3]="board teach"
   [epilogue]="real valve"
   [close]="slack drop"
@@ -412,7 +440,7 @@ speakers_ok() {
   run scene cold-open
   [ "$status" -eq 0 ]
   assert_fits "$output"
-  [[ "$output" == *"bridge: up"* ]]
+  [[ "$output" == *"agent: listening"* ]]
   run scene prologue
   [ "$status" -eq 0 ]
   assert_fits "$output"
@@ -759,7 +787,8 @@ prompts_follow_cues() {
   run scene scene-1
   [ "$status" -eq 0 ]
   out="$(strip_ansi "$output")"
-  grep -B1 -x '\[SRE\]\$ make fix' <<<"$out" | head -n1 | grep -q '━━ On-call SRE'
+  # the last bar before make fix is the On-call SRE's (her line about the fix comes between)
+  sed -n '1,/^\[SRE\]\$ make fix$/p' <<<"$out" | grep '^━━ ' | tail -n1 | grep -q '━━ On-call SRE'
   ! grep -q '\[PE\]\$ make fix' <<<"$out"
 }
 

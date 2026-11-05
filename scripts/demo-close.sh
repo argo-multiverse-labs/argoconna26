@@ -8,7 +8,8 @@ set -euo pipefail
 
 scene_init close
 title_card "2:31 a.m." "Back in bed by 2:30"
-scene_say timeline # on the Grafana tab, open all talk
+look "Browser, Grafana: the timeline"
+scene_say timeline
 speaker_beat sre "it's in Slack, the callback"
 scene_say slack
 speaker_beat both "character drop; the landing line"

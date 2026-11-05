@@ -2,8 +2,9 @@
 # Scene 3, "2:31 Back in bed?" (rung 3, act): the act promotion (opened offstage by scene 2, or
 # here when scene 2 left none), then the body of demo-rung-3.sh. `make night` is typed first and
 # the teaching beat follows with no stop, so the 210-370 s wait runs under it (O32). Below propose (after an
-# on-stage reject + demote) it refuses with exit 6: roll the clip. Narration keys: intro, board,
-# policy, teach, pr, policy-pass, merged, healthy, verify.
+# on-stage reject + demote) it refuses with exit 6: roll the clip. Narration keys: intro,
+# promotion-read, board, policy, night, teach, pr, policy-pass, merged, healthy, verify,
+# verify-read, recap.
 set -euo pipefail
 (($# == 0)) || { echo "usage: demo-scene-3.sh   (env: DEMO_PACE, TYPE_SPEED, NO_WAIT)" >&2; exit 2; }
 # shellcheck source=scripts/demo-rung-3.sh
@@ -30,13 +31,12 @@ act_promotion_pr() {
 scene_init scene-3
 scene_break "2:31 Back in bed?"
 scene_say intro
-speaker_beat sre "time is compressed; the bar"
 if ! tracked_level_is act; then
   tracked_level_is propose || refuse 6 "below propose; clip" "autonomy on $TRACKED_BRANCH is below propose; roll the clip"
   act_promotion_pr
   promote_to act "$ACT_PR"
   if [[ "$NO_WAIT" == true ]]; then check "approver is a role" approved_by_is_role; fi
 fi
-open_tab "https://github.com/$REPO_SLUG/blob/$TRACKED_BRANCH/policy/autofix.rego" # the guardrail, before it acts
-scene_say policy
+look "Browser, GitHub: policy/autofix.rego" "https://github.com/$REPO_SLUG/blob/$TRACKED_BRANCH/policy/autofix.rego"
+scene_say policy # the guardrail, before it acts
 rung3_main # types make night, then the teach narration runs under the wait (no stop)

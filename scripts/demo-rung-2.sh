@@ -48,10 +48,13 @@ merged_branch() { # PR CAUSE REF
   merge_sha="$(pr_merged_sha "$1")"
   beat "merged"
   scene_say merged
+  look "Browser, Argo CD: checkout"
   until_ready "synced" app_synced_at checkout "$merge_sha"
   beat "synced"
   READY_NOTE="canary, about 60s" READY_TIMEOUT_S="${HEALTHY_WAIT_S:-240}" until_ready "Healthy" app_health_is checkout Healthy
   beat "healthy"
+  scene_say healthy
+  scene_say recap
   if [[ "$NO_WAIT" == true ]]; then
     check "approver is a role" approved_by_is_role
     check "fix PR is two lines" assert_fix_pr_diff "$1"
@@ -81,13 +84,14 @@ rung2_main() {
 
   READY_TIMEOUT_S="${DEGRADED_WAIT_S:-180}" until_ready "Degraded" degraded_at "$bump"
   beat "Degraded"
+  scene_say degraded
   scene_say identity # the Platform Engineer covers the agent's identity and the bridge while the agent works
   READY_TIMEOUT_S="${OUTCOME_WAIT_S:-300}" await_outcome "$t0" 1 checkout "$cause" "$bump"
   unhappy_outcome || true
   require_fix_pr
 
-  beat "bot PR #$OUT_PR"
-  open_tab "$OUT_URL"
+  beat "agent opened PR #$OUT_PR"
+  look "Browser, GitHub: the agent's fix PR" "$OUT_URL"
   scene_say fix-pr
   speaker_beat sre "reviews the fix PR"
   scene_say review

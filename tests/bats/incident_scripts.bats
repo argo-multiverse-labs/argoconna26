@@ -390,7 +390,7 @@ commit_files() { "$REAL_GIT" --git-dir="$ORIGIN" diff-tree --no-commit-id --name
   run_stage --status 7 "$REPO_ROOT/scripts/rearm.sh"
   [ "$stderr" = "refused: already armed" ]
   run_stage "$REPO_ROOT/scripts/fix.sh"
-  [[ "$output" == *"pushed: config 2000, cv 8"* ]]
+  [[ "$output" == *"pushed: timeout 2000, restart"* ]]
   run_stage --status 1 "$REPO_ROOT/scripts/naive-revert.sh"
   [ "$stderr" = "refused: not an image bump" ]
   run_stage --status 1 "$REPO_ROOT/scripts/fix.sh"
