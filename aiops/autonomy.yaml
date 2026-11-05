@@ -1,11 +1,11 @@
 apiVersion: aiops.example.dev/v1
 kind: Autonomy
-level: propose
+level: act
 since: "2026-11-05"
 promotion:
-  from_level: suggest
+  from_level: propose
   dry_run_score: 20/20
   approver_required: '@argo-multiverse-labs/promotion-board'
-  approved_by: admin-bypass
-  pr: 156
+  approved_by: null
+  pr: null
 touchpoints: {suggest: 4, propose: 1, act: 1} # steps a human must take; at act the one step is an after-the-fact review
