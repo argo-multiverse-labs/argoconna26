@@ -56,6 +56,12 @@ help: ## This help
 vendor: ## Check required tools are present and at the pinned versions
 	@$(ROOT)/scripts/vendor-check.sh
 
+.PHONY: brew
+brew: ## Install the CLI tools from the Brewfile (macOS or Linux), then run vendor
+	@command -v brew >/dev/null || { echo "brew: Homebrew not found, see https://brew.sh" >&2; exit 1; }
+	brew bundle install --no-upgrade --file=$(ROOT)/Brewfile
+	$(ROOT)/scripts/vendor-check.sh
+
 .PHONY: lint
 lint: ## shellcheck the scripts
 	@cd $(ROOT)
