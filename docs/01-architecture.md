@@ -52,9 +52,9 @@ flowchart TB
 
 | Component | Namespace | What it does | Source |
 |-----------|-----------|--------------|--------|
-| Argo CD (with Notifications) | `argocd` | Syncs every Application from the tracked branch. Notifications send CDEvents to cdevents-sim and the Degraded webhook to the bridge. Reconciles every 20 s so the demo is quick. | `platform/argocd/` |
+| Argo CD (with Notifications) | `argocd` | Syncs every Application from the tracked branch. Notifications send CDEvents to cdevents-sim and the Degraded webhook to the bridge. Reconciles every 20 s so the demo is quick. The Argo Rollouts UI extension adds a Rollout tab to the resource view. | `platform/argocd/` |
 | Argo Rollouts | `argo-rollouts` | Runs the `checkout` canary and its AnalysisRun. | `platform/rollouts/` |
-| kube-prometheus-stack | `monitoring` | Prometheus and Grafana. The "Trust ladder" dashboard is provisioned from the `dashboards` Application. | `platform/kps/`, `platform/grafana/` |
+| kube-prometheus-stack | `monitoring` | Prometheus and Grafana. The "Trust ladder", "ArgoCD" and "Argo Rollouts" dashboards, and the ServiceMonitors for Argo CD and Rollouts, come from the `dashboards` Application. | `platform/kps/`, `platform/grafana/` |
 | checkout | `demo` | The service under test: a Rollout with 4 replicas, a ConfigMap, a ServiceMonitor and the success-rate AnalysisTemplate. | `apps/checkout/` |
 | pricing | `demo` | A deliberately slow dependency (about 350 ms per request). | `apps/pricing/` |
 | loadgen | `demo` | Steady traffic against checkout (20 requests per second by default). | `apps/loadgen/` |
@@ -148,11 +148,32 @@ The bridge exports Prometheus metrics at `/metrics`. The dashboard panels:
 The touchpoints panel is a defined count per level, not a measurement: at `act` the one step is a
 review after the fact.
 
+### Other dashboards
+
+All in Grafana on port 30030. Only the trust ladder is built for the stage; the rest show how the
+platform underneath is doing.
+
+| Dashboard | Source | Notes |
+|-----------|--------|-------|
+| Trust ladder | `platform/grafana/dashboard-trust-ladder.json` | Ours |
+| ArgoCD | `argoproj/argo-cd` `examples/dashboard.json` at the pinned Argo CD version | Application health and sync status, sync activity, controller, repo server and API server. Refresh is off |
+| Argo Rollouts | `argoproj/argo-rollouts` `examples/dashboard.json` at the pinned Rollouts version | Rollout phases and replicas; opens on `demo` / `checkout`. Refreshes every 30 s |
+| Kubernetes / Compute Resources / Namespace (Pods, Workloads), Cluster, and the rest under "Kubernetes" | kube-prometheus-stack defaults | CPU and memory by namespace and workload, which shows how the cluster is laid out |
+
+Argo CD and Rollouts metrics: the charts create the metrics Services
+(`argocd-server-metrics`, `argocd-application-controller-metrics`, `argocd-repo-server-metrics`,
+`argo-rollouts-metrics`). The ServiceMonitors are in `platform/grafana/servicemonitors-argo.yaml`,
+synced by Argo CD, because both charts install before kube-prometheus-stack brings the
+ServiceMonitor CRD.
+
 ## Deployment notes
 
 - Images are built locally (`make images`) and loaded into the kind nodes with
   `imagePullPolicy: Never`. `checkout` has several preloaded tags (`CHECKOUT_PRELOAD_TAGS`) so
   an image bump needs no build during the demo.
+- The Rollout tab in Argo CD comes from the argoproj-labs rollout-extension. An init container on
+  `argocd-server` downloads it from GitHub each time the pod starts. Without network the server
+  still starts (`IGNORE_FAILURE`), only the tab is missing.
 - Argo CD's account `holmesgpt` has the `role:readonly` role. Its token is minted through the
   Argo CD HTTP API during `make secrets-late`, so no CLI session that could expire is involved.
 - The bridge Deployment sets `automountServiceAccountToken: false` and has no RoleBindings. It
@@ -170,6 +191,7 @@ From [versions.env](../versions.env). Nothing else in the repo hardcodes these.
 | kubectl | v1.37.2 |
 | Argo CD (chart) | v3.5.6 (10.11.6) |
 | Argo Rollouts (chart) / plugin | v1.10.1 (2.43.8) / v1.10.0 |
+| Argo CD rollout-extension / extension installer | v0.4.1 / v1.1.0 |
 | kube-prometheus-stack (chart) | 92.14.0 |
 | Prometheus / Prometheus Operator | v3.15.1 / v0.94.2 |
 | Grafana | 13.2.4 |
