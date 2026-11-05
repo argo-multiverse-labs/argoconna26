@@ -188,24 +188,48 @@ All resets are forward commits. Nothing force-pushes, and the rulesets would ref
 ## The rung scripts
 
 `make demo-rung-1`, `demo-rung-2` and `demo-rung-3` run a rung as it is shown on stage, with
-typed commands (demo-magic, pinned by `DEMO_MAGIC_SHA`) and short lines cut to `STAGE_COLS`. Start
-each from its reset.
+typed commands (demo-magic, pinned by `DEMO_MAGIC_SHA`) and lines that fit the stage terminal
+(`DEMO_COLS`, below). Start each from its reset.
 
 | Script | Starts from | Does |
 |--------|-------------|------|
 | `demo-rung-1.sh` | `reset-rung-1` | `make bump`, Degraded, the agent's comment on the cause commit, `make fix`, Healthy, resolved |
 | `demo-rung-2.sh` | `reset-rung-2` | Checks the promotion PR, waits for its merge, records the approval, `make rearm`, the fix PR, its merge, Healthy. If the fix PR is closed it demotes, fixes by hand and shows the rejected count |
-| `demo-rung-3.sh` | `reset-rung-3` and the `act` promotion | Runs `make night` ("running the nightly job now"), the bot's PR, `policy-check`, the merge by the bot, Healthy, then opens the PR, Checks, Argo CD history and Grafana tabs. It holds no lock, merges nothing and does not nudge Argo CD |
+| `demo-rung-3.sh` | `reset-rung-3` and the `act` promotion | Runs `make night` ("running the nightly job now"), the bot's PR, `policy-check`, the merge by the bot, Healthy, then opens the PR and its Checks tab. It holds no lock, merges nothing and does not nudge Argo CD |
 
 Settings (see `scripts/demo-common.sh`): `TYPE_SPEED`, `NO_WAIT=true` (no pauses; each script then
-ends with assertions, and rung 3 runs `overnight-verify.sh` over its own window), `DEMO_OPEN` (the
-command that opens a URL; set it to a logger to keep the browser closed). Under `NO_WAIT` rung 3
-fails when `policy-check` fails. `DEMO_AUTOMERGE_FOR_TEST` and `DEMO_REJECT_FOR_TEST` let rung 2
-run unattended in tests. A refusal, a PII block or a handoff by the agent is shown as a feature.
+ends with assertions, and rung 3 runs `overnight-verify.sh` over its own window), `DEMO_COLS` and
+`DEMO_OPEN` (below). Under `NO_WAIT` rung 3 fails when `policy-check` fails.
+`DEMO_AUTOMERGE_FOR_TEST` and `DEMO_REJECT_FOR_TEST` let rung 2 run unattended in tests. A refusal, a PII block or a handoff by the agent is shown as a feature.
 
 Measured (one session): rung 1 trigger to comment 52 to 72 s; rung 2 merge to Healthy 50 to 51 s;
 rung 3 PR to merge 57 to 140 s and merge to Healthy 55 to 66 s, 210 s from `make night` to Healthy.
-The History deep link the scripts open is a best guess and has not had its visual check.
+
+### The stage terminal: width, browser, what is shown
+
+Both settings go in `.env` (see `.env.example`); a value set on the command line wins over `.env`.
+
+- `DEMO_COLS`: the width of the demo terminal. Narration wraps to it, and the scene and speaker
+  bars and title cards fill it. Blank (the default): the terminal's own width, at most 78; 78 when
+  the output is not a terminal (a pipe; the tests set 72). A 28 pt font on a 1080p projector is
+  about 80 columns. Set it when the stage pane is narrower than the window. `STAGE_COLS` in
+  `demo.env` (30) is a different budget: the operator scripts' one-line beats and the bridge's
+  stage log, which must match `bridge/deploy/deployment.yaml`; leave it alone.
+- `DEMO_OPEN`: the command that opens a URL, split into words. Blank: `xdg-open` (`open` on
+  macOS), the OS default browser. To use the Chrome window that is already open, set
+  `DEMO_OPEN=google-chrome`, which opens a new tab there and returns (on macOS
+  `DEMO_OPEN=open -b com.google.Chrome`); `DEMO_OPEN=true` opens nothing. The scenes open only
+  pages that are new on stage: the RCA comment, the promotion and fix PRs, the PR's checks,
+  `policy/autofix.rego`. Argo CD and Grafana are never opened: keep them on their own tabs all
+  talk. The tests point `DEMO_OPEN` at a logger.
+- What runs out of view is on screen. A command the speakers type is typed at the prompt
+  (`make bump`, `make fix`, `make demote`). A step a script takes for them is typed too, then run:
+  `scripts/promotion-pr.sh verify|record-approval|ensure ...` and
+  `tests/e2e/overnight-verify.sh SINCE=... UNTIL=...`. Plumbing with no command worth reading is
+  one plain line starting `›` ("› asking Argo CD to refresh checkout now"; the test hooks say
+  so too). `shown DISPLAY CMD...` and `note TEXT` in `scripts/demo-common.sh` do this.
+- The prompt follows the speaker: after the On-call SRE's bar the prompt is `[SRE]$`, so the
+  human fix reads `[SRE]$ make fix`.
 
 ## Scenes and demo-full
 
@@ -220,7 +244,7 @@ state, including the open `propose` promotion PR.
   a scene, a branch that ends the rung early (a handoff, no fix PR, `policy-check` left for
   review) exits 10, and `demo-full` stops there and returns it. A refusal or PII block ends after
   the human fix with exit 0, so the talk goes on.
-- After a stop, `demo-full` prints the next step (two lines, each within `STAGE_COLS`), so the
+- After a stop, `demo-full` prints the next step (two short lines), so the
   clip plays and the later scenes stay live. After a stop in scene 1 or 2: `make
   reset-to-scene-(N+1)` while the clip plays (68 s measured for scene 2), then `make
   demo-scene-(N+1)`. After a stop in scene 3 (exit 10, or exit 6 below `propose`): `make
@@ -238,8 +262,11 @@ state, including the open `propose` promotion PR.
 - `DEMO_PACE=talk` stops for Enter only at `scene_break`, `fourth_wall` and `speaker_beat`;
   `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
 - Narration: `narrate SCENE KEY` prints the `[KEY]` section of `narration/<scene>.txt` as comment
-  lines folded to `STAGE_COLS`. A header `[KEY]` is the Platform Engineer's, `[KEY] sre` the
-  On-call SRE's and `[KEY] both` the two together; each prints under that character's prompt.
+  lines. The section's lines are joined and re-flowed to the terminal width: whole sentences share
+  a line while they fit, so the file's own line breaks do not matter; a blank line inside a
+  section starts a new paragraph. A header `[KEY]` is the Platform Engineer's, `[KEY] sre` the
+  On-call SRE's and `[KEY] both` the two together; each prints under that character's prompt, and
+  in a scene that character keeps the floor (the prompt stays theirs) until the next bar.
   The directory is local and not in the repository; without it the scripts print no narration
   and work the same. `NARRATION_DIR` points elsewhere.
 - Who is talking: each character has a bold, colour-coded prompt (`[PE]$`, `[SRE]$`, `[ALL]$`),
@@ -262,7 +289,7 @@ demo-full` 8 min 54 s of machine time (cold open and prologue about 2 s, scene 1
 ## Recording
 
 `make record-rung-1|2|3`, `make record-scene-1|2|3` and `make record-full` run the matching
-script under `asciinema` at `STAGE_COLS` x `STAGE_ROWS` and write
+script under `asciinema` at `DEMO_COLS` (default 78) x `STAGE_ROWS` and write
 `recordings/<rung-N|scene-N|full>-<timestamp>.cast` (gitignored). `RECORD_CMD` replaces the command.
 `make gif CAST=<file>` converts a cast with `agg` (the newest cast by default).
 

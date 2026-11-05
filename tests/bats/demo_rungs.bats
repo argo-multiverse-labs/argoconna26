@@ -55,7 +55,7 @@ happy_rung3() {
 
 @test "a typed command that does not fit is refused" {
   happy_rung1
-  run bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/demo-common.sh' && typed 'make a-very-long-target-name-here'"
+  run bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/demo-common.sh' && typed 'make $(printf 'x%.0s' $(seq "$STAGE_COLS"))'"
   [ "$status" -ne 0 ]
   [[ "$output" == *"typed line too long"* ]]
 }
@@ -223,16 +223,14 @@ happy_rung3() {
   grep -q '^overnight-verify SINCE=[0-9]* UNTIL=[0-9]*' "$LOG"
 }
 
-@test "rung 3 opens the four tabs in the fixed order" {
+@test "rung 3 opens the PR and its checks, and not the Argo CD or Grafana tabs" {
   happy_rung3
   run rung 3
   [ "$status" -eq 0 ]
   mapfile -t tabs < <(grep '^open ' "$LOG")
-  [ "${#tabs[@]}" -eq 4 ]
+  [ "${#tabs[@]}" -eq 2 ]
   [ "${tabs[0]}" = "open https://github.com/x/y/pull/7" ]
   [ "${tabs[1]}" = "open https://github.com/x/y/pull/7/checks" ]
-  [[ "${tabs[2]}" == "open http://127.0.0.1:30080/applications/argocd/checkout"* ]]
-  [[ "${tabs[3]}" == "open http://127.0.0.1:30030/d/trust-ladder/"* ]]
 }
 
 @test "rung 3 on a policy failure prints policy: left for review and exits 0" {

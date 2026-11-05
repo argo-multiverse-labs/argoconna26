@@ -9,7 +9,7 @@ load demo_helpers
 # The keys each scene script (and the rung body it runs) asks for, for the narration fixture.
 declare -gA SCENE_KEYS=(
   [cold-open]="mandate bolted-on page what-changed slack"
-  [prologue]="intro timeline golden-path data cdevents rfc"
+  [prologue]="intro timeline golden-path data cdevents"
   [scene-1]="intro push gate wait-teach rca fix resolved"
   [scene-2]="intro promotion board incident-again identity fix-pr review merged rejected demote act-offstage"
   [scene-3]="intro board policy teach pr policy-pass merged healthy verify"
@@ -381,11 +381,7 @@ speakers_ok() {
   done < <(grep -HxE '\[[^]]+\] (sre|both)' "$dir"/*.txt 2>/dev/null)
   ! grep -n '\[SRE: ' "$dir"/*.txt || bad=1
   ! grep -niE 'luke|hilliary' "$dir"/*.txt || bad=1
-  # one stage line per narration line: no line folds under its speaker's prompt
-  local over
-  over="$(awk -v cols="$STAGE_COLS" '/^\[[^]]*\]( (pe|sre|both))?$/ { p = ($0 ~ / (sre|both)$/) ? 7 : 6; on = 1; next }
-    FNR == 1 { on = 0 } on && /^# / { t = substr($0, 3); if (length(t) > cols - p - 2) print FILENAME ": " t }' "$dir"/*.txt)"
-  [[ -z "$over" ]] || { echo "$over"; bad=1; }
+  # (no length rule: narrate re-flows each section to the stage width)
   return "$bad"
 }
 
@@ -653,10 +649,221 @@ fx() { bash -c "export STAGE_FX=1; SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/de
   while IFS= read -r line; do
     [[ -z "$line" ]] || [ "${#line}" -eq "$STAGE_COLS" ]
   done <<<"$out"
-  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; title_card '2:15 a.m.' 'A title far too long for the card'"
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; title_card '2:15 a.m.' 'A title far too long for the card $(printf 'x%.0s' $(seq "$STAGE_COLS"))'"
   [ "$status" -ne 0 ]
   # the cold open and the close use it
   grep -q '^title_card "5:00 p.m."' "$REPO_ROOT/scripts/demo-cold-open.sh"
   grep -q '^title_card "2:15 a.m."' "$REPO_ROOT/scripts/demo-cold-open.sh"
   grep -q '^title_card ' "$REPO_ROOT/scripts/demo-close.sh"
+}
+
+# ------------------------------------------------------------------ stage width (DEMO_COLS)
+cols_of() { bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$STAGE_COLS"; } # (env)
+
+@test "width: DEMO_COLS sets it; unset and not a terminal, 78; never under 30" {
+  cd "$FIXTURE"
+  DEMO_COLS=90 run cols_of
+  [ "$output" = 90 ]
+  DEMO_COLS=10 run cols_of
+  [ "$output" = 30 ]
+  run env -u DEMO_COLS bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$STAGE_COLS" </dev/null
+  [ "$output" = 78 ]
+  DEMO_COLS=wide run cols_of
+  [ "$status" -ne 0 ]
+}
+
+@test "width: unset in a terminal, the terminal's width, at most 78" {
+  command -v script >/dev/null || skip "no script(1)"
+  cd "$FIXTURE"
+  for want in 61:61 120:78; do
+    run env -u DEMO_COLS script -qec "stty cols ${want%%:*} rows 40; NO_WAIT=true STAGE_FX=0 bash -c '. $REPO_ROOT/scripts/demo-common.sh; echo cols=\$STAGE_COLS'" /dev/null
+    [[ "$output" == *"cols=${want#*:}"* ]] || { echo "$output"; return 1; }
+  done
+}
+
+@test "width: .env sets DEMO_COLS and DEMO_OPEN; the caller's values win" {
+  cd "$FIXTURE"
+  printf 'DEMO_COLS=50\nDEMO_OPEN=from-dotenv\n' >"$FIXTURE/.env"
+  run env -u DEMO_COLS -u DEMO_OPEN bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$STAGE_COLS \$DEMO_OPEN"
+  [ "$output" = "50 from-dotenv" ]
+  DEMO_COLS=60 DEMO_OPEN=from-caller run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$STAGE_COLS \$DEMO_OPEN"
+  [ "$output" = "60 from-caller" ]
+}
+
+@test "the narration re-flows: a thought is one or two lines, whatever the file's line breaks" {
+  cd "$FIXTURE"
+  mkdir -p "$BATS_TEST_TMPDIR/flow"
+  printf '[a]\n# Argo knows exactly\n# what shipped and when.\n# Usually that signal\n# dies in Slack.\n\n# A new paragraph.\n[b]\n# next\n' >"$BATS_TEST_TMPDIR/flow/scene-1.txt"
+  DEMO_COLS=90 run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; NARRATION_DIR='$BATS_TEST_TMPDIR/flow'; narrate scene-1 a"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [ "$out" = '[PE]$ # Argo knows exactly what shipped and when. Usually that signal dies in Slack.
+[PE]$ # A new paragraph.' ]
+  # narrower: the same section, two sentences on two lines (never a word cut off)
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; NARRATION_DIR='$BATS_TEST_TMPDIR/flow'; narrate scene-1 a"
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *'[PE]$ # Argo knows exactly what shipped and when.'$'\n''[PE]$ # Usually that signal dies in Slack.'* ]]
+  assert_fits "$output"
+  # whole sentences share a line while they fit; a sentence longer than a line folds at spaces
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; printf '%s\n' 'One. Two. $(printf 'word %.0s' $(seq 30))end.' | reflow 30"
+  [ "${lines[0]}" = "One. Two." ]
+  for l in "${lines[@]}"; do [ "${#l}" -le 30 ]; done
+  [[ "${lines[-1]}" == *"end." ]]
+}
+
+@test "the prologue no longer reads the CDEvents RFC lines" {
+  ! grep -q 'scene_say rfc' "$REPO_ROOT/scripts/demo-prologue.sh"
+  [[ " ${SCENE_KEYS[prologue]} " != *" rfc "* ]]
+}
+
+# ------------------------------------------------------------------ who has the floor
+# prompts_follow_cues TEXT : every prompt is the character of the last bar (PE, SRE, ALL), once a
+# bar has been drawn in that scene.
+prompts_follow_cues() {
+  local line cue="" bad=0 who
+  while IFS= read -r line; do
+    case "$line" in
+      "━━ Platform Engineer"*) cue=PE ;;
+      "━━ On-call SRE"*) cue=SRE ;;
+      "━━ Both"*) cue=ALL ;;
+      "═"* | "╔"*) cue="" ;;
+      "["*"]\$ "*)
+        who="${line%%]*}" who="${who#[}"
+        [[ -z "$cue" || "$who" == "$cue" ]] || { echo "[$who] under $cue: $line"; bad=1; }
+        ;;
+    esac
+  done <<<"$1"
+  return "$bad"
+}
+
+@test "a role bar changes the prompt: the next typed command is that character's" {
+  cd "$FIXTURE"
+  run bash -c "SCENE=x NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; SCENE=x; as_platform_engineer; speaker_beat sre t; typed 'echo one'; speaker_beat pe t; typed 'echo two'; speaker_beat both t; typed 'echo three'"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"━━ On-call SRE"*"[SRE]\$ echo one"*"━━ Platform Engineer"*"[PE]\$ echo two"*"━━ Both"*"[ALL]\$ echo three"* ]]
+  prompts_follow_cues "$out"
+  # outside a scene there is no bar, and the prompt still follows the speaker
+  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; speaker_beat sre t; typed 'echo one'"
+  [[ "$(strip_ansi "$output")" == *"[SRE]\$ echo one"* ]]
+  # and the check catches the old mismatch
+  run prompts_follow_cues $'━━ On-call SRE ━━━\n[PE]$ make fix'
+  [ "$status" -ne 0 ]
+}
+
+@test "the human fix is typed by the On-call SRE, under the SRE's bar" {
+  seed_rung1
+  set_comment "$(rca_body)"
+  export NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  write_role_narration "$NARRATION_DIR"
+  run scene scene-1
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  grep -B1 -x '\[SRE\]\$ make fix' <<<"$out" | head -n1 | grep -q '━━ On-call SRE'
+  ! grep -q '\[PE\]\$ make fix' <<<"$out"
+}
+
+@test "in every scene each prompt belongs to the character whose bar came last" {
+  local all="" s
+  seed_rung1
+  set_comment "$(rca_body)"
+  export NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  write_role_narration "$NARRATION_DIR"
+  for s in cold-open prologue scene-1; do run scene "$s"; [ "$status" -eq 0 ]; all+="$output"$'\n'; done
+  demo_setup suggest
+  set_prs "$(fix_body propose)"
+  export DEMO_AUTOMERGE_FOR_TEST=1 NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  run scene scene-2
+  [ "$status" -eq 0 ]
+  all+="$output"$'\n'
+  demo_setup propose
+  set_prs "$(fix_body act)"
+  echo "$BOT" >"$ST/auto-merge-by"
+  jq -n '{number: 12, state: "MERGED", url: "https://github.com/x/y/pull/12"}' >"$ST/pr-12.json"
+  export DEMO_AUTOMERGE_FOR_TEST=1 NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  for s in scene-3 epilogue close; do run scene "$s"; [ "$status" -eq 0 ]; all+="$output"$'\n'; done
+  prompts_follow_cues "$(strip_ansi "$all")"
+  # the reject branch too
+  demo_setup suggest
+  set_prs "$(fix_body propose)"
+  export DEMO_REJECT_FOR_TEST=1 NARRATION_DIR="$BATS_TEST_TMPDIR/roles"
+  run scene scene-2
+  [ "$status" -eq 0 ]
+  prompts_follow_cues "$(strip_ansi "$output")"
+}
+
+# ------------------------------------------------------------------ what happens out of view
+@test "promotion steps run on screen: verify and record-approval are typed before their output" {
+  demo_setup suggest
+  set_prs "$(fix_body propose)"
+  export DEMO_AUTOMERGE_FOR_TEST=1
+  run scene scene-2
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"]\$ scripts/promotion-pr.sh verify 12"$'\n'"promotion PR: clean"* ]]
+  [[ "$out" == *"]\$ scripts/promotion-pr.sh record-approval 12"$'\n'"recorded: "* ]]
+  [[ "$out" == *"]\$ scripts/promotion-pr.sh ensure act"$'\n'"promotion PR open"* ]]
+  [[ "$out" == *"› asking Argo CD to refresh checkout now"* ]]
+  [[ "$out" == *"› test hook: merges the fix PR"* ]]
+  assert_fits "$output"
+}
+
+@test "scene 3 types the verifier it runs, and an act promotion it opens" {
+  demo_setup propose
+  set_prs "$(fix_body act)"
+  echo "$BOT" >"$ST/auto-merge-by"
+  jq -n '{number: 12, state: "MERGED", url: "https://github.com/x/y/pull/12"}' >"$ST/pr-12.json"
+  export DEMO_AUTOMERGE_FOR_TEST=1
+  run scene scene-3
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"]\$ scripts/promotion-pr.sh ensure act"* ]]
+  [[ "$out" == *"]\$ scripts/promotion-pr.sh verify 13"* ]]
+  grep -qE '\]\$ tests/e2e/overnight-verify\.sh SINCE=[0-9]+ UNTIL=[0-9]+$' <<<"$out"
+  assert_fits "$output"
+}
+
+@test "shown: types the command, then runs it; too wide for the stage, it is a note" {
+  cd "$FIXTURE"
+  run bash -c "NO_WAIT=true DEMO_COLS=40 . '$REPO_ROOT/scripts/demo-common.sh'; shown 'git push' echo ran; shown 'a command far too wide for a forty column stage' echo ran2"
+  [ "$status" -eq 0 ]
+  out="$(strip_ansi "$output")"
+  [[ "$out" == *"[PE]\$ git push"$'\n'"ran"* ]]
+  [[ "$out" == *"› a command far too wide"*$'\n'"ran2"* ]]
+  STAGE_COLS=40 assert_fits "$output"
+}
+
+@test "no script action runs out of view: every promotion-pr.sh call is shown" {
+  ! grep -nE '^[^#]*"\$PROMOTION_PR_SH" ' "$REPO_ROOT"/scripts/demo-*.sh | grep -v 'shown "scripts/promotion-pr.sh '
+  # the Argo refresh nudge comes with a note
+  grep -B1 '^  refresh_checkout' "$REPO_ROOT/scripts/demo-rung-2.sh" | grep -q '^  note '
+}
+
+# ------------------------------------------------------------------ the browser
+@test "the browser opens only new pages: never the Argo CD or Grafana tabs" {
+  local s
+  seed_rung1
+  set_comment "$(rca_body)"
+  for s in cold-open prologue scene-1; do run scene "$s"; [ "$status" -eq 0 ]; done
+  grep -q '^open https://github.com/x/y/commit' "$LOG" # the RCA comment still opens
+  ! grep '^open ' "$LOG" | grep -vE '^open https://github\.com/'
+  demo_setup propose
+  set_prs "$(fix_body act)"
+  echo "$BOT" >"$ST/auto-merge-by"
+  jq -n '{number: 12, state: "MERGED", url: "https://github.com/x/y/pull/12"}' >"$ST/pr-12.json"
+  export DEMO_AUTOMERGE_FOR_TEST=1
+  for s in scene-3 epilogue close; do run scene "$s"; [ "$status" -eq 0 ]; done
+  grep -q '^open ' "$LOG"
+  ! grep '^open ' "$LOG" | grep -vE '^open https://github\.com/'
+  ! grep -nE 'grafana_kiosk_url|argo_app_url|argo_history_url' "$REPO_ROOT"/scripts/demo-*.sh
+}
+
+@test "DEMO_OPEN may carry arguments; a missing opener is one line, not a failure" {
+  cd "$FIXTURE"
+  run bash -c "export DEMO_OPEN='$STUBS/open-tab --new-tab'; NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; open_tab https://example.test/x"
+  [ "$status" -eq 0 ]
+  grep -qx 'open --new-tab' "$LOG"
+  run bash -c "export DEMO_OPEN=no-such-browser; NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; open_tab https://example.test/x"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no browser opener"* ]]
 }

@@ -3,11 +3,13 @@
 
 setup() { REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"; }
 
-@test "record-rung-N records demo-rung-N at the stage pane size" {
+@test "record-rung-N records demo-rung-N at the stage terminal size (DEMO_COLS, default 78)" {
+  run env -u DEMO_COLS make -n -C "$REPO_ROOT" record-rung-1
+  [[ "$output" == *"--window-size \"78x40\""* ]]
   for n in 1 2 3; do
-    run make -n -C "$REPO_ROOT" "record-rung-$n"
+    run env DEMO_COLS=72 make -n -C "$REPO_ROOT" "record-rung-$n"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"--window-size \"30x40\""* ]]
+    [[ "$output" == *"--window-size \"72x40\""* ]]
     [[ "$output" == *"demo-rung-$n"* ]]
     [[ "$output" == *"/rung-$n-"* ]]
   done

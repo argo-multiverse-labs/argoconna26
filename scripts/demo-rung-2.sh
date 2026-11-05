@@ -43,6 +43,7 @@ rejected_branch() {
 
 merged_branch() { # PR CAUSE REF
   local merge_sha
+  note "asking Argo CD to refresh checkout now"
   refresh_checkout # O13: as soon as the merge is seen, kubectl only
   merge_sha="$(pr_merged_sha "$1")"
   beat "merged"
@@ -70,7 +71,7 @@ rung2_main() {
 
   t0="$(date +%s)"
   start_pr_helper "$t0"
-  as_platform_engineer
+  cue pe
   scene_say incident-again
   typed "make rearm"
   cause="$(machine_value last-rearm cause)"
