@@ -452,5 +452,7 @@ merge; it syncs on its own reconciliation. See the [README](../README.md).
 | The agent's PR never merges at `act` | `policy-check` is missing or failing on the PR. The bridge waits up to 10 minutes for the check; when it had to wait itself (auto-merge could not be enabled) it says so in a comment. A failing check gets one comment from the reconciler |
 | Argo CD lags behind a merge | Reconciliation is 20 s; the operator scripts annotate the Application to refresh it, and GitHub-side merges may need a refresh |
 | LiteLLM `prisma schema out of sync` after install | The migration Job has not finished; `make litellm-install` waits for it |
+| No Rollout tab on the `checkout` Rollout in Argo CD | The extension download failed when `argocd-server` started (no network). `kubectl -n argocd logs deploy/argocd-server -c rollout-extension`, then restart `argocd-server` once online |
+| The ArgoCD or Argo Rollouts dashboard is empty | Check the Prometheus targets page (port 30090) for `argocd-*-metrics` and `argo-rollouts-metrics`. The ServiceMonitors come from the `dashboards` Application, so it must be Synced |
 | First success-rate query after a build is empty | Prometheus needs a couple of scrapes. Wait, then run `make preflight` |
 | LLM budget reached | `make llm-spend`; raise `LLM_BUDGET_USD` in `.env` and reinstall LiteLLM |

@@ -25,18 +25,43 @@ server:
   resources:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {memory: 256Mi}
+  # Metrics Services only (server, controller, repo server). The ServiceMonitor is in
+  # platform/grafana: Argo CD installs before kube-prometheus-stack, and the chart silently skips
+  # a ServiceMonitor while its CRD is missing.
+  metrics:
+    enabled: true
+  # The Rollout tab in the resource view (argoproj-labs/rollout-extension). The init container
+  # downloads the release tar from GitHub each time the pod starts. IGNORE_FAILURE: without
+  # network the server still starts, just without the tab.
+  # Pins: EXTENSION_INSTALLER_VERSION and ROLLOUT_EXTENSION_VERSION in versions.env
+  # (rollout-extension v0.4.x needs Argo CD v3.5 or later).
+  extensions:
+    enabled: true
+    image:
+      tag: v1.1.0
+    extensionList:
+      - name: rollout-extension
+        env:
+          - name: EXTENSION_URL
+            value: https://github.com/argoproj-labs/rollout-extension/releases/download/v0.4.1/extension.tar
+          - name: IGNORE_FAILURE
+            value: "true"
 
 controller:
   replicas: 1
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 768Mi}
+  metrics:
+    enabled: true
 
 repoServer:
   replicas: 1
   resources:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {memory: 384Mi}
+  metrics:
+    enabled: true
 
 redis:
   enabled: true

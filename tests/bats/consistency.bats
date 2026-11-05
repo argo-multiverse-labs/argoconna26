@@ -351,3 +351,26 @@ fork_files() {
   [[ "$output" == *".github/CODEOWNERS:2:"* ]]
   [[ "$output" == *"policy/data/agent.yaml:2:"*"BOT_LOGIN"* ]]
 }
+
+# argocd_values TAG URL_VERSION : a platform/argocd/values.yaml with the rollout extension
+argocd_values() {
+  mkdir -p "$WORK/platform/argocd"
+  printf 'server:\n  extensions:\n    enabled: true\n    image:\n      tag: %s\n    extensionList:\n      - name: rollout-extension\n        env:\n          - name: EXTENSION_URL\n            value: https://github.com/argoproj-labs/rollout-extension/releases/download/%s/extension.tar\n' \
+    "$1" "$2" > "$WORK/platform/argocd/values.yaml"
+  git -C "$WORK" add -A; git -C "$WORK" commit -q -m argocd-values
+}
+
+@test "rollout extension and installer pins equal to versions.env pass" {
+  argocd_values v1.1.0 v0.4.1
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "consistency: OK" ]
+}
+
+@test "flags a rollout-extension URL or installer tag that differs from versions.env" {
+  argocd_values v1.0.0 v0.3.7
+  run "$REPO_ROOT/scripts/check-consistency.sh" "$WORK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"platform/argocd/values.yaml:10:"*"ROLLOUT_EXTENSION_VERSION"* ]]
+  [[ "$output" == *"EXTENSION_INSTALLER_VERSION"* ]]
+}

@@ -203,6 +203,23 @@ if [[ -n "${BOT_LOGIN:-}" ]] && git ls-files --error-unmatch policy/data/agent.y
   done < <(grep -nE '^agent_login:' policy/data/agent.yaml || true)
 fi
 
+# 10. Argo CD UI extensions: every rollout-extension download URL names ROLLOUT_EXTENSION_VERSION,
+#     and the extension installer image tag in the Argo CD values is EXTENSION_INSTALLER_VERSION.
+if [[ -n "${ROLLOUT_EXTENSION_VERSION:-}" ]]; then
+  while IFS=: read -r file line text; do
+    got="$(grep -oE 'rollout-extension/releases/download/[^/]+/' <<<"$text" | head -1)"
+    got="${got#rollout-extension/releases/download/}"; got="${got%/}"
+    [[ "$got" == "$ROLLOUT_EXTENSION_VERSION" ]] \
+      || report "$file:$line: rollout-extension '$got' differs from versions.env ROLLOUT_EXTENSION_VERSION ($ROLLOUT_EXTENSION_VERSION)"
+  done < <(git grep -nI -E 'rollout-extension/releases/download/' -- "${FILES[@]}" 2>/dev/null || true)
+fi
+if [[ -n "${EXTENSION_INSTALLER_VERSION:-}" && -f platform/argocd/values.yaml ]] \
+    && grep -qE '^[[:space:]]+extensions:' platform/argocd/values.yaml; then
+  got="$(awk '/^[[:space:]]+extensions:/ {f=1; next} f && /^[[:space:]]+tag:/ {sub(/^[[:space:]]*tag:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit}' platform/argocd/values.yaml)"
+  [[ "$got" == "$EXTENSION_INSTALLER_VERSION" ]] \
+    || report "platform/argocd/values.yaml: extension installer tag '${got:-<missing>}' differs from versions.env EXTENSION_INSTALLER_VERSION ($EXTENSION_INSTALLER_VERSION)"
+fi
+
 if (( offences > 0 )); then
   echo "consistency: $offences offence(s)" >&2
   exit 1
