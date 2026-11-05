@@ -119,6 +119,7 @@ from your own fork; [docs/github-setup.md](docs/github-setup.md) covers the App 
 
 ```bash
 cp .env.example .env && chmod 600 .env     # then fill in the keys
+make brew                                  # optional: brew bundle installs the CLI tools (not Docker)
 make vendor                                # tools present and at the pinned versions
 make operator-clone                        # the clone the operator scripts push from
 make build-all                             # kind cluster and the whole stack (~5 min, safe to run twice)

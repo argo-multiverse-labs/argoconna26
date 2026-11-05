@@ -25,6 +25,16 @@ Tools. Versions marked pinned are checked by `make vendor` against [versions.env
 | asciinema, agg | v3.2.1, v1.9.0 | Pinned; recording only |
 | systemd (user units) | Any | Only for the rung-3 scheduled job (`make night`) |
 
+**Installing them with Homebrew.** On macOS or Linux, `make brew` runs
+`brew bundle install --no-upgrade` on the [Brewfile](../Brewfile), then the `make vendor` check.
+It covers the tools above except Docker (bring your own engine: Docker Desktop, colima or your
+distro's package), curl, git and systemd. Homebrew installs a formula's current version, not the
+one in versions.env, so `make vendor` can still fail on a pinned tool after a fresh install. In
+November 2026 that was argocd: Homebrew had 3.6, the pin is 3.5. For such a tool, download the
+pinned release binary from the project's GitHub releases into a directory and set `TOOLS_BIN` to
+it in `.env`; make puts `TOOLS_BIN` first on `PATH`. `--no-upgrade` leaves tools you already
+have alone, so it won't move one off its pin.
+
 **Secrets.** Copy [.env.example](../.env.example) to `.env`, mode 0600. It is never committed. The
 keys, all blank in the example:
 
