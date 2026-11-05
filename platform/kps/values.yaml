@@ -47,6 +47,11 @@ grafana:
     auth.anonymous:
       enabled: true
       org_role: Viewer
+    # Grafana 13 gzips API responses by default, and its pgzip writers leak: a heap profile
+    # under the 5 s kiosk refresh showed 70% of the growth in pgzip buffers, and Grafana was
+    # OOMKilled every few minutes. Everything here is on localhost, so compression buys nothing.
+    server:
+      enable_gzip: false
   # Annotations (written by cdevents-sim) live in Grafana's database: keep it across restarts.
   # Do not rebuild between a recorded rung-3 run and its review (Task 3.13 Step 2).
   persistence:
@@ -74,6 +79,10 @@ grafana:
       label: grafana_dashboard
       labelValue: "1"
       searchNamespace: ALL
+  # Headroom over Grafana 13's ~250Mi idle; GOMEMLIMIT makes the GC work harder before the
+  # cgroup limit. The OOM itself was the gzip leak above.
+  env:
+    GOMEMLIMIT: 768MiB
   resources:
-    requests: {cpu: 50m, memory: 192Mi}
-    limits: {memory: 512Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {memory: 1Gi}

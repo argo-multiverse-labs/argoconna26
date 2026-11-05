@@ -23,11 +23,6 @@ The incident is the same each time. A change lowers a timeout (`UPSTREAM_TIMEOUT
 canary pods that read the new value, the canary fails its success-rate gate, and Argo CD reports
 the `checkout` application Degraded. Argo CD Notifications then send the agent a webhook.
 
-The incident is the same each time. A change lowers a timeout (`UPSTREAM_TIMEOUT_MS`, 2000 to
-200) without bumping the pod template's config-version annotation. The next image deploy starts
-canary pods that read the new value, the canary fails its success-rate gate, and Argo CD reports
-the `checkout` application Degraded. Argo CD Notifications then send the agent a webhook.
-
 More on the incident in [docs/03](docs/03-the-incident.md), and on the ladder, with promotion and
 demotion, in [docs/02](docs/02-trust-ladder.md).
 
