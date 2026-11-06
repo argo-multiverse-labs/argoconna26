@@ -219,7 +219,7 @@ fake_scenes_stop_at() {
   [[ "$output" == *"agent: comment posted"* ]]
 }
 
-@test "narrate prints one section, in the p style, folded to the stage" {
+@test "narrate prints one section, in the p style" {
   cd "$FIXTURE"
   run bash -c ". '$REPO_ROOT/scripts/demo-common.sh'; narrate scene-1 push"
   [ "$status" -eq 0 ]
@@ -409,7 +409,7 @@ speakers_ok() {
   done < <(grep -HxE '\[[^]]+\] (sre|both)' "$dir"/*.txt 2>/dev/null)
   ! grep -n '\[SRE: ' "$dir"/*.txt || bad=1
   ! grep -niE 'luke|hilliary' "$dir"/*.txt || bad=1
-  # (no length rule: narrate re-flows each section to the stage width)
+  # (no length rule: each paragraph is one line, and the terminal wraps it)
   return "$bad"
 }
 
@@ -700,10 +700,10 @@ cols_of() { bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$
   [ "$status" -ne 0 ]
 }
 
-@test "width: unset in a terminal, the terminal's width, at most 78" {
+@test "width: unset in a terminal, the terminal's width, however wide" {
   command -v script >/dev/null || skip "no script(1)"
   cd "$FIXTURE"
-  for want in 61:61 120:78; do
+  for want in 61:61 120:120 200:200; do
     run env -u DEMO_COLS script -qec "stty cols ${want%%:*} rows 40; NO_WAIT=true STAGE_FX=0 bash -c '. $REPO_ROOT/scripts/demo-common.sh; echo cols=\$STAGE_COLS'" /dev/null
     [[ "$output" == *"cols=${want#*:}"* ]] || { echo "$output"; return 1; }
   done
@@ -718,25 +718,18 @@ cols_of() { bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; echo \$
   [ "$output" = "60 from-caller" ]
 }
 
-@test "the narration re-flows: a thought is one or two lines, whatever the file's line breaks" {
+@test "the narration: one paragraph is one line, never folded, whatever the width" {
   cd "$FIXTURE"
   mkdir -p "$BATS_TEST_TMPDIR/flow"
-  printf '[a]\n# Argo knows exactly\n# what shipped and when.\n# Usually that signal\n# dies in Slack.\n\n# A new paragraph.\n[b]\n# next\n' >"$BATS_TEST_TMPDIR/flow/scene-1.txt"
-  DEMO_COLS=90 run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; NARRATION_DIR='$BATS_TEST_TMPDIR/flow'; narrate scene-1 a"
-  [ "$status" -eq 0 ]
-  out="$(strip_ansi "$output")"
-  [ "$out" = '[PE]$ # Argo knows exactly what shipped and when. Usually that signal dies in Slack.
-[PE]$ # A new paragraph.' ]
-  # narrower: the same section, two sentences on two lines (never a word cut off)
-  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; NARRATION_DIR='$BATS_TEST_TMPDIR/flow'; narrate scene-1 a"
-  out="$(strip_ansi "$output")"
-  [[ "$out" == *'[PE]$ # Argo knows exactly what shipped and when.'$'\n''[PE]$ # Usually that signal dies in Slack.'* ]]
-  assert_fits "$output"
-  # whole sentences share a line while they fit; a sentence longer than a line folds at spaces
-  run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; printf '%s\n' 'One. Two. $(printf 'word %.0s' $(seq 30))end.' | reflow 30"
-  [ "${lines[0]}" = "One. Two." ]
-  for l in "${lines[@]}"; do [ "${#l}" -le 30 ]; done
-  [[ "${lines[-1]}" == *"end." ]]
+  long="$(printf 'word %.0s' $(seq 40))end."
+  printf '[a]\n# Argo knows exactly\n# what shipped and when.\n# Usually that signal\n# dies in Slack.\n\n# %s\n[b]\n# next\n' "$long" >"$BATS_TEST_TMPDIR/flow/scene-1.txt"
+  for cols in 30 90; do
+    DEMO_COLS=$cols run bash -c "NO_WAIT=true . '$REPO_ROOT/scripts/demo-common.sh'; NARRATION_DIR='$BATS_TEST_TMPDIR/flow'; narrate scene-1 a"
+    [ "$status" -eq 0 ]
+    out="$(strip_ansi "$output")"
+    [ "$out" = "[PE]\$ # Argo knows exactly what shipped and when. Usually that signal dies in Slack.
+[PE]\$ # $long" ]
+  done
 }
 
 @test "the prologue no longer reads the CDEvents RFC lines" {
@@ -852,14 +845,13 @@ prompts_follow_cues() {
   assert_fits "$output"
 }
 
-@test "shown: types the command, then runs it; too wide for the stage, it is a note" {
+@test "shown: types the command, then runs it, however wide it is" {
   cd "$FIXTURE"
   run bash -c "NO_WAIT=true DEMO_COLS=40 . '$REPO_ROOT/scripts/demo-common.sh'; shown 'git push' echo ran; shown 'a command far too wide for a forty column stage' echo ran2"
   [ "$status" -eq 0 ]
   out="$(strip_ansi "$output")"
   [[ "$out" == *"[PE]\$ git push"$'\n'"ran"* ]]
-  [[ "$out" == *"› a command far too wide"*$'\n'"ran2"* ]]
-  STAGE_COLS=40 assert_fits "$output"
+  [[ "$out" == *"[PE]\$ a command far too wide for a forty column stage"$'\n'"ran2"* ]]
 }
 
 @test "no script action runs out of view: every promotion-pr.sh call is shown" {

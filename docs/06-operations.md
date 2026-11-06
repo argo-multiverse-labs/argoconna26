@@ -209,10 +209,11 @@ rung 3 PR to merge 57 to 140 s and merge to Healthy 55 to 66 s, 210 s from `make
 
 Both settings go in `.env` (see `.env.example`); a value set on the command line wins over `.env`.
 
-- `DEMO_COLS`: the width of the demo terminal. Narration wraps to it, and the scene and speaker
-  bars and title cards fill it. Blank (the default): the terminal's own width, at most 78; 78 when
-  the output is not a terminal (a pipe; the tests set 72). A 28 pt font on a 1080p projector is
-  about 80 columns. Set it when the stage pane is narrower than the window. `STAGE_COLS` in
+- `DEMO_COLS`: the width the scene and speaker bars and the title cards fill. Text is never
+  folded or cut to it: narration, typed commands and the `›`/`▶` lines print whole, and the
+  terminal wraps a long one at its own width. Blank (the default): the terminal's own width,
+  however wide; 78 when the output is not a terminal (a pipe; the tests set 72). Set it when the
+  stage pane is narrower than the window. `STAGE_COLS` in
   `demo.env` (30) is a different budget: the operator scripts' one-line beats and the bridge's
   stage log, which must match `bridge/deploy/deployment.yaml`; leave it alone.
 - `DEMO_OPEN`: the command that opens a URL, split into words. Blank: `xdg-open` (`open` on
@@ -270,9 +271,9 @@ state, including the open `propose` promotion PR.
   while the speakers talk. `DEMO_STEP=section` types a whole narration section without stopping
   (the old pace). `DEMO_PACE=auto` sets `NO_WAIT=true` and never reads stdin.
 - Narration: `narrate SCENE KEY` prints the `[KEY]` section of `narration/<scene>.txt` as comment
-  lines. The section's lines are joined and re-flowed to the terminal width: whole sentences share
-  a line while they fit, so the file's own line breaks do not matter; a blank line inside a
-  section starts a new paragraph. A header `[KEY]` is the Platform Engineer's, `[KEY] sre` the
+  lines. The lines of a paragraph are joined into one printed line, so the file's own line
+  breaks do not matter, and a blank line inside a section starts a new paragraph (and a new
+  line, and a new Enter). Nothing is folded: the terminal wraps a long line. A header `[KEY]` is the Platform Engineer's, `[KEY] sre` the
   On-call SRE's and `[KEY] both` the two together; each prints under that character's prompt, and
   in a scene that character keeps the floor (the prompt stays theirs) until the next bar.
   The directory is local and not in the repository; without it the scripts print no narration

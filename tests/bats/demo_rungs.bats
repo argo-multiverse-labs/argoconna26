@@ -53,11 +53,12 @@ happy_rung3() {
   [[ "$(strip_ansi "$output")" == *"[PE]\$ make night"* ]]
 }
 
-@test "a typed command that does not fit is refused" {
+@test "a typed command wider than the bars is typed as it is, not refused or cut" {
   happy_rung1
-  run bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/demo-common.sh' && typed 'make $(printf 'x%.0s' $(seq "$STAGE_COLS"))'"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"typed line too long"* ]]
+  long="echo $(printf 'x%.0s' $(seq "$STAGE_COLS"))"
+  run bash -c "cd '$FIXTURE' && NO_WAIT=true TYPE_SPEED= . '$REPO_ROOT/scripts/demo-common.sh' && typed '$long'"
+  [ "$status" -eq 0 ]
+  [[ "$(strip_ansi "$output")" == *"\$ $long"* ]]
 }
 
 @test "no cause: line or 40-hex SHA reaches stdout" {

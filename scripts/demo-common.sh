@@ -5,8 +5,9 @@
 #
 # It loads the environment, refuses a foreign kube context, exports STAGE=1 (P19: the operator
 # scripts then print one short line per beat) and sources the vendored demo-magic.
-# Every line these scripts print, and every prompt plus typed command, fits STAGE_COLS, which
-# here is the width of the demo terminal (DEMO_COLS, below), not demo.env's 30.
+# Text is never folded or cut to a width: a long line wraps where the terminal wraps it. Only the
+# bars, title cards and the wait spinner use STAGE_COLS, which here is the width of the demo
+# terminal (DEMO_COLS, below), not demo.env's 30.
 # No raw SHA and no "cause:" line reaches the terminal; machine values are read from
 # <main checkout>/.operator/ (written by the operator scripts under STAGE=1) or from the
 # rung-3 unit's journal.
@@ -23,9 +24,9 @@
 #   DEMO_STEP    line (default): in talk pace, each narration line waits for Enter, so the
 #                speaker says it as it appears. section: a narration section types out whole.
 #   NARRATION_DIR  where narrate looks (default <main checkout>/narration)
-#   DEMO_COLS   width of the demo terminal: narration wraps to it, bars and title cards fill it.
-#               Unset: the terminal's own width, at most 78 (DEMO_COLS_MAX); 78 when stdout is
-#               not a terminal. Set (.env or the caller): used as is, at least 30.
+#   DEMO_COLS   width the bars and title cards fill (text is not wrapped to it). Unset: the
+#               terminal's own width; 78 when stdout is not a terminal. Set (.env or the
+#               caller): used as is, at least 30.
 #   DEMO_OPEN   command that opens a URL in the browser, split into words (default xdg-open, or
 #               open on macOS). `google-chrome` opens a new tab in the Chrome that is already
 #               running; `true` opens nothing. The tests point it at a logger.
@@ -67,9 +68,8 @@
 # with a line `[KEY]`, and the lines after it, up to the next `[...]` line, belong to KEY.
 # narrate prints them with demo-magic's `p` (the prompt, then the comment). The leading `# ` of a
 # line is dropped and the lines are joined: the file's line breaks do not matter. A blank line
-# inside a section starts a new paragraph. Each paragraph is re-flowed to the stage width
-# (STAGE_COLS less the prompt): whole sentences share a line while they fit, and a sentence
-# longer than a line is folded at spaces. A missing file or a missing KEY prints nothing and
+# inside a section starts a new paragraph, and each paragraph prints as one line, never folded:
+# the terminal wraps a long one at its own width. A missing file or a missing KEY prints nothing and
 # returns 0.
 #
 #   [push]
@@ -104,17 +104,17 @@ require_context
 [[ -z "$_caller_demo_step" ]] || DEMO_STEP="$_caller_demo_step"
 export STAGE=1
 
-# The stage width. demo.env's STAGE_COLS (30) is what every operator line and the bridge's stage
-# log fit; the demo terminal is wider, and this script sizes to it (see DEMO_COLS in the header).
-DEMO_COLS_MAX=78 DEMO_COLS_MIN=30
+# The bar width. demo.env's STAGE_COLS (30) is what every operator line and the bridge's stage
+# log fit; the demo terminal is wider, and its bars fill it (see DEMO_COLS in the header).
+DEMO_COLS_DEFAULT=78 DEMO_COLS_MIN=30
 _set_stage_cols() {
   local n="${DEMO_COLS:-}" size
   if [[ -z "$n" ]]; then
-    n="$DEMO_COLS_MAX"
+    n="$DEMO_COLS_DEFAULT"
     if [[ -t 1 ]]; then
       size="$(command stty size </dev/tty 2>/dev/null || true)"
       size="${size##* }"
-      if [[ "$size" =~ ^[0-9]+$ ]] && ((size < n)); then n="$size"; fi
+      if [[ "$size" =~ ^[0-9]+$ ]] && ((size > 0)); then n="$size"; fi
     fi
   fi
   [[ "$n" =~ ^[0-9]+$ ]] || die "DEMO_COLS must be a number of columns, got '$n'"
@@ -273,7 +273,7 @@ _fx_mark() {
     *) _plain_beat "$line"; return ;;
   esac
   text="$mark $text"
-  printf '\033[%sm%s\033[0m\n' "$colour" "${text:0:STAGE_COLS}"
+  printf '\033[%sm%s\033[0m\n' "$colour" "$text"
 }
 
 eval "_plain_$(declare -f beat)"
@@ -316,7 +316,6 @@ _pause() {
 }
 
 scene_break() { # TITLE : the title between two bars, in the scene colour
-  ((${#1} <= STAGE_COLS)) || refuse 1 "scene title too long" "scene title over $STAGE_COLS columns: $1"
   _stage_keep "scene: $1"
   _LAST_CUE=""
   _LADDER_LIVE=1
@@ -360,38 +359,12 @@ speaker_beat() { # WHO TOPIC : WHO is pe (the Platform Engineer), sre (the On-ca
   _pause
 }
 
-# reflow WIDTH : stdin is paragraphs, one per line; prints them as lines of at most WIDTH
-# characters. Whole sentences share a line while they fit; a longer sentence is folded at spaces.
-reflow() {
-  local width="$1" para s line cand
-  local -a parts
-  while IFS= read -r para; do
-    line=""
-    while IFS= read -r s; do
-      [[ -n "$s" ]] || continue
-      cand="${line:+$line }$s"
-      if ((${#cand} <= width)); then
-        line="$cand"
-        continue
-      fi
-      [[ -z "$line" ]] || printf '%s\n' "$line"
-      line="$s"
-      if ((${#line} > width)); then
-        mapfile -t parts < <(fold -s -w "$width" <<<"$line" | sed 's/[[:space:]]*$//')
-        ((${#parts[@]} < 2)) || printf '%s\n' "${parts[@]:0:${#parts[@]}-1}"
-        line="${parts[${#parts[@]}-1]}"
-      fi
-    done < <(sed -E 's/([.?!]["”)]?) +/\1\n/g' <<<"$para")
-    [[ -z "$line" ]] || printf '%s\n' "$line"
-  done
-}
-
 # narrate SCENE KEY : see the header. Always returns 0.
 # A section header is [key] (the Platform Engineer), [key] sre (the On-call SRE) or [key] both;
 # the lines print with that character's prompt. In a scene that character keeps the floor after
 # (cue); outside one the prompt in use before is restored.
 narrate() {
-  local scene="$1" key="$2" file chunk width who
+  local scene="$1" key="$2" file chunk who
   local -a paras=()
   file="${NARRATION_DIR:-$(main_root)/narration}/$scene.txt"
   [[ -r "$file" ]] || return 0
@@ -414,16 +387,15 @@ narrate() {
   paras=("${paras[@]:1}")
   local saved_prompt="${DEMO_PROMPT:-}" saved_plain="$DEMO_PROMPT_PLAIN"
   if [[ -n "$SCENE" ]]; then cue "$who"; else _role_prompt "$who"; fi
-  width=$((STAGE_COLS - ${#DEMO_PROMPT_PLAIN} - 2))
-  ((width >= 8)) || width=8
-  local -a lines=()
-  mapfile -t lines < <(printf '%s\n' "${paras[@]}" | reflow "$width")
-  # read the lines first: in talk pace each one waits for Enter, and that read is from stdin.
-  # One Enter per line, after it has typed out (demo-magic's p would wait before and after).
-  for chunk in "${lines[@]}"; do
+  # One paragraph, one line; the terminal wraps it. One Enter per line, after it has typed out
+  # (demo-magic's p would wait before and after). Keys pressed while it types are not echoed, so
+  # an early Enter never breaks the line on screen.
+  stty -echo
+  for chunk in "${paras[@]}"; do
     NO_WAIT=true p "# $chunk"
     if [[ "$DEMO_STEP" == line && -n "$SCENE" ]]; then _pause; fi
   done
+  stty echo
   if [[ -z "$SCENE" ]]; then
     DEMO_PROMPT="$saved_prompt"
     DEMO_PROMPT_PLAIN="$saved_plain"
@@ -442,18 +414,14 @@ leave_early() { if [[ -n "$SCENE" ]]; then exit 10; fi; exit 0; }
 show_verify() {
   local out rc=0 line until
   until="$(date +%s)"
-  if _fits_prompt "tests/e2e/overnight-verify.sh SINCE=$1 UNTIL=$until"; then
-    p "tests/e2e/overnight-verify.sh SINCE=$1 UNTIL=$until"
-  else
-    note "overnight-verify.sh: the run, checked after the fact"
-  fi
+  p "tests/e2e/overnight-verify.sh SINCE=$1 UNTIL=$until"
   out="$("$OVERNIGHT_VERIFY" "SINCE=$1" "UNTIL=$until" 2>&1)" || rc=$?
   mkdir -p "$OPERATOR_STATE"
   : >"$OPERATOR_STATE/last-verify"
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    beat "${line:0:STAGE_COLS}"
-    printf '%s\n' "${line:0:STAGE_COLS}" >>"$OPERATOR_STATE/last-verify"
+    beat "$line"
+    printf '%s\n' "$line" >>"$OPERATOR_STATE/last-verify"
   done < <(sed -nE 's/^(PASS|FAIL) ([A-Za-z0-9_-]+).*/\1 \2/p' <<<"$out")
   if ((rc != 0)); then
     beat "verify: FAIL"
@@ -485,33 +453,28 @@ promote_to() {
   ladder_set "$level"
 }
 
-# typed COMMAND : demo-magic's pe, after checking that prompt plus command fit the stage pane.
-# The typed commands run through demo-magic's eval in this shell. Under `make demo-rung-N` a
-# nested make would print "make[1]: Entering directory ..." lines, wider than STAGE_COLS.
+# typed COMMAND : demo-magic's pe. The typed commands run through demo-magic's eval in this
+# shell. Under `make demo-rung-N` a nested make would print "make[1]: Entering directory ..."
+# lines; this make leaves them out.
 make() { command make "$@" --no-print-directory; }
 
-_fits_prompt() { ((${#DEMO_PROMPT_PLAIN} + ${#1} <= STAGE_COLS)); } # TEXT
-
 typed() {
-  _fits_prompt "$1" || refuse 1 "typed line too long" "typed command is too long for the stage: $1"
   pe "$1"
   [[ "$1" != *demote* ]] || ladder_refresh
 }
 
 # shown DISPLAY CMD... : what the script does for the speakers, on screen. DISPLAY is typed at the
-# prompt (the real command as the audience reads it), then CMD runs. A DISPLAY too wide for the
-# stage prints as a note instead, so a narrow terminal never stops the talk.
+# prompt (the real command as the audience reads it), then CMD runs.
 shown() {
   local display="$1"
   shift
-  if _fits_prompt "$display"; then p "$display"; else note "$display"; fi
+  p "$display"
   "$@"
 }
 
 # note TEXT : one plain line, "› TEXT", saying what happens out of view.
 note() {
   local text="› $*"
-  text="${text:0:STAGE_COLS}"
   if fx_on; then printf '\033[%sm%s\033[0m\n' "$C_WALL" "$text"; else printf '%s\n' "$text"; fi
 }
 
@@ -520,7 +483,6 @@ note() {
 # them names the place and opens nothing.
 look() {
   local text="▶ $1"
-  text="${text:0:STAGE_COLS}"
   _stage_keep "look: $1"
   if fx_on; then printf '\033[%sm%s\033[0m\n' "$C_LOOK" "$text"; else printf '%s\n' "$text"; fi
   [[ -z "${2:-}" ]] || open_tab "$2"

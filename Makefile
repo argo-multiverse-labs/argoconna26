@@ -564,8 +564,7 @@ verify-idempotent: ## rm-kind, build-all, build-all, compare, preflight
 # Recordings (backup clips; recordings/ is git-ignored)                        #
 ################################################################################
 
-# The cast is sized to the stage terminal (DEMO_COLS, default 78: the most the demo scripts
-# use when they size to the terminal; .env is not read here). asciinema 3 takes
+# The cast is sized to the stage terminal (DEMO_COLS, default 78; .env is not read here). asciinema 3 takes
 # --window-size COLSxROWS where asciinema 2 had --cols/--rows. RECORD_CMD replaces the
 # recorded command (used by the smoke test, which needs no cluster).
 STAGE_ROWS    ?= 40

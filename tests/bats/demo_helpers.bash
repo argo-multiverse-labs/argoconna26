@@ -197,12 +197,14 @@ rung() { # N : run the script from the fixture, merged output
 
 strip_ansi() { sed 's/\x1b\[[0-9;]*[A-Za-z]//g' <<<"$1"; }
 
-# no line of the (ANSI-stripped) text is longer than STAGE_COLS
+# no machine line of the (ANSI-stripped) text is longer than STAGE_COLS. Spoken and typed lines
+# (after a prompt) and the › and ▶ lines are left to the terminal to wrap.
 assert_fits() {
   local line text
   text="$(strip_ansi "$1")"
   while IFS= read -r line; do
     line="${line%$'\r'}"
+    [[ "$line" =~ ^\[[A-Z]+\]\$\  || "$line" == "› "* || "$line" == "▶ "* ]] && continue
     if ((${#line} > STAGE_COLS)); then printf 'line over %s columns (%s): %s\n' "$STAGE_COLS" "${#line}" "$line" >&2; return 1; fi
   done <<<"$text"
 }
