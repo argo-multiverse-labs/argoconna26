@@ -243,6 +243,66 @@
               {
                 "id": "custom.width",
                 "value": 190
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic",
+                  "applyToRow": true
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "transparent"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^incident\\.detected$",
+                      "result": {
+                        "color": "dark-red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^incident\\.resolved$",
+                      "result": {
+                        "color": "dark-green",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^(agent|holmesgpt).*",
+                      "result": {
+                        "color": "dark-purple",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^change\\..*",
+                      "result": {
+                        "color": "dark-blue",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
               }
             ]
           },

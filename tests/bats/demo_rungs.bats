@@ -53,11 +53,12 @@ happy_rung3() {
   [[ "$(strip_ansi "$output")" == *"[PE]\$ make night"* ]]
 }
 
-@test "a typed command that does not fit is refused" {
+@test "a typed command wider than the bars is typed as it is, not refused or cut" {
   happy_rung1
-  run bash -c "cd '$FIXTURE' && . '$REPO_ROOT/scripts/demo-common.sh' && typed 'make $(printf 'x%.0s' $(seq "$STAGE_COLS"))'"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"typed line too long"* ]]
+  long="echo $(printf 'x%.0s' $(seq "$STAGE_COLS"))"
+  run bash -c "cd '$FIXTURE' && NO_WAIT=true TYPE_SPEED= . '$REPO_ROOT/scripts/demo-common.sh' && typed '$long'"
+  [ "$status" -eq 0 ]
+  [[ "$(strip_ansi "$output")" == *"\$ $long"* ]]
 }
 
 @test "no cause: line or 40-hex SHA reaches stdout" {
@@ -74,7 +75,7 @@ happy_rung3() {
   happy_rung1
   run rung 1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"RCA: comment posted"* ]]
+  [[ "$output" == *"agent: comment posted"* ]]
   [[ "$output" == *"incident resolved"* ]]
   [[ "$output" == *"PASS: RCA names the cause"* ]]
   grep -q '^make bump' "$LOG"
@@ -154,7 +155,7 @@ happy_rung3() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"promotion PR: clean"* ]]
   [[ "$output" == *"recorded: admin bypass"* ]]
-  [[ "$output" == *"bot PR #7"* ]]
+  [[ "$output" == *"agent opened PR #7"* ]]
   [[ "$output" == *"PASS: fix PR cites the cause"* ]]
   grep -q '^promo record-approval 12' "$LOG"
   grep -q '^make rearm' "$LOG"

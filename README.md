@@ -142,16 +142,16 @@ The talk runs as one script, scene by scene, with no resets in between:
 | Scene | What happens | Key concept |
 |-------|-------------|-------------|
 | **Cold open** (`demo-cold-open`) | 5 p.m.: the mandate to use AI, and an agent bolted onto the platform. 2:15 a.m.: the page. "What changed?" | Starting state: autonomy `suggest` |
-| **Prologue** (`demo-prologue`) | Argo CD all green; the Grafana timeline with delivery events beside the error rate; the app's owner, tier and SLO labels | Delivery events as CDEvents, a shared language |
+| **Prologue** (`demo-prologue`) | Argo CD all green; the Grafana timeline with delivery events beside the error rate; PR-242's 200 ms timeout in the live ConfigMap; the app's owner, tier and SLO labels; the trust ladder | Delivery events as CDEvents, a shared language |
 | **Scene 1** (`demo-scene-1`) | An innocent image bump; the canary aborts on a Prometheus gate; the agent comments on the older commit that caused it; a human fixes it | Rung 1, `suggest`: look, don't touch |
 | **Scene 2** (`demo-scene-2`) | A promotion PR raises the level and the promotion board approves it; the incident again; the agent opens a two-line fix PR; a human reviews and merges | Rung 2, `propose`: autonomy as config, promoted by PR |
 | **Scene 3** (`demo-scene-3`) | The `act` promotion; `make night` runs the nightly job; the agent's PR passes `policy-check` and merges with no human; the after-the-fact review | Rung 3, `act`: auto-merge only inside guardrails |
 | **Epilogue** (`demo-epilogue`) | Human touch-points per rung on the dashboard; what is real and what is stood in; `make demote` back to `suggest` | Trust goes down as easily as it goes up |
 | **Close** (`demo-close`) | Back to the timeline, where the signal now lives | |
 
-`DEMO_PACE=talk` (the default) stops for Enter at each scene break and speaker's beat;
-`DEMO_PACE=auto` runs unattended with the checks on. What to do when a scene stops, how to jump
-to a scene, the rung scripts, recordings and stage day are in
+`DEMO_PACE=talk` (the default) stops for Enter at each scene break, speaker's beat and line of
+narration; `DEMO_PACE=auto` runs unattended with the checks on. What to do when a scene stops,
+how to jump to a scene, the rung scripts, recordings and stage day are in
 [docs/06](docs/06-operations.md#scenes-and-demo-full).
 
 ## What's Real

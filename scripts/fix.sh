@@ -6,7 +6,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/git-ops.sh"
 
 main() {
-  local sha cv subject="fix(checkout): restore upstream timeout and roll config"
+  local sha subject="fix(checkout): restore upstream timeout and roll config"
   load_env
   require_context
   cluster_lock
@@ -16,9 +16,9 @@ main() {
     refuse 1 "already fixed" "fix: ${CONFIG_KEY} is already ${CONFIG_HEALTHY}; nothing to fix"
   fi
   config_value_set "$CONFIG_HEALTHY"
-  cv="$(config_version_bump)"
+  config_version_bump >/dev/null # every pod restarts and reads the value again
   sha="$(op_commit_push "$subject" "$CONFIG_FILE" "$ROLLOUT_FILE")"
-  beat "pushed: config $CONFIG_HEALTHY, cv $cv"
+  beat "pushed: timeout $CONFIG_HEALTHY, restart"
   emit_change_event "$sha" config "$subject" ""
   argo_refresh_and_wait checkout "$sha"
   beat "synced"

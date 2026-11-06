@@ -65,7 +65,7 @@ case "$1" in
   bump) printf 'bump: %s\n' "$BUMP" >"$OP/last-bump"; touch "$ST/bumped"; echo "$BUMP" >"$ST/rev"; echo "pushed: image bump" ;;
   rearm) printf 'cause: %s\nbump: %s\nchange_ref: %s\n' "$CAUSE" "$BUMP" "$REF" >"$OP/last-rearm"
          touch "$ST/bumped"; echo "$BUMP" >"$ST/rev"; echo "pushed: rearm" ;;
-  fix) touch "$ST/fixed"; echo "pushed: config 2000, cv 8" ;;
+  fix) touch "$ST/fixed"; echo "pushed: timeout 2000, restart" ;;
   demote) echo suggest >"$ST/level"; echo "demoted: propose -> suggest" ;;
   night)
     if ( flock -n 9 ) 9>>"$FIXTURE/.kube/cluster.lock"; then echo "night: lock free, held=${CLUSTER_LOCK_HELD:-none}" >>"$LOG"
@@ -197,12 +197,14 @@ rung() { # N : run the script from the fixture, merged output
 
 strip_ansi() { sed 's/\x1b\[[0-9;]*[A-Za-z]//g' <<<"$1"; }
 
-# no line of the (ANSI-stripped) text is longer than STAGE_COLS
+# no machine line of the (ANSI-stripped) text is longer than STAGE_COLS. Spoken and typed lines
+# (after a prompt) and the › and ▶ lines are left to the terminal to wrap.
 assert_fits() {
   local line text
   text="$(strip_ansi "$1")"
   while IFS= read -r line; do
     line="${line%$'\r'}"
+    [[ "$line" =~ ^\[[A-Z]+\]\$\  || "$line" == "› "* || "$line" == "▶ "* ]] && continue
     if ((${#line} > STAGE_COLS)); then printf 'line over %s columns (%s): %s\n' "$STAGE_COLS" "${#line}" "$line" >&2; return 1; fi
   done <<<"$text"
 }
