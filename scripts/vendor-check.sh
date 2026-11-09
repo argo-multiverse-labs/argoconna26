@@ -32,10 +32,21 @@ check() {
     bad "$name is ${got:+v}${got:-unknown}, pinned v${want} ($(command -v "$1"))"
   fi
 }
+# check_min NAME WANT ACTUAL-COMMAND...: the pinned version or newer
+check_min() {
+  local name="$1" want="$2"; shift 2
+  command -v "${1}" >/dev/null 2>&1 || return 0
+  local got; got="$(ver_of "$@")"
+  want="${want#v}"
+  if [[ -z "$got" || "$(printf '%s\n%s\n' "$want" "$got" | sort -V | head -1)" != "$want" ]]; then
+    bad "$name is ${got:+v}${got:-unknown}, need v${want} or newer ($(command -v "$1"))"
+  fi
+}
 check kind "$KIND_VERSION" kind version
 check kubectl "$KUBECTL_VERSION" kubectl version --client
 check kubectl-argo-rollouts "$ROLLOUTS_PLUGIN_VERSION" kubectl argo rollouts version
-check argocd "$ARGOCD_VERSION" argocd version --client
+# The argocd CLI only bcrypts the admin password at build time; the server stays pinned.
+check_min argocd "$ARGOCD_VERSION" argocd version --client
 check conftest "$CONFTEST_VERSION" conftest --version
 check gitleaks "$GITLEAKS_VERSION" gitleaks version
 check bats "$BATS_VERSION" bats --version
